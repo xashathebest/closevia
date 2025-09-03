@@ -119,9 +119,13 @@ const Offers: React.FC = () => {
   // statuses that should be treated as "history"
   const historyStatuses = ['declined', 'cancelled', 'completed']
 
+  // statuses that should be shown in the In Progress tab only
+  const inProgressStatuses = ['accepted', 'active', 'pending_confirmation']
+
   // visible lists for the two main tabs (exclude history items)
-  const offersReceivedVisible = incomingSorted.filter(t => !historyStatuses.includes(t.status))
-  const offersSentVisible = outgoingSorted.filter(t => !historyStatuses.includes(t.status))
+  // Also exclude in-progress trades so they appear only in the "In Progress" tab
+  const offersReceivedVisible = incomingSorted.filter(t => !historyStatuses.includes(t.status) && !inProgressStatuses.includes(t.status))
+  const offersSentVisible = outgoingSorted.filter(t => !historyStatuses.includes(t.status) && !inProgressStatuses.includes(t.status))
 
   // Priority ranking: countered first, then pending, then others
   const statusRank = (s?: string) => {
@@ -132,6 +136,7 @@ const Offers: React.FC = () => {
     return 2
   }
 
+  // Compare by created_at taking the current "sort" (newest | oldest) into account
   const compareDatesBySort = (a: Trade, b: Trade) => {
     const at = new Date(a.created_at).getTime()
     const bt = new Date(b.created_at).getTime()
@@ -160,6 +165,11 @@ const Offers: React.FC = () => {
     ...incomingSorted.filter(t => historyStatuses.includes(t.status)).map(t => ({ ...t, source: 'Offers Received' as const })),
     ...outgoingSorted.filter(t => historyStatuses.includes(t.status)).map(t => ({ ...t, source: 'Offers Sent' as const })),
   ]
+
+  // Sort history using current sort direction
+  const historyItemsSorted = useMemo(() => {
+    return [...historyItems].sort((a, b) => compareDatesBySort(a, b))
+  }, [historyItems, sort])
 
   // Resolve image for an item coming from /api/trades (robust to various shapes)
   const resolveItemImage = (it: any): string | undefined => {
@@ -421,9 +431,9 @@ const Offers: React.FC = () => {
           </TabPanel>
           <TabPanel>
             <VStack spacing={4} align="stretch">
-              {historyItems.length === 0 ? (
+              {historyItemsSorted.length === 0 ? (
                 <Text color="gray.500">No history yet.</Text>
-              ) : historyItems.map((t) => (
+              ) : historyItemsSorted.map((t) => (
                 <Box key={t.id} bg="white" borderWidth="1px" borderColor="gray.200" rounded="md" p={4}>
                   <HStack justify="space-between" align="start">
                     <VStack align="start" spacing={1}>
