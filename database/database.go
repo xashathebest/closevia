@@ -90,7 +90,7 @@ func CreateTables() error {
 			image_url VARCHAR(500),
 			seller_id INT NOT NULL,
 			premium BOOLEAN DEFAULT FALSE,
-			status ENUM('available', 'sold') DEFAULT 'available',
+			status ENUM('available', 'sold', 'traded') DEFAULT 'available',
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 			FOREIGN KEY (seller_id) REFERENCES users(id) ON DELETE CASCADE
@@ -150,7 +150,7 @@ func CreateTables() error {
 			buyer_id INT NOT NULL,
 			seller_id INT NOT NULL,
 			target_product_id INT NOT NULL,
-			status ENUM('pending','accepted','declined','countered','active','completed','cancelled') DEFAULT 'pending',
+			status ENUM('pending','accepted','declined','countered','active','pending_confirmation','completed','cancelled') DEFAULT 'pending',
 			message TEXT NULL,
 			offered_cash_amount DECIMAL(10,2) NULL,
 			buyer_completed BOOLEAN DEFAULT FALSE,
@@ -163,7 +163,8 @@ func CreateTables() error {
 			FOREIGN KEY (target_product_id) REFERENCES products(id) ON DELETE CASCADE
 		)`,
 		// Backfill/alter for existing deployments (ignore errors if already applied)
-		`ALTER TABLE trades MODIFY status ENUM('pending','accepted','declined','countered','active','completed','cancelled') DEFAULT 'pending'`,
+		`ALTER TABLE trades CHANGE COLUMN status status ENUM('pending','accepted','declined','countered','active','pending_confirmation','completed','cancelled') DEFAULT 'pending'`,
+		`ALTER TABLE products CHANGE COLUMN status status ENUM('available', 'sold', 'traded') DEFAULT 'available'`,
 		`ALTER TABLE trades ADD COLUMN IF NOT EXISTS buyer_completed BOOLEAN DEFAULT FALSE`,
 		`ALTER TABLE trades ADD COLUMN IF NOT EXISTS seller_completed BOOLEAN DEFAULT FALSE`,
 		`ALTER TABLE trades ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP NULL`,
@@ -208,6 +209,25 @@ func CreateTables() error {
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 		)`,
+		// Authenticity proofs for products
+		`CREATE TABLE IF NOT EXISTS authenticity_proofs (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			product_id INT NOT NULL,
+			user_id INT NOT NULL,
+			type ENUM('receipt','serial_number','certificate') NOT NULL,
+			status ENUM('pending','approved','rejected') NOT NULL DEFAULT 'pending',
+			proof_url VARCHAR(500) NULL,
+			serial_number VARCHAR(255) NULL,
+			certificate_text TEXT NULL,
+			reviewer_id INT NULL,
+			reviewed_at TIMESTAMP NULL,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE,
+			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+			FOREIGN KEY (reviewer_id) REFERENCES users(id) ON DELETE SET NULL,
+			INDEX idx_auth_proofs_product (product_id),
+			INDEX idx_auth_proofs_status (status)
+		)`,
 	}
 
 	for _, query := range queries {
@@ -249,6 +269,25 @@ func CreateTables() error {
 		}
 	}
 
+	// Ensure authenticity flag on products (non-destructive)
+	if err := ensureColumn("products", "authenticity_verified", "ALTER TABLE products ADD COLUMN authenticity_verified TINYINT(1) NOT NULL DEFAULT 0"); err != nil {
+		log.Printf("Warning: failed to add products.authenticity_verified: %v", err)
+	}
+
 	log.Println("Database tables and indexes created successfully")
+	return nil
+}
+
+// ensureColumn adds a column if it does not exist. Returns error only on add attempt failure.
+func ensureColumn(table string, column string, alterSQL string) error {
+	var count int
+	q := `SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?`
+	if err := DB.QueryRow(q, table, column).Scan(&count); err != nil {
+		return err
+	}
+	if count == 0 {
+		_, err := DB.Exec(alterSQL)
+		return err
+	}
 	return nil
 }

@@ -349,17 +349,17 @@ const Home: React.FC = () => {
         </Badge>
         
         {/* Status Badge */}
-        {product.status === 'sold' && (
+        {(product.status === 'sold' || product.status === 'traded') && (
           <Badge
             position="absolute"
             bottom={2}
             right={2}
-            colorScheme="red"
+            colorScheme={product.status === 'sold' ? 'red' : 'purple'}
             variant="solid"
             borderRadius="full"
             px={2}
           >
-            Sold
+            {product.status === 'sold' ? 'Sold' : 'Traded'}
           </Badge>
         )}
       </Box>
@@ -378,7 +378,7 @@ const Home: React.FC = () => {
         <Flex justify="space-between" align="center" mb={3}>
           {product.allow_buying && product.price && !product.barter_only ? (
             <Text fontSize="lg" fontWeight="bold" color="brand.500">
-              ${product.price.toFixed(2)}
+              ₱{product.price.toFixed(2)}
             </Text>
           ) : (
             <Text fontSize="sm" color="green.600" fontWeight="medium">
@@ -402,9 +402,9 @@ const Home: React.FC = () => {
               e.stopPropagation()
               handleTradeClick(product.id)
             }}
-            isDisabled={product.status === 'sold'}
+            isDisabled={product.status === 'sold' || product.status === 'traded'}
           >
-            {product.status === 'sold' ? 'Sold' : 'Trade'}
+            {product.status === 'sold' ? 'Sold' : product.status === 'traded' ? 'Traded' : 'Trade'}
           </Button>
           
           {product.allow_buying && product.price && !product.barter_only && (
@@ -416,9 +416,9 @@ const Home: React.FC = () => {
                 e.stopPropagation()
                 handleBuyClick(product.id)
               }}
-              isDisabled={product.status === 'sold'}
+              isDisabled={product.status === 'sold' || product.status === 'traded'}
             >
-              {product.status === 'sold' ? 'Sold' : 'Buy'}
+              {product.status === 'sold' ? 'Sold' : product.status === 'traded' ? 'Traded' : 'Buy'}
             </Button>
           )}
         </HStack>

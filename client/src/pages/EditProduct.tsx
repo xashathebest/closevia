@@ -195,7 +195,7 @@ const EditProduct: React.FC = () => {
               </FormControl>
 
               <FormControl>
-                <FormLabel>Price ($)</FormLabel>
+                <FormLabel>Price (PHP)</FormLabel>
                 <NumberInput
                   value={formData.price !== undefined ? formData.price : originalProduct.price}
                   onChange={(value) => handleInputChange('price', parseFloat(value) || 0)}

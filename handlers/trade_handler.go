@@ -337,16 +337,57 @@ func (h *TradeHandler) UpdateTrade(c *fiber.Ctx) error {
 			var bc, sc bool
 			_ = h.db.QueryRow("SELECT buyer_completed, seller_completed FROM trades WHERE id = ?", tradeID).Scan(&bc, &sc)
 			if bc && sc {
+				// Both parties confirmed - mark as completed
 				_, _ = h.db.Exec("UPDATE trades SET status='completed', completed_at=CURRENT_TIMESTAMP WHERE id = ?", tradeID)
+
+				// Mark all involved products as traded
+				// Get all product IDs involved in this trade
+				var productIDs []int
+				rows, err := h.db.Query("SELECT product_id FROM trade_items WHERE trade_id = ?", tradeID)
+				if err == nil {
+					defer rows.Close()
+					for rows.Next() {
+						var productID int
+						if err := rows.Scan(&productID); err == nil {
+							productIDs = append(productIDs, productID)
+						}
+					}
+				}
+				// Also include the target product
+				var targetProductID int
+				if err := h.db.QueryRow("SELECT target_product_id FROM trades WHERE id = ?", tradeID).Scan(&targetProductID); err == nil {
+					productIDs = append(productIDs, targetProductID)
+				}
+
+				// Update all involved products to traded status
+				for _, productID := range productIDs {
+					_, _ = h.db.Exec("UPDATE products SET status='traded', updated_at=CURRENT_TIMESTAMP WHERE id = ?", productID)
+				}
+
 				publishToUser(buyerID, sseEvent{Type: "trade_updated", Data: fiber.Map{"trade_id": tradeID, "status": "completed"}})
 				publishToUser(sellerID, sseEvent{Type: "trade_updated", Data: fiber.Map{"trade_id": tradeID, "status": "completed"}})
-				_, _ = h.db.Exec("INSERT INTO trade_events (trade_id, actor_id, from_status, to_status, note) VALUES (?, ?, 'active', 'completed', ?)", tradeID, userID, payload.Message)
+				_, _ = h.db.Exec("INSERT INTO trade_events (trade_id, actor_id, from_status, to_status, note) VALUES (?, ?, 'pending_confirmation', 'completed', ?)", tradeID, userID, payload.Message)
 				_, _ = h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)", buyerID, "Trade completed")
 				_, _ = h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)", sellerID, "Trade completed")
 			} else {
-				publishToUser(buyerID, sseEvent{Type: "trade_updated", Data: fiber.Map{"trade_id": tradeID, "status": "awaiting_other_party"}})
-				publishToUser(sellerID, sseEvent{Type: "trade_updated", Data: fiber.Map{"trade_id": tradeID, "status": "awaiting_other_party"}})
-				_, _ = h.db.Exec("INSERT INTO trade_events (trade_id, actor_id, from_status, to_status, note) VALUES (?, ?, 'active', 'awaiting_other_party', ?)", tradeID, userID, payload.Message)
+				// Only one party confirmed - mark as pending confirmation
+				_, _ = h.db.Exec("UPDATE trades SET status='pending_confirmation' WHERE id = ?", tradeID)
+
+				// Notify both parties about the confirmation status
+				publishToUser(buyerID, sseEvent{Type: "trade_updated", Data: fiber.Map{"trade_id": tradeID, "status": "pending_confirmation"}})
+				publishToUser(sellerID, sseEvent{Type: "trade_updated", Data: fiber.Map{"trade_id": tradeID, "status": "pending_confirmation"}})
+
+				// Add trade event
+				_, _ = h.db.Exec("INSERT INTO trade_events (trade_id, actor_id, from_status, to_status, note) VALUES (?, ?, 'active', 'pending_confirmation', ?)", tradeID, userID, payload.Message)
+
+				// Notify the other party that they need to confirm
+				var otherPartyID int
+				if userID == buyerID {
+					otherPartyID = sellerID
+				} else {
+					otherPartyID = buyerID
+				}
+				_, _ = h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)", otherPartyID, "Trade confirmation needed - other party has confirmed")
 			}
 		}
 	case "cancel":

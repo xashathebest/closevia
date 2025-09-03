@@ -86,6 +86,7 @@ const Profile: React.FC = () => {
       // Calculate stats
       const activeProducts = products.filter(p => p.status === 'available').length
       const soldProducts = products.filter(p => p.status === 'sold').length
+      const tradedProducts = products.filter(p => p.status === 'traded').length
       
       // Mock stats since we don't have orders in the current implementation
       const stats: UserStats = {
@@ -292,7 +293,7 @@ const Profile: React.FC = () => {
                       <VStack align="start" spacing={1}>
                         <Text fontWeight="semibold">{product.title}</Text>
                         <Text fontSize="sm" color="gray.600">
-                          ${product.price ? product.price.toFixed(2) : 'Barter only'}
+                          {product.price ? `₱${product.price.toFixed(2)}` : 'Barter only'}
                         </Text>
                       </VStack>
                       <Badge

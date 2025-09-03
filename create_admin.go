@@ -1,3 +1,6 @@
+//go:build create_admin
+// +build create_admin
+
 package main
 
 import (

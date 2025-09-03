@@ -210,7 +210,7 @@ const OfferDetailsModal: React.FC<OfferDetailsModalProps> = ({ trade, isOpen, on
           {/* Hide status / barter badges in compact (offered) mode */}
           {!compact && (
             <HStack spacing={2} mt={1}>
-              <Badge colorScheme={p.status === 'available' ? 'green' : 'red'}>{p.status}</Badge>
+              <Badge colorScheme={p.status === 'available' ? 'green' : p.status === 'sold' ? 'red' : 'purple'}>{p.status}</Badge>
               {p.barter_only ? <Badge colorScheme="purple">Barter</Badge> : <Badge colorScheme="blue">For Sale</Badge>}
             </HStack>
           )}
@@ -277,7 +277,7 @@ const OfferDetailsModal: React.FC<OfferDetailsModalProps> = ({ trade, isOpen, on
               {effectiveTrade?.offered_cash_amount ? (
                 <Box borderWidth="1px" borderColor="green.200" bg="green.50" rounded="md" p={2} fontSize="sm" color="green.800" minW="120px">
                   <Text fontWeight="semibold" noOfLines={1}>Cash included</Text>
-                  <Text noOfLines={1} color="green.700">${Number(effectiveTrade.offered_cash_amount).toFixed(2)}</Text>
+                  <Text noOfLines={1} color="green.700">₱{Number(effectiveTrade.offered_cash_amount).toFixed(2)}</Text>
                 </Box>
               ) : null}
 
@@ -333,7 +333,7 @@ const OfferDetailsModal: React.FC<OfferDetailsModalProps> = ({ trade, isOpen, on
                   </Grid>
                   <HStack mt={4} spacing={3} align="center">
                     <Box flex={1}>
-                      <Text fontSize="sm" color="gray.600" mb={1}>Additional cash requested (USD)</Text>
+                      <Text fontSize="sm" color="gray.600" mb={1}>Additional cash requested (PHP)</Text>
                       <input type="number" value={cashDelta} onChange={e => setCashDelta(e.target.value)} min={0} step={0.01 as any} style={{ width: '100%', padding: '8px', border: '1px solid #E2E8F0', borderRadius: 6 }} />
                     </Box>
                     <Box flex={2}>

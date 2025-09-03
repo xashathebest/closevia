@@ -112,7 +112,7 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
               </FormControl>
 
               <FormControl>
-                <FormLabel fontSize="sm">Offer money (optional, USD)</FormLabel>
+                <FormLabel fontSize="sm">Offer money (optional, PHP)</FormLabel>
                 <Input type="number" placeholder="0.00" value={cashAmount} onChange={(e) => setCashAmount(e.target.value)} min={0} step="0.01" />
               </FormControl>
 
@@ -181,7 +181,7 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
                   ))}
                 </HStack>
                 {cashAmount && Number(cashAmount) > 0 && (
-                  <Text mt={2} fontSize="sm" color="green.700">Cash included: ${Number(cashAmount).toFixed(2)}</Text>
+                  <Text mt={2} fontSize="sm" color="green.700">Cash included: ₱{Number(cashAmount).toFixed(2)}</Text>
                 )}
                 {tradeMessage && (
                   <Box mt={3} bg="gray.50" borderWidth="1px" borderColor="gray.200" rounded="md" p={2}>

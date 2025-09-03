@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState, useRef } from 'react'
-import { Box, Heading, VStack, HStack, Text, Badge, Button, Spinner, Center, useToast, Tabs, TabList, TabPanels, Tab, TabPanel, Select, Image, Link } from '@chakra-ui/react'
+import { Box, Heading, VStack, HStack, Text, Badge, Button, Spinner, Center, useToast, Tabs, TabList, TabPanels, Tab, TabPanel, Select, Image, Link, Modal, ModalOverlay, ModalContent, ModalHeader, ModalBody, ModalFooter, ModalCloseButton } from '@chakra-ui/react'
 import { api } from '../services/api'
 import { Trade, TradeAction } from '../types'
 import { getFirstImage } from '../utils/imageUtils'
@@ -13,6 +13,10 @@ const Offers: React.FC = () => {
   const [selectedTrade, setSelectedTrade] = useState<Trade | null>(null)
   const [detailsOpen, setDetailsOpen] = useState(false)
   const toast = useToast()
+
+  // New state: confirmation modal flow
+  const [confirmTrade, setConfirmTrade] = useState<Trade | null>(null)
+  const [confirming, setConfirming] = useState(false)
 
   const fetchAll = async () => {
     try {
@@ -51,13 +55,52 @@ const Offers: React.FC = () => {
     }
   }, [loading, incoming, outgoing])
 
-  const updateTrade = async (id: number, action: TradeAction) => {
+  // Update updateTrade signature to optionally skip refetch (we keep default behavior unchanged)
+  const updateTrade = async (id: number, action: TradeAction, opts?: { refetch?: boolean }) => {
     try {
       await api.put(`/api/trades/${id}`, action)
       toast({ title: 'Success', description: 'Offer updated', status: 'success' })
-      fetchAll()
+      if (opts?.refetch ?? true) {
+        fetchAll()
+      }
     } catch (e: any) {
       toast({ title: 'Error', description: e?.response?.data?.error || 'Failed to update offer', status: 'error' })
+    }
+  }
+
+  // Helper to replace updated trade into local lists (incoming/outgoing)
+  const replaceTradeInLists = (updated: Trade) => {
+    setIncoming(prev => prev.map(t => t.id === updated.id ? updated : t))
+    setOutgoing(prev => prev.map(t => t.id === updated.id ? updated : t))
+    // if we currently have it selected, update the selectedTrade view
+    setSelectedTrade(prev => prev && prev.id === updated.id ? updated : prev)
+  }
+
+  // New: handle the confirm flow (called when user confirms in modal)
+  const handleConfirmTrade = async (t: Trade) => {
+    setConfirming(true)
+    try {
+      // Perform complete action
+      await api.put(`/api/trades/${t.id}`, { action: 'complete' })
+      // Fetch updated trade (robust if API PUT does not return updated payload)
+      const res = await api.get(`/api/trades/${t.id}`)
+      const updated: Trade = res.data?.data ?? { ...t }
+      // Update local lists with the new trade state (no global fetchAll to avoid UX jumps)
+      replaceTradeInLists(updated)
+
+      // Decide message based on confirmation flags or status
+      const buyerConfirmed = !!(updated as any).buyer_completed
+      const sellerConfirmed = !!(updated as any).seller_completed
+      if (buyerConfirmed && sellerConfirmed) {
+        toast({ title: 'Trade finalized', description: 'Both parties confirmed. Trade will move to history shortly.', status: 'success' })
+      } else {
+        toast({ title: 'You\'ve confirmed the trade', description: 'Waiting for the other party to confirm.', status: 'info' })
+      }
+    } catch (e: any) {
+      toast({ title: 'Error', description: e?.response?.data?.error || 'Failed to confirm trade', status: 'error' })
+    } finally {
+      setConfirming(false)
+      setConfirmTrade(null)
     }
   }
 
@@ -197,7 +240,17 @@ const Offers: React.FC = () => {
     )
   }
 
-  const badgeColor = (status: Trade['status']) => status === 'pending' ? 'yellow' : status === 'accepted' ? 'green' : status === 'declined' ? 'red' : 'purple'
+  const badgeColor = (status: Trade['status']) => {
+    switch (status) {
+      case 'pending': return 'yellow'
+      case 'accepted': return 'green'
+      case 'declined': return 'red'
+      case 'pending_confirmation': return 'orange'
+      case 'completed': return 'green'
+      case 'cancelled': return 'red'
+      default: return 'purple'
+    }
+  }
 
   const renderOfferedItems = (t: Trade) => {
     const offered = (t.items || []).filter((i: any) => {
@@ -314,9 +367,9 @@ const Offers: React.FC = () => {
           </TabPanel>
           <TabPanel>
             <VStack spacing={4} align="stretch">
-              {incomingSorted.concat(outgoingSorted).filter(t => t.status === 'accepted' || t.status === 'active').length === 0 ? (
+              {incomingSorted.concat(outgoingSorted).filter(t => t.status === 'accepted' || t.status === 'active' || t.status === 'pending_confirmation').length === 0 ? (
                 <Text color="gray.500">No trades in progress.</Text>
-              ) : incomingSorted.concat(outgoingSorted).filter(t => t.status === 'accepted' || t.status === 'active').map((t) => (
+              ) : incomingSorted.concat(outgoingSorted).filter(t => t.status === 'accepted' || t.status === 'active' || t.status === 'pending_confirmation').map((t) => (
                 <Box key={t.id} bg="white" borderWidth="1px" borderColor="gray.200" rounded="md" p={4} position="relative">
                   {/* Top-right: status */}
                   <Box position="absolute" top={4} right={4}>
@@ -332,19 +385,35 @@ const Offers: React.FC = () => {
                     </VStack>
                   </Box>
 
-                  {/* Bottom-right actions: Complete button added */}
+                  {/* Bottom-right actions: Complete button with confirmation status */}
                   <Box position="absolute" right={4} bottom={4}>
-                    <HStack spacing={2}>
-                      <Button
-                        size="sm"
-                        colorScheme="brand"
-                        onClick={() => updateTrade(t.id, { action: 'complete' })}
-                        isDisabled={['completed', 'cancelled', 'declined'].includes(t.status)}
-                        title="Click to mark this trade complete. Backend will finalize when both parties confirm."
-                      >
-                        Complete trade
-                      </Button>
-                    </HStack>
+                    <VStack spacing={2} align="end">
+                      {/* Show confirmation status */}
+                      {t.status === 'pending_confirmation' && (
+                        <Text fontSize="xs" color="orange.600" fontWeight="semibold">
+                          {(t as any).buyer_completed && (t as any).seller_completed ? 'Both confirmed' :
+                           (t as any).buyer_completed ? 'Buyer confirmed' :
+                           (t as any).seller_completed ? 'Seller confirmed' : 'Awaiting confirmation'}
+                        </Text>
+                      )}
+
+                      <HStack spacing={2}>
+                        <Button
+                          size="sm"
+                          colorScheme={t.status === 'pending_confirmation' ? 'orange' : 'brand'}
+                          onClick={() => {
+                            // Open confirmation modal instead of immediately refetching which can shift tabs
+                            setConfirmTrade(t)
+                          }}
+                          isDisabled={['completed', 'cancelled', 'declined'].includes(t.status)}
+                          title={t.status === 'pending_confirmation' ?
+                            "Confirm this trade. Trade will complete when both parties have confirmed." :
+                            "Click to confirm this trade. Waiting for the other party to confirm."}
+                        >
+                          {t.status === 'pending_confirmation' ? 'Confirm Trade' : 'Complete Trade'}
+                        </Button>
+                      </HStack>
+                    </VStack>
                   </Box>
                 </Box>
               ))}
@@ -380,6 +449,38 @@ const Offers: React.FC = () => {
         onAccepted={fetchAll}
         onDeclined={fetchAll}
       />
+
+      {/* Confirmation Modal (opened when user clicks Complete/Confirm) */}
+      <Modal isOpen={!!confirmTrade} onClose={() => { if (!confirming) setConfirmTrade(null) }} isCentered>
+        <ModalOverlay />
+        <ModalContent>
+          <ModalHeader>{confirmTrade?.status === 'pending_confirmation' ? 'Confirm Trade' : 'Complete Trade'}</ModalHeader>
+          <ModalCloseButton disabled={confirming} />
+          <ModalBody>
+            <VStack align="start" spacing={3}>
+              <Text>
+                {confirmTrade?.status === 'pending_confirmation'
+                  ? 'The other user has already confirmed. By confirming, you will finalize your side of the trade. Once both parties have confirmed the trade will move to history.'
+                  : 'You are about to confirm this trade. This will mark you as confirmed. Waiting for the other party to confirm.'}
+              </Text>
+              <Text fontSize="sm" color="gray.600">
+                Buyer: {confirmTrade?.buyer_name || `#${confirmTrade?.buyer_id}`} • Seller: {confirmTrade?.seller_name || `#${confirmTrade?.seller_id}`}
+              </Text>
+              <HStack spacing={2}>
+                <Badge colorScheme={badgeColor(confirmTrade?.status)}>{confirmTrade?.status}</Badge>
+                {confirmTrade && (confirmTrade as any).buyer_completed && <Badge colorScheme="green">Buyer confirmed</Badge>}
+                {confirmTrade && (confirmTrade as any).seller_completed && <Badge colorScheme="green">Seller confirmed</Badge>}
+              </HStack>
+            </VStack>
+          </ModalBody>
+          <ModalFooter>
+            <Button mr={3} onClick={() => setConfirmTrade(null)} isDisabled={confirming}>Cancel</Button>
+            <Button colorScheme="orange" onClick={() => confirmTrade && handleConfirmTrade(confirmTrade)} isLoading={confirming}>
+              {confirmTrade?.status === 'pending_confirmation' ? 'Confirm Trade' : 'Complete Trade'}
+            </Button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
     </Box>
   )
 }

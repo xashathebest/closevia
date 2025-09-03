@@ -4,6 +4,8 @@ import (
 	"log"
 	"os"
 
+	"time"
+
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/logger"
@@ -93,6 +95,9 @@ func main() {
 	tradeHandler := handlers.NewTradeHandler()
 	notificationHandler := handlers.NewNotificationHandler()
 	adminHandler := handlers.NewAdminHandler()
+	valuationHandler := handlers.NewValuationHandler()
+	tradeLoopHandler := handlers.NewTradeLoopHandler()
+	authHandler := handlers.NewAuthenticityHandler()
 
 	// Auth routes (no authentication required)
 	auth := api.Group("/auth")
@@ -143,12 +148,22 @@ func main() {
 	trades.Post("/:id/messages", middleware.AuthMiddleware(), tradeHandler.SendTradeMessage)
 	trades.Get("/:id/history", middleware.AuthMiddleware(), tradeHandler.GetTradeHistory)
 	trades.Get("/count", middleware.AuthMiddleware(), tradeHandler.CountTrades)
+	trades.Post("/loop/suggest", middleware.AuthMiddleware(), tradeLoopHandler.Suggest)
+
+	// Valuation routes
+	valuation := api.Group("/valuation")
+	valuation.Post("/preview", valuationHandler.Preview)
 
 	// Notifications routes
 	notifs := api.Group("/notifications")
 	notifs.Get("/", middleware.AuthMiddleware(), notificationHandler.GetNotifications)
 	notifs.Put("/:id/read", middleware.AuthMiddleware(), notificationHandler.MarkAsRead)
 	notifs.Put("/read-all", middleware.AuthMiddleware(), notificationHandler.MarkAllAsRead)
+
+	// Authenticity routes
+	authenticity := api.Group("/authenticity")
+	authenticity.Post("/upload", middleware.AuthMiddleware(), authHandler.Upload)
+	authenticity.Post("/review", middleware.AuthMiddleware(), middleware.AdminMiddleware(), authHandler.Review)
 
 	// Admin routes
 	admin := api.Group("/admin")
@@ -159,6 +174,17 @@ func main() {
 	if port == "" {
 		port = "4000"
 	}
+
+	// Start nightly job ticker for value recomputation
+	go func() {
+		for {
+			now := time.Now()
+			next := time.Date(now.Year(), now.Month(), now.Day()+1, 3, 0, 0, 0, now.Location())
+			t := time.NewTimer(next.Sub(now))
+			<-t.C
+			handlers.RecalculateApproxValues()
+		}
+	}()
 
 	// Start server
 	log.Printf("Starting Clovia server on port %s", port)
