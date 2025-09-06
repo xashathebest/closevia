@@ -9,6 +9,11 @@ import (
 	"github.com/xashathebest/clovia/database"
 )
 
+const (
+	// DollarsPerPoint is the conversion rate from points to USD
+	DollarsPerPoint = 0.01
+)
+
 // RecalculateApproxValues recomputes approx_value_points nightly based on signals
 func RecalculateApproxValues() {
 	log.Println("Nightly job: RecalculateApproxValues started")
@@ -33,7 +38,7 @@ func RecalculateApproxValues() {
 		base := int64(2000)
 		dem := demandFactor(sig)
 		points := int64(math.Round(float64(base) * dem))
-		usd := float64(points) * dollarsPerPoint
+		usd := float64(points) * DollarsPerPoint
 		_, err := database.DB.Exec(`
 			UPDATE products SET
 				price = price,
@@ -46,4 +51,11 @@ func RecalculateApproxValues() {
 		_, _ = database.DB.Exec(`UPDATE items SET approx_value_points = ?, approx_value_usd_cents = ? WHERE id = ?`, points, int64(math.Round(usd*100)), id)
 	}
 	log.Println("Nightly job: RecalculateApproxValues finished at", time.Now())
+}
+
+func calculateReward(points int) float64 {
+	// fixed: use exported constant from handlers/constants.go
+	reward := float64(points) * DollarsPerPoint
+
+	return reward
 }
