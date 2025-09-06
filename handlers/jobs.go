@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"database/sql"
 	"log"
 	"math"
 	"time"
@@ -9,14 +8,10 @@ import (
 	"github.com/xashathebest/clovia/database"
 )
 
-const (
-	DollarsPerPoint = 0.01
-)
-
 // RecalculateApproxValues recomputes approx_value_points nightly based on signals
 func RecalculateApproxValues() {
 	log.Println("Nightly job: RecalculateApproxValues started")
-	
+
 	// Fixed: Properly handle SQL null values and join
 	rows, err := database.DB.Query(`
 		SELECT p.id,
@@ -39,17 +34,19 @@ func RecalculateApproxValues() {
 			log.Println("Error scanning row:", err)
 			continue
 		}
-		
+
 		sig := &ValuationSignals{
 			Views:       views,
 			Saves:       saves,
 			Messages:    messages,
 			TradeOffers: offers,
 		}
-		
+
 		base := int64(2000)
+		// use the existing demandFactor from valuation_handler.go
 		dem := demandFactor(sig)
 		points := int64(math.Round(float64(base) * dem))
+		// use the existing DollarsPerPoint from constants.go
 		usdCents := int64(math.Round(float64(points) * DollarsPerPoint * 100))
 
 		// Fixed: Update the products table with calculated values
@@ -60,24 +57,17 @@ func RecalculateApproxValues() {
 				updated_at = NOW()
 			WHERE id = ?`,
 			points, usdCents, id)
-			
+
 		if err != nil {
 			log.Println("Update product error:", err)
 		}
 	}
-	
+
 	if err := rows.Err(); err != nil {
 		log.Println("Error iterating rows:", err)
 	}
-	
-	log.Println("Nightly job: RecalculateApproxValues finished at", time.Now())
-}
 
-// Helper function to calculate demand factor (implementation depends on your business logic)
-func demandFactor(sig *ValuationSignals) float64 {
-	// Implement your actual demand calculation logic here
-	// This is a placeholder implementation
-	return 1.0 + float64(sig.Saves)*0.1
+	log.Println("Nightly job: RecalculateApproxValues finished at", time.Now())
 }
 
 // CalculateReward calculates reward based on points
