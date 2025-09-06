@@ -6,10 +6,9 @@ import (
 	"log"
 	"time"
 
-	"github.com/xashathebest/clovia//server//config"
+	"github.com/xashathebest/clovia/server/config"
 
 	_ "github.com/go-sql-driver/mysql"
-	config "github.com/xashathebest/clovia/server"
 )
 
 func main() {
@@ -56,4 +55,3 @@ func main() {
 	// ...existing code...
 	fmt.Println("Server startup complete")
 }
-
