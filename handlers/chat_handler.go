@@ -75,7 +75,7 @@ func (h *ChatHandler) Stream(c *fiber.Ctx) error {
 			if b, ok := <-msgCh; ok {
 				w.WriteString("data: ")
 				w.Write(b)
-				w.WriteString("\n\n")
+				w.WriteString("/n/n")
 				w.Flush()
 			} else {
 				break

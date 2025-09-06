@@ -5,10 +5,10 @@ go 1.24.4
 require (
 	github.com/go-sql-driver/mysql v1.9.3
 	github.com/gofiber/fiber/v2 v2.52.9
-	github.com/gofiber/websocket/v2 v2.5.4
 	github.com/golang-jwt/jwt/v5 v5.2.0
 	github.com/joho/godotenv v1.5.1
 	golang.org/x/crypto v0.21.0
+	github.com/supabase/supabase-go v0.0.0-00010101000000-000000000000
 )
 
 require (
@@ -25,3 +25,7 @@ require (
 	github.com/valyala/tcplisten v1.0.0 // indirect
 	golang.org/x/sys v0.33.0 // indirect
 )
+
+// Replace the missing upstream with a local stub while you fix or point to the real repo.
+replace github.com/supabase/supabase-go => ./local_modules/supabase-go
+

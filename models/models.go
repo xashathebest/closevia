@@ -25,7 +25,7 @@ func (a *StringArray) UnmarshalJSON(data []byte) error {
 		return nil
 	}
 
-	// Try as a JSON string that may contain a JSON array (e.g. "\"[\\\"u1\\\",\\\"u2\\\"]\"")
+	// Try as a JSON string that may contain a JSON array (e.g. "/"[///"u1///",///"u2///"]/"")
 	var asString string
 	if err := json.Unmarshal(data, &asString); err == nil {
 		// Try to unmarshal the inner string as JSON array

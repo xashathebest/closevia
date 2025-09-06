@@ -6,7 +6,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/xashathebest/clovia//server//config"
+	"c:\\xampp\\htdocs\\Clovia\\server\\config"
 
 	_ "github.com/go-sql-driver/mysql"
 	config "github.com/xashathebest/clovia/server"
@@ -33,27 +33,26 @@ func main() {
 	for i := 1; i <= retries; i++ {
 		db, err = sql.Open("mysql", dsn)
 		if err != nil {
-			log.Printf("Attempt %d: failed to open DB connection: %v/n", i, err)
+			log.Printf("Attempt %d: failed to open DB connection: %v\n", i, err)
 		} else {
 			err = db.Ping()
 			if err == nil {
 				log.Println("Connected to database")
 				break
 			}
-			log.Printf("Attempt %d: failed to ping database: %v/n", i, err)
+			log.Printf("Attempt %d: failed to ping database: %v\n", i, err)
 		}
 		if i < retries {
 			sleep := time.Duration(i*2) * time.Second
-			log.Printf("Retrying in %s.../n", sleep)
+			log.Printf("Retrying in %s...\n", sleep)
 			time.Sleep(sleep)
 		}
 	}
 	if err != nil {
-		log.Fatalf("Failed to initialize database after %d attempts: %v/n", retries, err)
+		log.Fatalf("Failed to initialize database after %d attempts: %v\n", retries, err)
 	}
 	defer db.Close()
 
 	// ...existing code...
 	fmt.Println("Server startup complete")
 }
-

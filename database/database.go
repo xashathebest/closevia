@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"regexp"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
+	_ "github.com/go-sql-driver/mysql" // MySQL driver
+	_ "github.com/jackc/pgx/v5/stdlib" // Postgres driver (pgx stdlib)
 )
 
 var DB *sql.DB
@@ -15,21 +17,64 @@ var DB *sql.DB
 // InitDatabase initializes the database connection
 func InitDatabase() error {
 	// Get database configuration from environment variables or use defaults
-	dbHost := getEnv("DB_HOST", "127.0.0.1")
-	dbPort := getEnv("DB_PORT", "3306")
-	dbUser := getEnv("DB_USER", "root")
-	dbPassword := getEnv("DB_PASSWORD", "")
-	dbName := getEnv("DB_NAME", "closevia")
+	// DATABASE_URL takes precedence if set (useful in Render)
+	if dbURL := os.Getenv("DATABASE_URL"); dbURL != "" {
+		// Use pgx driver for a DATABASE_URL assumed to be Postgres-style
+		driver := "pgx"
+		dsn := dbURL
+		log.Printf("Using DATABASE_URL with driver=%s", driver)
+		var err error
+		DB, err = sql.Open(driver, dsn)
+		if err != nil {
+			return fmt.Errorf("failed to open database (%s): %v", driver, err)
+		}
+		// common pool config
+		DB.SetMaxOpenConns(25)
+		DB.SetMaxIdleConns(25)
+		DB.SetConnMaxLifetime(5 * time.Minute)
+		if err := DB.Ping(); err != nil {
+			return fmt.Errorf("failed to ping database: %v", err)
+		}
+		var currentDbName string
+		_ = DB.QueryRow("SELECT current_database()").Scan(&currentDbName)
+		log.Printf("Connected using DATABASE_URL to Postgres database: %s", maskSensitive(currentDbName))
+		return nil
+	}
 
-	// Create DSN (Data Source Name)
-	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?parseTime=true&loc=Local",
-		dbUser, dbPassword, dbHost, dbPort, dbName)
+	dbType := getEnv("DB_TYPE", "postgres") // default to postgres
+	dbHost := getEnv("DB_HOST", "127.0.0.1")
+	dbPort := getEnv("DB_PORT", "5432")
+	dbUser := getEnv("DB_USER", "postgres")
+	dbPassword := getEnv("DB_PASSWORD", "")
+	dbName := getEnv("DB_NAME", "clovia")
+
+	// Build DSN and select driver based on DB_TYPE
+	var driver string
+	var dsn string
+
+	if dbType == "mysql" {
+		driver = "mysql"
+		// MySQL DSN (kept for compatibility)
+		dsn = fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?parseTime=true&loc=Local",
+			dbUser, dbPassword, dbHost, dbPort, dbName)
+		log.Printf("Using DB_TYPE=mysql (connecting to %s:%s) — not using DATABASE_URL", dbHost, dbPort)
+	} else {
+		// default: postgres using pgx stdlib
+		driver = "pgx"
+		// Postgres DSN (postgresql://user:pass@host:port/dbname)
+		if dbPassword == "" {
+			dsn = fmt.Sprintf("postgresql://%s@%s:%s/%s", dbUser, dbHost, dbPort, dbName)
+		} else {
+			dsn = fmt.Sprintf("postgresql://%s:%s@%s:%s/%s", dbUser, dbPassword, dbHost, dbPort, dbName)
+		}
+		log.Printf("Using DB_TYPE=postgres (connecting to %s:%s) — not using DATABASE_URL", dbHost, dbPort)
+	}
 
 	// Open database connection
 	var err error
-	DB, err = sql.Open("mysql", dsn)
+	DB, err = sql.Open(driver, dsn)
 	if err != nil {
-		return fmt.Errorf("failed to open database: %v", err)
+		return fmt.Errorf("failed to open database (%s): %v", driver, err)
 	}
 
 	// Configure connection pool
@@ -44,12 +89,16 @@ func InitDatabase() error {
 
 	// Test a simple query to verify we're connected to the right database
 	var currentDbName string
-	err = DB.QueryRow("SELECT DATABASE()").Scan(&currentDbName)
+	if driver == "pgx" {
+		err = DB.QueryRow("SELECT current_database()").Scan(&currentDbName) // Postgres
+	} else {
+		err = DB.QueryRow("SELECT DATABASE()").Scan(&currentDbName) // MySQL
+	}
 	if err != nil {
 		return fmt.Errorf("failed to get database name: %v", err)
 	}
 
-	log.Printf("Successfully connected to MySQL database: %s", currentDbName)
+	log.Printf("Successfully connected to %s database: %s", driver, maskSensitive(currentDbName))
 	return nil
 }
 
@@ -290,4 +339,25 @@ func ensureColumn(table string, column string, alterSQL string) error {
 		return err
 	}
 	return nil
+}
+
+// maskSensitive masks obvious secrets in logs (keeps short strings unchanged)
+func maskSensitive(s string) string {
+	if s == "" {
+		return ""
+	}
+	// simple mask: if contains '@' or ':' treat as a connection string; otherwise return as-is
+	re := regexp.MustCompile(`(?i)(://)([^/]+)`)
+	res := re.ReplaceAllStringFunc(s, func(m string) string {
+		// replace credentials segment with ****
+		return regexp.MustCompile(`://[^/]+`).ReplaceAllString(m, "://****")
+	})
+	if res == s {
+		// fallback: if longer than 32 chop middle
+		if len(s) > 32 {
+			return s[:12] + "..." + s[len(s)-12:]
+		}
+		return s
+	}
+	return res
 }
