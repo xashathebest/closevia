@@ -1,13 +1,17 @@
 package database
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"log"
 	"net/url"
 	"os"
 	"regexp"
+	"strings"
 	"time"
+
+	"github.com/joho/godotenv"
 
 	_ "github.com/go-sql-driver/mysql" // MySQL driver
 	_ "github.com/jackc/pgx/v5/stdlib" // Postgres driver (pgx stdlib)
@@ -17,12 +21,34 @@ var DB *sql.DB
 
 // InitDatabase initializes the database connection
 func InitDatabase() error {
+	// try to load .env for local development (non-fatal)
+	if err := godotenv.Load(); err == nil {
+		log.Println("Loaded .env from .env")
+	} else {
+		// minimal log so missing .env isn't noisy
+		log.Printf("No .env loaded: %v", err)
+	}
+
 	// Get database configuration from environment variables or use defaults
 	// DATABASE_URL takes precedence if set (useful in Render)
 	if dbURL := os.Getenv("DATABASE_URL"); dbURL != "" {
 		// Use pgx driver for a DATABASE_URL assumed to be Postgres-style
 		driver := "pgx"
 		dsn := dbURL
+
+		// Try to inject connect_timeout if not present to avoid very long hangs
+		if u, err := url.Parse(dbURL); err == nil {
+			qs := u.Query()
+			if qs.Get("connect_timeout") == "" {
+				qs.Set("connect_timeout", "10")
+				u.RawQuery = qs.Encode()
+				dsn = u.String()
+			}
+		} else {
+			// parsing failed: keep original and warn
+			log.Printf("Warning: could not parse DATABASE_URL to add connect_timeout: %v", err)
+		}
+
 		log.Printf("Using DATABASE_URL with driver=%s", driver)
 		var err error
 		DB, err = sql.Open(driver, dsn)
@@ -33,9 +59,12 @@ func InitDatabase() error {
 		DB.SetMaxOpenConns(25)
 		DB.SetMaxIdleConns(25)
 		DB.SetConnMaxLifetime(5 * time.Minute)
-		if err := DB.Ping(); err != nil {
-			return fmt.Errorf("failed to ping database: %v", err)
+
+		// Ping with retries and timeout
+		if err := pingWithRetries(DB); err != nil {
+			return fmt.Errorf("failed to ping database: %v\nSuggested actions: ensure DATABASE_URL is correct, ensure network/firewall allows outbound connections to the DB host, or set up a tunnel/VPN. For Supabase, consider using DATABASE_URL provided by Supabase and ensure SSL is allowed.", err)
 		}
+
 		var currentDbName string
 		_ = DB.QueryRow("SELECT current_database()").Scan(&currentDbName)
 		log.Printf("Connected using DATABASE_URL to Postgres database: %s", maskSensitive(currentDbName))
@@ -58,8 +87,8 @@ func InitDatabase() error {
 
 	if dbType == "mysql" {
 		driver = "mysql"
-		// MySQL DSN (kept for compatibility)
-		dsn = fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?parseTime=true&loc=Local",
+		// MySQL DSN (kept for compatibility) -- include timeout param
+		dsn = fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?parseTime=true&loc=Local&timeout=10s",
 			dbUser, dbPassword, dbHost, dbPort, dbName)
 		log.Printf("Using DB_TYPE=mysql (connecting to %s:%s) — not using DATABASE_URL", dbHost, dbPort)
 	} else {
@@ -72,9 +101,10 @@ func InitDatabase() error {
 			Host:   fmt.Sprintf("%s:%s", dbHost, dbPort),
 			Path:   dbName,
 		}
-		// Ensure TLS for Supabase
+		// Ensure TLS for Supabase and set connect_timeout
 		q := u.Query()
 		q.Set("sslmode", "require")
+		q.Set("connect_timeout", "10")
 		u.RawQuery = q.Encode()
 
 		dsn = u.String()
@@ -96,9 +126,10 @@ func InitDatabase() error {
 	DB.SetMaxIdleConns(25)
 	DB.SetConnMaxLifetime(5 * time.Minute)
 
-	// Test the connection
-	if err := DB.Ping(); err != nil {
-		return fmt.Errorf("failed to ping database: %v", err)
+	// Test the connection with context timeout and retries
+	if err := pingWithRetries(DB); err != nil {
+		// Provide actionable suggestions in the error message
+		return fmt.Errorf("failed to ping database: %v\nSuggested actions: confirm DB_HOST/DB_PORT are reachable, check firewall, confirm DB_USER/DB_PASSWORD are correct, or provide a DATABASE_URL. For Supabase, ensure your project allows external connections or use the provided connection string.", err)
 	}
 
 	// Test a simple query to verify we're connected to the right database
@@ -341,12 +372,48 @@ func CreateTables() error {
 	return nil
 }
 
+// pingWithRetries attempts to PingContext with a short timeout and retries with exponential backoff.
+// Keeps attempts reasonably short to fail fast when network is unreachable.
+func pingWithRetries(db *sql.DB) error {
+	const maxRetries = 5
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		err := db.PingContext(ctx)
+		cancel()
+		if err == nil {
+			return nil
+		}
+		// If final attempt, return the error
+		if attempt == maxRetries {
+			return err
+		}
+		wait := time.Duration(attempt*2) * time.Second
+		log.Printf("Warning: failed to ping database (attempt %d/%d): %v. Retrying in %s...", attempt, maxRetries, err, wait)
+		time.Sleep(wait)
+	}
+	return fmt.Errorf("unreachable")
+}
+
 // ensureColumn adds a column if it does not exist. Returns error only on add attempt failure.
 func ensureColumn(table string, column string, alterSQL string) error {
 	var count int
-	q := `SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?`
-	if err := DB.QueryRow(q, table, column).Scan(&count); err != nil {
-		return err
+	// Try Postgres-style (CURRENT_DATABASE), then fall back to MySQL-style (DATABASE())
+	queries := []string{
+		fmt.Sprintf(`SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_CATALOG = current_database() AND TABLE_NAME = '%s' AND COLUMN_NAME = '%s'`, escapeSQLIdent(table), escapeSQLIdent(column)),
+		fmt.Sprintf(`SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '%s' AND COLUMN_NAME = '%s'`, escapeSQLIdent(table), escapeSQLIdent(column)),
+	}
+
+	var lastErr error
+	for _, q := range queries {
+		if err := DB.QueryRow(q).Scan(&count); err != nil {
+			lastErr = err
+			continue
+		}
+		lastErr = nil
+		break
+	}
+	if lastErr != nil {
+		return lastErr
 	}
 	if count == 0 {
 		_, err := DB.Exec(alterSQL)
@@ -355,12 +422,18 @@ func ensureColumn(table string, column string, alterSQL string) error {
 	return nil
 }
 
+// escapeSQLIdent escapes single quotes for safe inlining into queries above.
+// This is acceptable for internal identifier usage in migration code.
+func escapeSQLIdent(s string) string {
+	return strings.ReplaceAll(s, `'`, `''`)
+}
+
 // maskSensitive masks obvious secrets in logs (keeps short strings unchanged)
+// simple mask: if contains '@' or ':' treat as a connection string; otherwise return as-is
 func maskSensitive(s string) string {
 	if s == "" {
 		return ""
 	}
-	// simple mask: if contains '@' or ':' treat as a connection string; otherwise return as-is
 	re := regexp.MustCompile(`(?i)(://)([^/]+)`)
 	res := re.ReplaceAllStringFunc(s, func(m string) string {
 		// replace credentials segment with ****

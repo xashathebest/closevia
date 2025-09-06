@@ -477,7 +477,9 @@ const Offers: React.FC = () => {
                 Buyer: {confirmTrade?.buyer_name || `#${confirmTrade?.buyer_id}`} • Seller: {confirmTrade?.seller_name || `#${confirmTrade?.seller_id}`}
               </Text>
               <HStack spacing={2}>
-                <Badge colorScheme={badgeColor(confirmTrade?.status)}>{confirmTrade?.status}</Badge>
+                <Badge colorScheme={confirmTrade?.status ? badgeColor(confirmTrade.status) : 'gray'}>
+                  {confirmTrade?.status ?? '—'}
+                </Badge>
                 {confirmTrade && (confirmTrade as any).buyer_completed && <Badge colorScheme="green">Buyer confirmed</Badge>}
                 {confirmTrade && (confirmTrade as any).seller_completed && <Badge colorScheme="green">Seller confirmed</Badge>}
               </HStack>

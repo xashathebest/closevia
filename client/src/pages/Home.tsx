@@ -684,7 +684,7 @@ const Home: React.FC = () => {
                 h={i === slideIndex ? 3 : 2.5}
                 bg={i === slideIndex ? 'brand.500' : 'gray.300'}
                 borderRadius="full"
-                onClick={(e) => { e.stopPropagation(); setSlideIndex(i); scheduleResume(2000) }}
+                onClick={(e: React.MouseEvent) => { e.stopPropagation(); setSlideIndex(i); scheduleResume(2000) }}
               />
             ))}
           </HStack>

@@ -97,7 +97,8 @@ export const simulateApiDelay = (ms: number = 1000): Promise<void> => {
 };
 
 // Check if we're in development mode
-export const isDevelopment = process.env.NODE_ENV === 'development';
+declare const process: { env?: { NODE_ENV?: string } } | undefined;
+export const isDevelopment = typeof process !== 'undefined' && process.env?.NODE_ENV === 'development';
 
 // Check if we should use mock data
 export const shouldUseMockData = (): boolean => {
