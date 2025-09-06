@@ -204,4 +204,3 @@ func main() {
 	log.Printf("Starting Clovia server on port %s", port)
 	log.Fatal(app.Listen(":" + port))
 }
-}
