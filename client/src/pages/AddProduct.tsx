@@ -343,7 +343,7 @@ const AddProduct: React.FC = () => {
           <VStack spacing={6} align="stretch">
             {formData.allow_buying ? (
               <FormControl isRequired>
-                <FormLabel>Price (USD)</FormLabel>
+                <FormLabel>Price (PHP)</FormLabel>
                 <Input
                   type="number"
                   placeholder="0.00"
@@ -401,7 +401,7 @@ const AddProduct: React.FC = () => {
                   <HStack justify="space-between">
                     <Text fontWeight="semibold">Price:</Text>
                     <Text color="brand.500" fontWeight="bold">
-                      ${formData.price.toFixed(2)}
+                      ₱{formData.price.toFixed(2)}
                     </Text>
                   </HStack>
                 )}

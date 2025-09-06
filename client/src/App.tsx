@@ -15,10 +15,12 @@ import Settings from './pages/Settings'
 import Trades from './pages/Trades'
 import Offers from './pages/Offers'
 import Profile from './pages/Profile'
+import AdminDashboard from './pages/AdminDashboard'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
 import { ProductProvider } from './contexts/ProductContext'
 import { RealtimeProvider } from './contexts/RealtimeContext'
 import ProtectedRoute from './components/ProtectedRoute'
+import AdminRoute from './components/AdminRoute'
 import { MobileNavProvider } from './contexts/MobileNavContext'
 
 // Loading overlay component
@@ -148,6 +150,14 @@ const AppContent: React.FC = () => {
               <ProtectedRoute>
                 <Offers />
               </ProtectedRoute>
+            } 
+          />
+          <Route 
+            path="/admin" 
+            element={
+              <AdminRoute>
+                <AdminDashboard />
+              </AdminRoute>
             } 
           />
         </Routes>

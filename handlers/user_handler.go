@@ -54,8 +54,8 @@ func (h *UserHandler) Register(c *fiber.Ctx) error {
 
 	// Insert new user
 	result, err := h.db.Exec(
-		"INSERT INTO users (name, email, password_hash) VALUES (?, ?, ?)",
-		user.Name, user.Email, hashedPassword,
+		"INSERT INTO users (name, email, password_hash, role) VALUES (?, ?, ?, ?)",
+		user.Name, user.Email, hashedPassword, user.Role,
 	)
 	if err != nil {
 		return c.Status(500).JSON(models.APIResponse{
@@ -103,9 +103,9 @@ func (h *UserHandler) Login(c *fiber.Ctx) error {
 	// Find user by email
 	var user models.User
 	err := h.db.QueryRow(
-		"SELECT id, name, email, password_hash, verified FROM users WHERE email = ?",
+		"SELECT id, name, email, password_hash, role, verified FROM users WHERE email = ?",
 		login.Email,
-	).Scan(&user.ID, &user.Name, &user.Email, &user.PasswordHash, &user.Verified)
+	).Scan(&user.ID, &user.Name, &user.Email, &user.PasswordHash, &user.Role, &user.Verified)
 
 	if err != nil {
 		return c.Status(401).JSON(models.APIResponse{
@@ -153,9 +153,9 @@ func (h *UserHandler) GetProfile(c *fiber.Ctx) error {
 
 	var user models.User
 	err := h.db.QueryRow(
-		"SELECT id, name, email, verified, created_at, updated_at FROM users WHERE id = ?",
+		"SELECT id, name, email, role, verified, created_at, updated_at FROM users WHERE id = ?",
 		userID,
-	).Scan(&user.ID, &user.Name, &user.Email, &user.Verified, &user.CreatedAt, &user.UpdatedAt)
+	).Scan(&user.ID, &user.Name, &user.Email, &user.Role, &user.Verified, &user.CreatedAt, &user.UpdatedAt)
 
 	if err != nil {
 		return c.Status(404).JSON(models.APIResponse{

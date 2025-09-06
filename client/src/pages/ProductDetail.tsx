@@ -224,7 +224,7 @@ const ProductDetail: React.FC = () => {
                       color="brand.500"
                       textAlign="right"
                     >
-                      ${product.price ? product.price.toFixed(2) : '0.00'}
+                      ₱{product.price ? product.price.toFixed(2) : '0.00'}
                     </Text>
                   </Flex>
 
@@ -235,7 +235,7 @@ const ProductDetail: React.FC = () => {
                         Premium Listing
                       </Badge>
                     )}
-                    <Badge colorScheme={product.status === 'available' ? 'green' : 'red'}>
+                    <Badge colorScheme={product.status === 'available' ? 'green' : product.status === 'sold' ? 'red' : 'purple'}>
                       {product.status}
                     </Badge>
                   </HStack>
@@ -306,7 +306,7 @@ const ProductDetail: React.FC = () => {
                           isLoading={purchasing}
                           loadingText="Processing..."
                         >
-                          Buy Now - ${product.price.toFixed(2)}
+                          Buy Now - ₱{product.price.toFixed(2)}
                         </Button>
                         <Text fontSize="sm" color="gray.500" textAlign="center">
                           Secure transaction • Fast delivery • Buyer protection
@@ -353,10 +353,10 @@ const ProductDetail: React.FC = () => {
                   </VStack>
                 )}
 
-                {product.status === 'sold' && (
+                {(product.status === 'sold' || product.status === 'traded') && (
                   <Box textAlign="center" py={4}>
-                    <Text color="red.500" fontWeight="bold">
-                      This product has been sold
+                    <Text color={product.status === 'sold' ? 'red.500' : 'purple.500'} fontWeight="bold">
+                      This product has been {product.status === 'sold' ? 'sold' : 'traded'}
                     </Text>
                   </Box>
                 )}

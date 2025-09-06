@@ -75,6 +75,7 @@ type User struct {
 	Name         string    `json:"name" validate:"required,min=2,max=255"`
 	Email        string    `json:"email" validate:"required,email"`
 	PasswordHash string    `json:"-" validate:"required"`
+	Role         string    `json:"role" validate:"oneof=user admin"`
 	Verified     bool      `json:"verified"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
@@ -91,6 +92,7 @@ type UserRegister struct {
 	Name     string `json:"name" validate:"required,min=2,max=255"`
 	Email    string `json:"email" validate:"required,email"`
 	Password string `json:"password" validate:"required,min=6"`
+	Role     string `json:"role" validate:"omitempty,oneof=user admin"`
 }
 
 // Product represents a product listing

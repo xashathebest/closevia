@@ -2,6 +2,7 @@ export interface User {
   id: number
   name: string
   email: string
+  role: string
   verified: boolean
   created_at: string
   updated_at: string
@@ -16,7 +17,7 @@ export interface Product {
   seller_id: number
   seller_name?: string
   premium: boolean
-  status: 'available' | 'sold'
+  status: 'available' | 'sold' | 'traded'
   allow_buying: boolean
   barter_only: boolean
   location?: string
@@ -52,7 +53,7 @@ export interface ProductUpdate {
   price?: number
   image_urls?: string[]
   premium?: boolean
-  status?: 'available' | 'sold'
+  status?: 'available' | 'sold' | 'traded'
   allow_buying?: boolean
   barter_only?: boolean
   location?: string
@@ -88,7 +89,7 @@ export interface PaginatedResponse<T> {
   total_pages: number
 }
 
-export type TradeStatus = 'pending' | 'accepted' | 'declined' | 'countered' | 'active' | 'completed' | 'cancelled'
+export type TradeStatus = 'pending' | 'accepted' | 'declined' | 'countered' | 'active' | 'pending_confirmation' | 'completed' | 'cancelled'
 
 export interface TradeItem {
   id: number
@@ -97,7 +98,7 @@ export interface TradeItem {
   offered_by: 'buyer' | 'seller'
   created_at: string
   product_title?: string
-  product_status?: 'available' | 'sold'
+  product_status?: 'available' | 'sold' | 'traded'
   product_image_url?: string
 }
 

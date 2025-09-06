@@ -23,10 +23,12 @@ import {
   InfoIcon,
   SettingsIcon,
   RepeatIcon,
+  StarIcon,
 } from '@chakra-ui/icons'
 import { useMobileNav } from '../contexts/MobileNavContext'
 import { Badge as CBadge } from '@chakra-ui/react'
 import { useRealtime } from '../contexts/RealtimeContext'
+import { useAuth } from '../contexts/AuthContext'
 import { FaUserCircle } from 'react-icons/fa'
 
 const Sidebar: React.FC = () => {
@@ -39,6 +41,7 @@ const Sidebar: React.FC = () => {
   const activeIconColor = useColorModeValue('brand.500', 'brand.300')
   const { isOpen, onOpen, onClose } = useMobileNav()
   const { offerCount, notificationCount } = useRealtime()
+  const { user } = useAuth()
 
   // Separate items for desktop vs mobile to keep desktop unchanged
   const desktopNavItems = [
@@ -47,6 +50,8 @@ const Sidebar: React.FC = () => {
     { icon: AddIcon, label: 'Add Product', path: '/add-product' },
     { icon: RepeatIcon, label: 'Offers', path: '/offers' },
     { icon: BellIcon, label: 'Notifications', path: '/notifications' },
+    // Add admin link only for admin users
+    ...(user?.role === 'admin' ? [{ icon: StarIcon, label: 'Admin', path: '/admin' }] : []),
     // Settings intentionally excluded here so we can render it at the bottom
   ]
 
@@ -56,6 +61,8 @@ const Sidebar: React.FC = () => {
     { icon: AddIcon, label: 'Add Product', path: '/add-product' },
     { icon: RepeatIcon, label: 'Offers', path: '/offers' },
     { icon: BellIcon, label: 'Notifications', path: '/notifications' },
+    // Add admin link only for admin users
+    ...(user?.role === 'admin' ? [{ icon: StarIcon, label: 'Admin', path: '/admin' }] : []),
     { icon: SettingsIcon, label: 'Settings', path: '/settings' },
     { icon: FaUserCircle, label: 'Profile', path: '/profile' },
   ]

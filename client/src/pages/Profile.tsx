@@ -14,7 +14,6 @@ import {
   Card,
   CardBody,
   CardHeader,
-  Divider,
   Badge,
   Avatar,
   SimpleGrid,
@@ -87,6 +86,7 @@ const Profile: React.FC = () => {
       // Calculate stats
       const activeProducts = products.filter(p => p.status === 'available').length
       const soldProducts = products.filter(p => p.status === 'sold').length
+      const tradedProducts = products.filter(p => p.status === 'traded').length
       
       // Mock stats since we don't have orders in the current implementation
       const stats: UserStats = {
@@ -122,7 +122,6 @@ const Profile: React.FC = () => {
 
   const handleSaveProfile = async () => {
     try {
-      // In a real app: await api.put('/api/users/profile', editForm)
       toast({
         title: 'Success',
         description: 'Profile updated successfully',
@@ -186,141 +185,143 @@ const Profile: React.FC = () => {
   }
 
   return (
-    <Container maxW="container.lg" py={8}>
-      <VStack spacing={8} align="stretch">
-        {/* Profile Header */}
-        <Card bg={bgColor} border="1px" borderColor={borderColor} shadow="sm">
-          <CardBody>
-            <HStack spacing={6} align="start">
-              <Avatar
-                size="xl"
-                name={user.name}
-                bg="brand.500"
-                color="white"
-              />
-              <VStack align="start" spacing={2} flex={1}>
-                <HStack justify="space-between" w="full">
-                  <VStack align="start" spacing={1}>
-                    <Heading size="lg">{user.name}</Heading>
-                    <Text color="gray.600">{user.email}</Text>
-                    <HStack spacing={2}>
-                      <Badge colorScheme={user.verified ? 'green' : 'yellow'}>
-                        {user.verified ? 'Verified' : 'Unverified'}
-                      </Badge>
-                      <Text fontSize="sm" color="gray.500">
-                        Member since {new Date(user.created_at).toLocaleDateString()}
-                      </Text>
-                    </HStack>
-                  </VStack>
-                  <VStack spacing={2}>
+    <Box bg="#FFFDF1" minH="100vh">
+      <Container maxW="container.lg" py={8}>
+        <VStack spacing={8} align="stretch">
+          {/* Profile Header */}
+          <Card bg={bgColor} border="1px" borderColor={borderColor} shadow="sm">
+            <CardBody>
+              <HStack spacing={6} align="start">
+                <Avatar
+                  size="xl"
+                  name={user.name}
+                  bg="brand.500"
+                  color="white"
+                />
+                <VStack align="start" spacing={2} flex={1}>
+                  <HStack justify="space-between" w="full">
+                    <VStack align="start" spacing={1}>
+                      <Heading size="lg">{user.name}</Heading>
+                      <Text color="gray.600">{user.email}</Text>
+                      <HStack spacing={2}>
+                        <Badge colorScheme={user.verified ? 'green' : 'yellow'}>
+                          {user.verified ? 'Verified' : 'Unverified'}
+                        </Badge>
+                        <Text fontSize="sm" color="gray.500">
+                          Member since {new Date(user.created_at).toLocaleDateString()}
+                        </Text>
+                      </HStack>
+                    </VStack>
+                    <VStack spacing={2}>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        colorScheme="brand"
+                        onClick={handleEditProfile}
+                      >
+                        Edit Profile
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        colorScheme="red"
+                        onClick={handleLogout}
+                      >
+                        Logout
+                      </Button>
+                    </VStack>
+                  </HStack>
+                </VStack>
+              </HStack>
+            </CardBody>
+          </Card>
+
+          {/* Stats */}
+          {userStats && (
+            <SimpleGrid columns={{ base: 2, md: 4 }} spacing={4}>
+              <Stat>
+                <StatLabel>Total Products</StatLabel>
+                <StatNumber>{userStats.totalProducts}</StatNumber>
+                <StatHelpText>Listed items</StatHelpText>
+              </Stat>
+              <Stat>
+                <StatLabel>Active Listings</StatLabel>
+                <StatNumber>{userStats.activeProducts}</StatNumber>
+                <StatHelpText>Available for sale</StatHelpText>
+              </Stat>
+              <Stat>
+                <StatLabel>Sold Items</StatLabel>
+                <StatNumber>{userStats.soldProducts}</StatNumber>
+                <StatHelpText>Completed sales</StatHelpText>
+              </Stat>
+              <Stat>
+                <StatLabel>Total Orders</StatLabel>
+                <StatNumber>{userStats.totalOrders}</StatNumber>
+                <StatHelpText>Purchases made</StatHelpText>
+              </Stat>
+            </SimpleGrid>
+          )}
+
+          {/* Recent Products */}
+          <Card bg={bgColor} border="1px" borderColor={borderColor} shadow="sm">
+            <CardHeader>
+              <Heading size="md">Recent Products</Heading>
+            </CardHeader>
+            <CardBody>
+              {userProducts.length === 0 ? (
+                <Box textAlign="center" py={8}>
+                  <Text color="gray.500" mb={4}>
+                    You haven't listed any products yet
+                  </Text>
+                  <Button colorScheme="brand" onClick={() => window.location.href = '/add-product'}>
+                    List Your First Product
+                  </Button>
+                </Box>
+              ) : (
+                <VStack spacing={4} align="stretch">
+                  {userProducts.slice(0, 5).map((product) => (
+                    <Box
+                      key={product.id}
+                      p={4}
+                      border="1px"
+                      borderColor={borderColor}
+                      borderRadius="md"
+                      _hover={{ bg: 'gray.50' }}
+                      cursor="pointer"
+                      onClick={() => window.location.href = `/products/${product.id}`}
+                    >
+                      <HStack justify="space-between">
+                        <VStack align="start" spacing={1}>
+                          <Text fontWeight="semibold">{product.title}</Text>
+                          <Text fontSize="sm" color="gray.600">
+                            {product.price ? `₱${product.price.toFixed(2)}` : 'Barter only'}
+                          </Text>
+                        </VStack>
+                        <Badge
+                          colorScheme={product.status === 'available' ? 'green' : 'red'}
+                        >
+                          {product.status}
+                        </Badge>
+                      </HStack>
+                    </Box>
+                  ))}
+                  {userProducts.length > 5 && (
                     <Button
-                      size="sm"
                       variant="outline"
                       colorScheme="brand"
-                      onClick={handleEditProfile}
+                      onClick={() => window.location.href = '/dashboard'}
                     >
-                      Edit Profile
+                      View All Products
                     </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      colorScheme="red"
-                      onClick={handleLogout}
-                    >
-                      Logout
-                    </Button>
-                  </VStack>
-                </HStack>
-              </VStack>
-            </HStack>
-          </CardBody>
-        </Card>
+                  )}
+                </VStack>
+              )}
+            </CardBody>
+          </Card>
+        </VStack>
+      </Container>
 
-        {/* Stats */}
-        {userStats && (
-          <SimpleGrid columns={{ base: 2, md: 4 }} spacing={4}>
-            <Stat>
-              <StatLabel>Total Products</StatLabel>
-              <StatNumber>{userStats.totalProducts}</StatNumber>
-              <StatHelpText>Listed items</StatHelpText>
-            </Stat>
-            <Stat>
-              <StatLabel>Active Listings</StatLabel>
-              <StatNumber>{userStats.activeProducts}</StatNumber>
-              <StatHelpText>Available for sale</StatHelpText>
-            </Stat>
-            <Stat>
-              <StatLabel>Sold Items</StatLabel>
-              <StatNumber>{userStats.soldProducts}</StatNumber>
-              <StatHelpText>Completed sales</StatHelpText>
-            </Stat>
-            <Stat>
-              <StatLabel>Total Orders</StatLabel>
-              <StatNumber>{userStats.totalOrders}</StatNumber>
-              <StatHelpText>Purchases made</StatHelpText>
-            </Stat>
-          </SimpleGrid>
-        )}
-
-        {/* Recent Products */}
-        <Card bg={bgColor} border="1px" borderColor={borderColor} shadow="sm">
-          <CardHeader>
-            <Heading size="md">Recent Products</Heading>
-          </CardHeader>
-          <CardBody>
-            {userProducts.length === 0 ? (
-              <Box textAlign="center" py={8}>
-                <Text color="gray.500" mb={4}>
-                  You haven't listed any products yet
-                </Text>
-                <Button colorScheme="brand" onClick={() => window.location.href = '/add-product'}>
-                  List Your First Product
-                </Button>
-              </Box>
-            ) : (
-              <VStack spacing={4} align="stretch">
-                {userProducts.slice(0, 5).map((product) => (
-                  <Box
-                    key={product.id}
-                    p={4}
-                    border="1px"
-                    borderColor={borderColor}
-                    borderRadius="md"
-                    _hover={{ bg: 'gray.50' }}
-                    cursor="pointer"
-                    onClick={() => window.location.href = `/products/${product.id}`}
-                  >
-                    <HStack justify="space-between">
-                      <VStack align="start" spacing={1}>
-                        <Text fontWeight="semibold">{product.title}</Text>
-                        <Text fontSize="sm" color="gray.600">
-                          ${product.price ? product.price.toFixed(2) : 'Barter only'}
-                        </Text>
-                      </VStack>
-                      <Badge
-                        colorScheme={product.status === 'available' ? 'green' : 'red'}
-                      >
-                        {product.status}
-                      </Badge>
-                    </HStack>
-                  </Box>
-                ))}
-                {userProducts.length > 5 && (
-                  <Button
-                    variant="outline"
-                    colorScheme="brand"
-                    onClick={() => window.location.href = '/dashboard'}
-                  >
-                    View All Products
-                  </Button>
-                )}
-              </VStack>
-            )}
-          </CardBody>
-        </Card>
-      </VStack>
-
-      {/* Edit Profile Modal */}
+      {/* Edit Profile Modal (kept as sibling so Box controls full-page bg) */}
       <Modal isOpen={isOpen} onClose={onClose}>
         <ModalOverlay />
         <ModalContent>
@@ -355,7 +356,7 @@ const Profile: React.FC = () => {
           </ModalFooter>
         </ModalContent>
       </Modal>
-    </Container>
+    </Box>
   )
 }
 

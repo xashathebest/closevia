@@ -16,9 +16,7 @@ import {
   Center,
   useToast,
   IconButton,
-  Tooltip,
   Grid,
-  GridItem,
   useDisclosure,
   InputGroup,
   InputLeftElement,
@@ -34,6 +32,8 @@ import {
   ChevronUpIcon,
   AddIcon,
   HamburgerIcon,
+  ArrowLeftIcon,   
+  ArrowRightIcon,   
 } from '@chakra-ui/icons'
 import { FaUserCircle } from 'react-icons/fa'
 import { useProducts } from '../contexts/ProductContext'
@@ -174,6 +174,75 @@ const Home: React.FC = () => {
   // Trade modal state
   const [tradeTargetProductId, setTradeTargetProductId] = useState<number | null>(null)
 
+  // Slider state: cycles public/1.jpg, public/2.jpg, public/3.jpg every 3s
+  const sliderImages = ['/1.jpg', '/2.jpg', '/3.jpg']
+  const [slideIndex, setSlideIndex] = useState(0)
+  const sliderIntervalRef = useRef<number | null>(null)
+  const resumeTimeoutRef = useRef<number | null>(null)
+  const touchStartX = useRef<number | null>(null)
+
+  const startAuto = () => {
+    if (sliderIntervalRef.current) window.clearInterval(sliderIntervalRef.current)
+    sliderIntervalRef.current = window.setInterval(() => {
+      setSlideIndex(i => (i + 1) % sliderImages.length)
+    }, 3000)
+  }
+
+  const stopAuto = () => {
+    if (sliderIntervalRef.current) {
+      window.clearInterval(sliderIntervalRef.current)
+      sliderIntervalRef.current = null
+    }
+  }
+
+  const scheduleResume = (delay = 2000) => {
+    // stop immediate auto and restart after delay
+    stopAuto()
+    if (resumeTimeoutRef.current) window.clearTimeout(resumeTimeoutRef.current)
+    resumeTimeoutRef.current = window.setTimeout(() => {
+      startAuto()
+    }, delay)
+  }
+
+  useEffect(() => {
+    startAuto()
+    return () => {
+      stopAuto()
+      if (resumeTimeoutRef.current) window.clearTimeout(resumeTimeoutRef.current)
+    }
+  }, [])
+
+  const goNext = () => {
+    setSlideIndex(i => (i + 1) % sliderImages.length)
+    scheduleResume(2000)
+  }
+
+  const goPrev = () => {
+    setSlideIndex(i => (i - 1 + sliderImages.length) % sliderImages.length)
+    scheduleResume(2000)
+  }
+
+  const onWheelSlide = (e: React.WheelEvent) => {
+    if (Math.abs(e.deltaY) < 10) return
+    if (e.deltaY > 0) goNext()
+    else goPrev()
+  }
+
+  const onTouchStart = (e: React.TouchEvent) => {
+    touchStartX.current = e.touches[0]?.clientX ?? null
+  }
+
+  const onTouchEnd = (e: React.TouchEvent) => {
+    if (touchStartX.current == null) return
+    const endX = e.changedTouches[0]?.clientX ?? 0
+    const diff = touchStartX.current - endX
+    if (Math.abs(diff) > 40) {
+      if (diff > 0) goNext()
+      else goPrev()
+    }
+    touchStartX.current = null
+  }
+
   const openTradeModal = async (productId: number) => {
     setTradeTargetProductId(productId)
     onOpen()
@@ -280,17 +349,17 @@ const Home: React.FC = () => {
         </Badge>
         
         {/* Status Badge */}
-        {product.status === 'sold' && (
+        {(product.status === 'sold' || product.status === 'traded') && (
           <Badge
             position="absolute"
             bottom={2}
             right={2}
-            colorScheme="red"
+            colorScheme={product.status === 'sold' ? 'red' : 'purple'}
             variant="solid"
             borderRadius="full"
             px={2}
           >
-            Sold
+            {product.status === 'sold' ? 'Sold' : 'Traded'}
           </Badge>
         )}
       </Box>
@@ -309,7 +378,7 @@ const Home: React.FC = () => {
         <Flex justify="space-between" align="center" mb={3}>
           {product.allow_buying && product.price && !product.barter_only ? (
             <Text fontSize="lg" fontWeight="bold" color="brand.500">
-              ${product.price.toFixed(2)}
+              ₱{product.price.toFixed(2)}
             </Text>
           ) : (
             <Text fontSize="sm" color="green.600" fontWeight="medium">
@@ -333,9 +402,9 @@ const Home: React.FC = () => {
               e.stopPropagation()
               handleTradeClick(product.id)
             }}
-            isDisabled={product.status === 'sold'}
+            isDisabled={product.status === 'sold' || product.status === 'traded'}
           >
-            {product.status === 'sold' ? 'Sold' : 'Trade'}
+            {product.status === 'sold' ? 'Sold' : product.status === 'traded' ? 'Traded' : 'Trade'}
           </Button>
           
           {product.allow_buying && product.price && !product.barter_only && (
@@ -347,9 +416,9 @@ const Home: React.FC = () => {
                 e.stopPropagation()
                 handleBuyClick(product.id)
               }}
-              isDisabled={product.status === 'sold'}
+              isDisabled={product.status === 'sold' || product.status === 'traded'}
             >
-              {product.status === 'sold' ? 'Sold' : 'Buy'}
+              {product.status === 'sold' ? 'Sold' : product.status === 'traded' ? 'Traded' : 'Buy'}
             </Button>
           )}
         </HStack>
@@ -534,9 +603,95 @@ const Home: React.FC = () => {
           )}
         </VStack>
       </Box>
+      {/* slider / visual box between header and main content (keeps same dimensions) */}
+      <Box
+        /* slightly narrower on mobile and reduce horizontal padding on small screens */
+        maxW={{ base: 'calc(100% - 32px)', md: '4xl', lg: '6xl', xl: '1160px' }}
+        mx="auto"
+        mb={4}
+        px={{ base: 2, md: 4 }}
+      >
+        <Box
+          position="relative"
+          overflow="hidden"
+          h={{ base: 28, md: 28, lg: 32 }}    /* keep same chakra size tokens as before */
+          rounded="lg"
+          border="1px"
+          borderColor="gray.200"
+          bg="gray.50"
+          onWheel={onWheelSlide}
+          onTouchStart={onTouchStart}
+          onTouchEnd={onTouchEnd}
+        >
+          {sliderImages.map((src, idx) => (
+            <Image
+              key={src}
+              src={src}
+              alt={`slide-${idx + 1}`}
+              position="absolute"
+              top={0}
+              left={0}
+              w="100%"
+              h="100%"
+              objectFit="cover"
+              transition="opacity 600ms ease"
+              opacity={idx === slideIndex ? 1 : 0}
+              zIndex={idx === slideIndex ? 2 : 1}
+              loading="eager"
+              draggable={false}
+              onClick={() => { /* allow click-through if desired */ }}
+            />
+          ))}
 
+          {/* Prev / Next controls (desktop only). Mobile users swipe instead. */}
+          <IconButton
+            aria-label="Previous slide"
+            icon={<ArrowLeftIcon />}
+            position="absolute"
+            left={3}
+            top="50%"
+            transform="translateY(-50%)"
+            zIndex={5}
+            size="sm"
+            colorScheme="blackAlpha"
+            variant="ghost"
+            display={{ base: 'none', md: 'flex' }}
+            onClick={(e) => { e.stopPropagation(); goPrev() }}
+          />
+
+          <IconButton
+            aria-label="Next slide"
+            icon={<ArrowRightIcon />}
+            position="absolute"
+            right={3}
+            top="50%"
+            transform="translateY(-50%)"
+            zIndex={5}
+            size="sm"
+            colorScheme="blackAlpha"
+            variant="ghost"
+            display={{ base: 'none', md: 'flex' }}
+            onClick={(e) => { e.stopPropagation(); goNext() }}
+          />
+
+          {/* Dots */}
+          <HStack spacing={2} position="absolute" bottom={3} left="50%" transform="translateX(-50%)" zIndex={5}>
+            {sliderImages.map((_, i) => (
+              <Box
+                key={i}
+                as="button"
+                w={i === slideIndex ? 3 : 2.5}
+                h={i === slideIndex ? 3 : 2.5}
+                bg={i === slideIndex ? 'brand.500' : 'gray.300'}
+                borderRadius="full"
+                onClick={(e) => { e.stopPropagation(); setSlideIndex(i); scheduleResume(2000) }}
+              />
+            ))}
+          </HStack>
+        </Box>
+      </Box>
       {/* Main Content */}
-      <Box px={8} py={6}>
+      <Box px={{ base: 3, md: 8 }} py={6}>
         {/* Loading State */}
         {loading && !products.length && (
           <Center h="50vh">
@@ -571,7 +726,7 @@ const Home: React.FC = () => {
 
         {/* Products Grid - Pinterest Style */}
         {!loading && products.length > 0 && (
-          <Box maxW="25xl" mx="auto" mt={-6}>
+          <Box maxW={{ base: 'calc(100% - 12px)', md: '25xl' }} mx="auto" mt={-6} px={{ base: 1, md: 0 }}>
             <Box
               sx={{
                 columnCount: { base: 2, sm: 2, md: 2, lg: 3, xl: 4 },
