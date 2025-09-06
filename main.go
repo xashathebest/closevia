@@ -11,6 +11,7 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/gofiber/fiber/v2/middleware/recover"
 	"github.com/joho/godotenv"
+	"github.com/supabase/supabase-go"
 	"github.com/xashathebest/clovia/database"
 	"github.com/xashathebest/clovia/handlers"
 	"github.com/xashathebest/clovia/middleware"
@@ -21,6 +22,20 @@ func main() {
 	if err := godotenv.Load(); err != nil {
 		log.Println("No .env file found, using default values")
 	}
+
+	// Read Supabase configuration from environment
+	supabaseKey := os.Getenv("SUPABASE_KEY")
+	supabaseURL := os.Getenv("SUPABASE_URL")
+	if supabaseURL == "" {
+		supabaseURL = "https://zvljxbnnziygamuzzccv.supabase.co"
+	}
+	if supabaseKey == "" {
+		log.Println("Warning: SUPABASE_KEY is not set in environment")
+	}
+	// Create Supabase client (you can pass this client to your database/handlers later)
+	client := supabase.CreateClient(supabaseURL, supabaseKey)
+	log.Println("Supabase client initialized")
+	_ = client // keep for now to avoid unused variable; integrate into database/handlers next
 
 	// Initialize database
 	if err := database.InitDatabase(); err != nil {
