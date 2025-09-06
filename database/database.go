@@ -42,10 +42,10 @@ func InitDatabase() error {
 	}
 
 	dbType := getEnv("DB_TYPE", "postgres") // default to postgres
-	dbHost := getEnv("DB_HOST", "127.0.0.1")
+	dbHost := getEnv("DB_HOST", "")
 	dbPort := getEnv("DB_PORT", "5432")
-	dbUser := getEnv("DB_USER", "postgres")
-	dbPassword := getEnv("DB_PASSWORD", "")
+	dbUser := getEnv("DB_USER", "")
+	dbPassword := getEnv("DB_PASSWORD", "gmYN&#Yt4?s%z6&")
 	dbName := getEnv("DB_NAME", "clovia")
 
 	// Build DSN and select driver based on DB_TYPE
