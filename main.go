@@ -33,7 +33,7 @@ func main() {
 		log.Println("Warning: SUPABASE_KEY is not set in environment")
 	}
 	// Create Supabase client (you can pass this client to your database/handlers later)
-	client := supabase.CreateClient(supabaseURL, supabaseKey)
+	client := supabase.NewClient(supabaseURL, supabaseKey)
 	log.Println("Supabase client initialized")
 	_ = client // keep for now to avoid unused variable; integrate into database/handlers next
 
