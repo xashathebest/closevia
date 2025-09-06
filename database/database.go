@@ -11,19 +11,39 @@ import (
 
 	_ "github.com/go-sql-driver/mysql" // MySQL driver
 	_ "github.com/jackc/pgx/v5/stdlib" // Postgres driver (pgx stdlib)
+
+	"github.com/joho/godotenv"
+	"github.com/supabase/supabase-go"
 )
 
 var DB *sql.DB
+var SupabaseClient *supabase.Client
 
-// InitDatabase initializes the database connection
+// InitDatabase initializes the Supabase client or local database connection.
+//
+// Behavior:
+// - If SUPABASE_URL and SUPABASE_API_KEY are set, initialize Supabase client and DO NOT open a direct TCP Postgres connection.
+// - Otherwise, if DATABASE_URL is set, open a local sql.DB using pgx (development fallback).
+// - Otherwise, fall back to legacy DB_TYPE/DB_HOST/etc behavior (keeps local TCP support).
 func InitDatabase() error {
-	// Get database configuration from environment variables or use defaults
-	// DATABASE_URL takes precedence if set (useful in Render)
+	// Load local .env for development if present (non-fatal)
+	_ = godotenv.Load()
+
+	// Prefer Supabase client in production
+	supabaseURL := os.Getenv("SUPABASE_URL")
+	supabaseKey := os.Getenv("SUPABASE_API_KEY")
+	if supabaseURL != "" && supabaseKey != "" {
+		SupabaseClient = supabase.NewClient(supabaseURL, supabaseKey)
+		log.Printf("Initialized Supabase client (SUPABASE_URL=%s, key=****)", maskSensitive(supabaseURL))
+		log.Println("Supabase client initialized — skipping direct Postgres TCP connections. Use migrations via Supabase SQL editor or a migration tool.")
+		return nil
+	}
+
+	// If Supabase not configured, allow DATABASE_URL fallback for local development
 	if dbURL := os.Getenv("DATABASE_URL"); dbURL != "" {
-		// Use pgx driver for a DATABASE_URL assumed to be Postgres-style
 		driver := "pgx"
 		dsn := dbURL
-		log.Printf("Using DATABASE_URL with driver=%s", driver)
+		log.Printf("DATABASE_URL detected; initializing sql.DB with driver=%s", driver)
 		var err error
 		DB, err = sql.Open(driver, dsn)
 		if err != nil {
@@ -42,84 +62,71 @@ func InitDatabase() error {
 		return nil
 	}
 
-	// Use Supabase defaults and avoid empty host/user causing malformed DSNs
-	dbType := getEnv("DB_TYPE", "postgres") // default to postgres
-	// Default to Supabase-managed Postgres host and database name; allow overrides via env
+	// Fallback: legacy DB_TYPE / DB_HOST / DB_USER path (local dev)
+	dbType := getEnv("DB_TYPE", "postgres")
 	dbHost := getEnv("DB_HOST", "db.zvljxbnnziygamuzzccv.supabase.co")
 	dbPort := getEnv("DB_PORT", "5432")
 	dbUser := getEnv("DB_USER", "postgres")
-	// DO NOT hardcode a production password here — require it from env
 	dbPassword := getEnv("DB_PASSWORD", "")
 	dbName := getEnv("DB_NAME", "postgres")
 
-	// Build DSN and select driver based on DB_TYPE
 	var driver string
 	var dsn string
 
 	if dbType == "mysql" {
 		driver = "mysql"
-		// MySQL DSN (kept for compatibility)
 		dsn = fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?parseTime=true&loc=Local",
 			dbUser, dbPassword, dbHost, dbPort, dbName)
-		log.Printf("Using DB_TYPE=mysql (connecting to %s:%s) — not using DATABASE_URL", dbHost, dbPort)
+		log.Printf("Using DB_TYPE=mysql (connecting to %s:%s)", dbHost, dbPort)
 	} else {
-		// default: postgres using pgx stdlib
 		driver = "pgx"
-		// Build a properly-escaped Postgres DSN using net/url so passwords with special chars won't break parsing
 		u := &url.URL{
 			Scheme: "postgresql",
 			User:   url.UserPassword(dbUser, dbPassword),
 			Host:   fmt.Sprintf("%s:%s", dbHost, dbPort),
 			Path:   dbName,
 		}
-		// Ensure TLS for Supabase
 		q := u.Query()
 		q.Set("sslmode", "require")
 		u.RawQuery = q.Encode()
-
 		dsn = u.String()
-		log.Printf("Using DB_TYPE=postgres (connecting to %s:%s) — not using DATABASE_URL", dbHost, dbPort)
+		log.Printf("Using DB_TYPE=postgres (connecting to %s:%s)", dbHost, dbPort)
 		if dbPassword == "" {
-			log.Println("Warning: DB_PASSWORD is empty. For Supabase direct Postgres connections, set DB_PASSWORD to your database password (not the REST API key).")
+			log.Println("Warning: DB_PASSWORD is empty. For direct Postgres connections, set DB_PASSWORD to your database password.")
 		}
 	}
 
-	// Open database connection
 	var err error
 	DB, err = sql.Open(driver, dsn)
 	if err != nil {
 		return fmt.Errorf("failed to open database (%s): %v", driver, err)
 	}
-
-	// Configure connection pool
 	DB.SetMaxOpenConns(25)
 	DB.SetMaxIdleConns(25)
 	DB.SetConnMaxLifetime(5 * time.Minute)
 
-	// Test the connection
 	if err := DB.Ping(); err != nil {
 		return fmt.Errorf("failed to ping database: %v", err)
 	}
 
-	// Test a simple query to verify we're connected to the right database
 	var currentDbName string
 	if driver == "pgx" {
-		err = DB.QueryRow("SELECT current_database()").Scan(&currentDbName) // Postgres
+		err = DB.QueryRow("SELECT current_database()").Scan(&currentDbName)
 	} else {
-		err = DB.QueryRow("SELECT DATABASE()").Scan(&currentDbName) // MySQL
+		err = DB.QueryRow("SELECT DATABASE()").Scan(&currentDbName)
 	}
 	if err != nil {
 		return fmt.Errorf("failed to get database name: %v", err)
 	}
-
 	log.Printf("Successfully connected to %s database: %s", driver, maskSensitive(currentDbName))
 	return nil
 }
 
-// CloseDatabase closes the database connection
+// CloseDatabase closes the sql.DB if it was opened.
+// Supabase client does not require explicit close.
 func CloseDatabase() {
 	if DB != nil {
-		DB.Close()
+		_ = DB.Close()
 		log.Println("Database connection closed")
 	}
 }
@@ -132,7 +139,9 @@ func getEnv(key, defaultValue string) string {
 	return defaultValue
 }
 
-// CreateTables creates all necessary tables if they don't exist
+// CreateTables creates all necessary tables if they don't exist.
+// Note: In production with Supabase client initialized, this function will skip executing DDL
+// because running DDL via the Supabase client is not supported here — use migrations or Supabase SQL editor.
 func CreateTables() error {
 	queries := []string{
 		`CREATE TABLE IF NOT EXISTS users (
@@ -183,7 +192,6 @@ func CreateTables() error {
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
 		)`,
-		// Conversations for chat between buyer and seller about a product
 		`CREATE TABLE IF NOT EXISTS conversations (
 			id INT AUTO_INCREMENT PRIMARY KEY,
 			product_id INT NOT NULL,
@@ -196,7 +204,6 @@ func CreateTables() error {
 			FOREIGN KEY (buyer_id) REFERENCES users(id) ON DELETE CASCADE,
 			FOREIGN KEY (seller_id) REFERENCES users(id) ON DELETE CASCADE
 		)`,
-		// Messages within a conversation
 		`CREATE TABLE IF NOT EXISTS messages (
 			id INT AUTO_INCREMENT PRIMARY KEY,
 			conversation_id INT NOT NULL,
@@ -207,7 +214,6 @@ func CreateTables() error {
 			FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
 			FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE
 		)`,
-		// Trades and trade items for barter system
 		`CREATE TABLE IF NOT EXISTS trades (
 			id INT AUTO_INCREMENT PRIMARY KEY,
 			buyer_id INT NOT NULL,
@@ -225,7 +231,6 @@ func CreateTables() error {
 			FOREIGN KEY (seller_id) REFERENCES users(id) ON DELETE CASCADE,
 			FOREIGN KEY (target_product_id) REFERENCES products(id) ON DELETE CASCADE
 		)`,
-		// Backfill/alter for existing deployments (ignore errors if already applied)
 		`ALTER TABLE trades CHANGE COLUMN status status ENUM('pending','accepted','declined','countered','active','pending_confirmation','completed','cancelled') DEFAULT 'pending'`,
 		`ALTER TABLE products CHANGE COLUMN status status ENUM('available', 'sold', 'traded') DEFAULT 'available'`,
 		`ALTER TABLE trades ADD COLUMN IF NOT EXISTS buyer_completed BOOLEAN DEFAULT FALSE`,
@@ -251,7 +256,6 @@ func CreateTables() error {
 			FOREIGN KEY (trade_id) REFERENCES trades(id) ON DELETE CASCADE,
 			FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE
 		)`,
-		// Trade events history log
 		`CREATE TABLE IF NOT EXISTS trade_events (
 			id INT AUTO_INCREMENT PRIMARY KEY,
 			trade_id INT NOT NULL,
@@ -272,7 +276,6 @@ func CreateTables() error {
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 		)`,
-		// Authenticity proofs for products
 		`CREATE TABLE IF NOT EXISTS authenticity_proofs (
 			id INT AUTO_INCREMENT PRIMARY KEY,
 			product_id INT NOT NULL,
@@ -293,9 +296,20 @@ func CreateTables() error {
 		)`,
 	}
 
+	// If only Supabase client is available, DO NOT attempt DDL over TCP; instruct migrations
+	if SupabaseClient != nil && DB == nil {
+		log.Println("Supabase client is initialized. CreateTables will not execute DDL in production.")
+		log.Println("Please apply schema changes using Supabase SQL editor or a migration tool (recommended).")
+		return nil
+	}
+
+	if DB == nil {
+		return fmt.Errorf("no database client available to create tables")
+	}
+
 	for _, query := range queries {
 		if _, err := DB.Exec(query); err != nil {
-			return fmt.Errorf("failed to create table: %v", err)
+			return fmt.Errorf("failed to execute DDL: %v", err)
 		}
 	}
 
@@ -327,7 +341,6 @@ func CreateTables() error {
 
 	for _, query := range indexQueries {
 		if _, err := DB.Exec(query); err != nil {
-			// Index creation might fail if they already exist, which is fine
 			log.Printf("Warning: failed to create index: %v", err)
 		}
 	}
