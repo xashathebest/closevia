@@ -3,7 +3,7 @@ package main
 import (
 	"log"
 	"os"
-
+	"path/filepath"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -17,9 +17,26 @@ import (
 )
 
 func main() {
-	// Load environment variables
-	if err := godotenv.Load(); err != nil {
-		log.Println("No .env file found, using default values")
+	// Load environment variables from common locations so running from different working dirs still works
+	wd, _ := os.Getwd()
+	tryPaths := []string{
+		".env",
+		"./.env",
+		filepath.Join(wd, ".env"),
+		filepath.Join(wd, "..", ".env"),
+		filepath.Join(wd, "server", ".env"),
+	}
+	loaded := false
+	for _, p := range tryPaths {
+		if err := godotenv.Load(p); err == nil {
+			log.Println("Loaded .env from", p)
+			loaded = true
+			break
+		}
+	}
+	if !loaded {
+		// Keep previous behavior but provide more context to help debugging
+		log.Println("No .env file found in common locations, using environment variables (cwd:", wd, ")")
 	}
 
 	// Read Supabase configuration from environment (kept for future use)

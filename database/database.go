@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"regexp"
 	"time"
@@ -41,11 +42,12 @@ func InitDatabase() error {
 		return nil
 	}
 
+	// Use safer defaults to avoid empty host/user causing malformed DSNs
 	dbType := getEnv("DB_TYPE", "postgres") // default to postgres
-	dbHost := getEnv("DB_HOST", "")
+	dbHost := getEnv("DB_HOST", "127.0.0.1")
 	dbPort := getEnv("DB_PORT", "5432")
-	dbUser := getEnv("DB_USER", "")
-	dbPassword := getEnv("DB_PASSWORD", "gmYN&#Yt4?s%z6&")
+	dbUser := getEnv("DB_USER", "postgres")
+	dbPassword := getEnv("DB_PASSWORD", "")
 	dbName := getEnv("DB_NAME", "clovia")
 
 	// Build DSN and select driver based on DB_TYPE
@@ -61,12 +63,14 @@ func InitDatabase() error {
 	} else {
 		// default: postgres using pgx stdlib
 		driver = "pgx"
-		// Postgres DSN (postgresql://user:pass@host:port/dbname)
-		if dbPassword == "" {
-			dsn = fmt.Sprintf("postgresql://%s@%s:%s/%s", dbUser, dbHost, dbPort, dbName)
-		} else {
-			dsn = fmt.Sprintf("postgresql://%s:%s@%s:%s/%s", dbUser, dbPassword, dbHost, dbPort, dbName)
+		// Build a properly-escaped Postgres DSN using net/url so passwords with special chars won't break parsing
+		u := &url.URL{
+			Scheme: "postgresql",
+			User:   url.UserPassword(dbUser, dbPassword),
+			Host:   fmt.Sprintf("%s:%s", dbHost, dbPort),
+			Path:   dbName,
 		}
+		dsn = u.String()
 		log.Printf("Using DB_TYPE=postgres (connecting to %s:%s) — not using DATABASE_URL", dbHost, dbPort)
 	}
 
