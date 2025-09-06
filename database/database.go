@@ -42,13 +42,15 @@ func InitDatabase() error {
 		return nil
 	}
 
-	// Use safer defaults to avoid empty host/user causing malformed DSNs
+	// Use Supabase defaults and avoid empty host/user causing malformed DSNs
 	dbType := getEnv("DB_TYPE", "postgres") // default to postgres
-	dbHost := getEnv("DB_HOST", "127.0.0.1")
+	// Default to Supabase-managed Postgres host and database name; allow overrides via env
+	dbHost := getEnv("DB_HOST", "db.zvljxbnnziygamuzzccv.supabase.co")
 	dbPort := getEnv("DB_PORT", "5432")
 	dbUser := getEnv("DB_USER", "postgres")
+	// DO NOT hardcode a production password here — require it from env
 	dbPassword := getEnv("DB_PASSWORD", "")
-	dbName := getEnv("DB_NAME", "clovia")
+	dbName := getEnv("DB_NAME", "postgres")
 
 	// Build DSN and select driver based on DB_TYPE
 	var driver string
@@ -70,8 +72,16 @@ func InitDatabase() error {
 			Host:   fmt.Sprintf("%s:%s", dbHost, dbPort),
 			Path:   dbName,
 		}
+		// Ensure TLS for Supabase
+		q := u.Query()
+		q.Set("sslmode", "require")
+		u.RawQuery = q.Encode()
+
 		dsn = u.String()
 		log.Printf("Using DB_TYPE=postgres (connecting to %s:%s) — not using DATABASE_URL", dbHost, dbPort)
+		if dbPassword == "" {
+			log.Println("Warning: DB_PASSWORD is empty. For Supabase direct Postgres connections, set DB_PASSWORD to your database password (not the REST API key).")
+		}
 	}
 
 	// Open database connection
