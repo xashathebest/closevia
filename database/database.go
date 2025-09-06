@@ -4,11 +4,9 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
-	"net"
 	"net/url"
 	"os"
 	"regexp"
-	"strings"
 	"time"
 
 	_ "github.com/go-sql-driver/mysql" // MySQL driver
@@ -22,11 +20,6 @@ func InitDatabase() error {
 	// Get database configuration from environment variables or use defaults
 	// DATABASE_URL takes precedence if set (useful in Render)
 	if dbURL := os.Getenv("DATABASE_URL"); dbURL != "" {
-		// Force IPv4 in Render environment
-		if os.Getenv("RENDER") == "true" {
-			dbURL = forceIPv4InURL(dbURL)
-		}
-		
 		// Use pgx driver for a DATABASE_URL assumed to be Postgres-style
 		driver := "pgx"
 		dsn := dbURL
@@ -58,16 +51,6 @@ func InitDatabase() error {
 	// DO NOT hardcode a production password here — require it from env
 	dbPassword := getEnv("DB_PASSWORD", "")
 	dbName := getEnv("DB_NAME", "postgres")
-
-	// Force IPv4 in Render environment
-	if os.Getenv("RENDER") == "true" && dbType == "postgres" {
-		if ip, err := resolveHostToIPv4(dbHost); err == nil {
-			dbHost = ip
-			log.Printf("Using IPv4 address for database connection: %s", dbHost)
-		} else {
-			log.Printf("Warning: Failed to resolve %s to IPv4: %v", dbHost, err)
-		}
-	}
 
 	// Build DSN and select driver based on DB_TYPE
 	var driver string
@@ -133,56 +116,6 @@ func InitDatabase() error {
 	return nil
 }
 
-// resolveHostToIPv4 resolves a hostname to its IPv4 address
-func resolveHostToIPv4(host string) (string, error) {
-	ips, err := net.LookupIP(host)
-	if err != nil {
-		return "", err
-	}
-	
-	for _, ip := range ips {
-		if ipv4 := ip.To4(); ipv4 != nil {
-			return ipv4.String(), nil
-		}
-	}
-	
-	return "", fmt.Errorf("no IPv4 address found for host: %s", host)
-}
-
-// forceIPv4InURL replaces hostname with IPv4 address in a database URL
-func forceIPv4InURL(dbURL string) string {
-	// Parse the URL
-	parsedURL, err := url.Parse(dbURL)
-	if err != nil {
-		log.Printf("Warning: Failed to parse database URL: %v", err)
-		return dbURL
-	}
-	
-	// Extract hostname
-	hostname := parsedURL.Hostname()
-	if net.ParseIP(hostname) != nil {
-		// Already an IP address
-		return dbURL
-	}
-	
-	// Resolve to IPv4
-	ip, err := resolveHostToIPv4(hostname)
-	if err != nil {
-		log.Printf("Warning: Failed to resolve %s to IPv4: %v", hostname, err)
-		return dbURL
-	}
-	
-	// Replace hostname with IP
-	port := parsedURL.Port()
-	if port != "" {
-		parsedURL.Host = ip + ":" + port
-	} else {
-		parsedURL.Host = ip
-	}
-	
-	return parsedURL.String()
-}
-
 // CloseDatabase closes the database connection
 func CloseDatabase() {
 	if DB != nil {
@@ -201,33 +134,163 @@ func getEnv(key, defaultValue string) string {
 
 // CreateTables creates all necessary tables if they don't exist
 func CreateTables() error {
-	// Use PostgreSQL-compatible syntax
 	queries := []string{
 		`CREATE TABLE IF NOT EXISTS users (
-			id SERIAL PRIMARY KEY,
+			id INT AUTO_INCREMENT PRIMARY KEY,
 			name VARCHAR(255) NOT NULL,
 			email VARCHAR(255) UNIQUE NOT NULL,
 			password_hash VARCHAR(255) NOT NULL,
 			role VARCHAR(10) NOT NULL DEFAULT 'user',
 			verified BOOLEAN DEFAULT FALSE,
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 		)`,
 		`CREATE TABLE IF NOT EXISTS products (
-			id SERIAL PRIMARY KEY,
+			id INT AUTO_INCREMENT PRIMARY KEY,
 			title VARCHAR(255) NOT NULL,
 			description TEXT,
 			price DECIMAL(10,2) NOT NULL,
 			image_url VARCHAR(500),
 			seller_id INT NOT NULL,
 			premium BOOLEAN DEFAULT FALSE,
-			status VARCHAR(20) DEFAULT 'available' CHECK (status IN ('available', 'sold', 'traded')),
+			status ENUM('available', 'sold', 'traded') DEFAULT 'available',
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 			FOREIGN KEY (seller_id) REFERENCES users(id) ON DELETE CASCADE
 		)`,
-		// Add other tables with PostgreSQL-compatible syntax...
-		// Note: Replace ENUM with CHECK constraints for PostgreSQL compatibility
+		`CREATE TABLE IF NOT EXISTS orders (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			product_id INT NOT NULL,
+			buyer_id INT NOT NULL,
+			status ENUM('pending', 'completed', 'cancelled') DEFAULT 'pending',
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE,
+			FOREIGN KEY (buyer_id) REFERENCES users(id) ON DELETE CASCADE
+		)`,
+		`CREATE TABLE IF NOT EXISTS transactions (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			order_id INT NOT NULL,
+			amount DECIMAL(10,2) NOT NULL,
+			payment_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE
+		)`,
+		`CREATE TABLE IF NOT EXISTS premium_listings (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			product_id INT NOT NULL,
+			start_date TIMESTAMP NOT NULL,
+			end_date TIMESTAMP NOT NULL,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
+		)`,
+		// Conversations for chat between buyer and seller about a product
+		`CREATE TABLE IF NOT EXISTS conversations (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			product_id INT NOT NULL,
+			buyer_id INT NOT NULL,
+			seller_id INT NOT NULL,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			UNIQUE KEY uniq_conversation (product_id, buyer_id, seller_id),
+			FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE,
+			FOREIGN KEY (buyer_id) REFERENCES users(id) ON DELETE CASCADE,
+			FOREIGN KEY (seller_id) REFERENCES users(id) ON DELETE CASCADE
+		)`,
+		// Messages within a conversation
+		`CREATE TABLE IF NOT EXISTS messages (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			conversation_id INT NOT NULL,
+			sender_id INT NOT NULL,
+			content TEXT NOT NULL,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			read_at TIMESTAMP NULL,
+			FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+			FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE
+		)`,
+		// Trades and trade items for barter system
+		`CREATE TABLE IF NOT EXISTS trades (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			buyer_id INT NOT NULL,
+			seller_id INT NOT NULL,
+			target_product_id INT NOT NULL,
+			status ENUM('pending','accepted','declined','countered','active','pending_confirmation','completed','cancelled') DEFAULT 'pending',
+			message TEXT NULL,
+			offered_cash_amount DECIMAL(10,2) NULL,
+			buyer_completed BOOLEAN DEFAULT FALSE,
+			seller_completed BOOLEAN DEFAULT FALSE,
+			completed_at TIMESTAMP NULL,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			FOREIGN KEY (buyer_id) REFERENCES users(id) ON DELETE CASCADE,
+			FOREIGN KEY (seller_id) REFERENCES users(id) ON DELETE CASCADE,
+			FOREIGN KEY (target_product_id) REFERENCES products(id) ON DELETE CASCADE
+		)`,
+		// Backfill/alter for existing deployments (ignore errors if already applied)
+		`ALTER TABLE trades CHANGE COLUMN status status ENUM('pending','accepted','declined','countered','active','pending_confirmation','completed','cancelled') DEFAULT 'pending'`,
+		`ALTER TABLE products CHANGE COLUMN status status ENUM('available', 'sold', 'traded') DEFAULT 'available'`,
+		`ALTER TABLE trades ADD COLUMN IF NOT EXISTS buyer_completed BOOLEAN DEFAULT FALSE`,
+		`ALTER TABLE trades ADD COLUMN IF NOT EXISTS seller_completed BOOLEAN DEFAULT FALSE`,
+		`ALTER TABLE trades ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP NULL`,
+		`ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(10) NOT NULL DEFAULT 'user'`,
+		`ALTER TABLE trades ADD COLUMN IF NOT EXISTS offered_cash_amount DECIMAL(10,2) NULL`,
+		`CREATE TABLE IF NOT EXISTS trade_items (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			trade_id INT NOT NULL,
+			product_id INT NOT NULL,
+			offered_by ENUM('buyer','seller') NOT NULL,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (trade_id) REFERENCES trades(id) ON DELETE CASCADE,
+			FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
+		)`,
+		`CREATE TABLE IF NOT EXISTS trade_messages (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			trade_id INT NOT NULL,
+			sender_id INT NOT NULL,
+			content TEXT NOT NULL,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (trade_id) REFERENCES trades(id) ON DELETE CASCADE,
+			FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE
+		)`,
+		// Trade events history log
+		`CREATE TABLE IF NOT EXISTS trade_events (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			trade_id INT NOT NULL,
+			actor_id INT NULL,
+			from_status VARCHAR(32) NULL,
+			to_status VARCHAR(32) NULL,
+			note VARCHAR(500) NULL,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (trade_id) REFERENCES trades(id) ON DELETE CASCADE,
+			FOREIGN KEY (actor_id) REFERENCES users(id) ON DELETE SET NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS notifications (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			user_id INT NOT NULL,
+			type VARCHAR(50) NOT NULL,
+			message VARCHAR(500) NOT NULL,
+			is_read BOOLEAN DEFAULT FALSE,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+		)`,
+		// Authenticity proofs for products
+		`CREATE TABLE IF NOT EXISTS authenticity_proofs (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			product_id INT NOT NULL,
+			user_id INT NOT NULL,
+			type ENUM('receipt','serial_number','certificate') NOT NULL,
+			status ENUM('pending','approved','rejected') NOT NULL DEFAULT 'pending',
+			proof_url VARCHAR(500) NULL,
+			serial_number VARCHAR(255) NULL,
+			certificate_text TEXT NULL,
+			reviewer_id INT NULL,
+			reviewed_at TIMESTAMP NULL,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE,
+			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+			FOREIGN KEY (reviewer_id) REFERENCES users(id) ON DELETE SET NULL,
+			INDEX idx_auth_proofs_product (product_id),
+			INDEX idx_auth_proofs_status (status)
+		)`,
 	}
 
 	for _, query := range queries {
@@ -236,8 +299,41 @@ func CreateTables() error {
 		}
 	}
 
-	// PostgreSQL-compatible version of ensureColumn
-	if err := ensureColumnPostgreSQL("products", "authenticity_verified", "ALTER TABLE products ADD COLUMN IF NOT EXISTS authenticity_verified BOOLEAN NOT NULL DEFAULT FALSE"); err != nil {
+	// Create indexes
+	indexQueries := []string{
+		"CREATE INDEX IF NOT EXISTS idx_products_seller ON products(seller_id)",
+		"CREATE INDEX IF NOT EXISTS idx_products_status ON products(status)",
+		"CREATE INDEX IF NOT EXISTS idx_products_premium ON products(premium)",
+		"CREATE INDEX IF NOT EXISTS idx_orders_buyer ON orders(buyer_id)",
+		"CREATE INDEX IF NOT EXISTS idx_orders_product ON orders(product_id)",
+		"CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status)",
+		"CREATE INDEX IF NOT EXISTS idx_transactions_order ON transactions(order_id)",
+		"CREATE INDEX IF NOT EXISTS idx_premium_listings_product ON premium_listings(product_id)",
+		"CREATE INDEX IF NOT EXISTS idx_premium_listings_dates ON premium_listings(start_date, end_date)",
+		"CREATE INDEX IF NOT EXISTS idx_conversations_participants ON conversations(buyer_id, seller_id)",
+		"CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id)",
+		"CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender_id)",
+		"CREATE INDEX IF NOT EXISTS idx_trades_participants ON trades(buyer_id, seller_id)",
+		"CREATE INDEX IF NOT EXISTS idx_trades_target ON trades(target_product_id)",
+		"CREATE INDEX IF NOT EXISTS idx_trades_status ON trades(status)",
+		"CREATE INDEX IF NOT EXISTS idx_trade_items_trade ON trade_items(trade_id)",
+		"CREATE INDEX IF NOT EXISTS idx_trade_items_product ON trade_items(product_id)",
+		"CREATE INDEX IF NOT EXISTS idx_trade_messages_trade ON trade_messages(trade_id)",
+		"CREATE INDEX IF NOT EXISTS idx_trade_messages_sender ON trade_messages(sender_id)",
+		"CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id)",
+		"CREATE INDEX IF NOT EXISTS idx_notifications_read ON notifications(is_read)",
+		"CREATE INDEX IF NOT EXISTS idx_notifications_type ON notifications(type)",
+	}
+
+	for _, query := range indexQueries {
+		if _, err := DB.Exec(query); err != nil {
+			// Index creation might fail if they already exist, which is fine
+			log.Printf("Warning: failed to create index: %v", err)
+		}
+	}
+
+	// Ensure authenticity flag on products (non-destructive)
+	if err := ensureColumn("products", "authenticity_verified", "ALTER TABLE products ADD COLUMN authenticity_verified TINYINT(1) NOT NULL DEFAULT 0"); err != nil {
 		log.Printf("Warning: failed to add products.authenticity_verified: %v", err)
 	}
 
@@ -245,10 +341,10 @@ func CreateTables() error {
 	return nil
 }
 
-// ensureColumnPostgreSQL adds a column if it does not exist for PostgreSQL
-func ensureColumnPostgreSQL(table string, column string, alterSQL string) error {
+// ensureColumn adds a column if it does not exist. Returns error only on add attempt failure.
+func ensureColumn(table string, column string, alterSQL string) error {
 	var count int
-	q := `SELECT COUNT(*) FROM information_schema.columns WHERE table_name = $1 AND column_name = $2`
+	q := `SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?`
 	if err := DB.QueryRow(q, table, column).Scan(&count); err != nil {
 		return err
 	}
