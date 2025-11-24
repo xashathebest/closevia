@@ -206,11 +206,27 @@ func (h *UserHandler) GetProfile(c *fiber.Ctx) error {
 	}
 
 	var user models.User
-	// Fixed: single SELECT and Scan (removed duplicated/invalid lines)
+	// Fixed: scan background fields into local variables (models.User may not have those fields)
+	var backgroundImage string
+	var backgroundPosition string
+
 	err := h.db.QueryRow(
 		"SELECT id, name, email, role, verified, org_logo_url, COALESCE(profile_picture, '') as profile_picture, COALESCE(bio, '') as bio, COALESCE(background_image, '') as background_image, COALESCE(background_position, '') as background_position, created_at, updated_at FROM users WHERE id = ?",
 		userID,
-	).Scan(&user.ID, &user.Name, &user.Email, &user.Role, &user.Verified, &user.OrgLogoURL, &user.ProfilePicture, &user.Bio, &user.BackgroundImage, &user.BackgroundPosition, &user.CreatedAt, &user.UpdatedAt)
+	).Scan(
+		&user.ID,
+		&user.Name,
+		&user.Email,
+		&user.Role,
+		&user.Verified,
+		&user.OrgLogoURL,
+		&user.ProfilePicture,
+		&user.Bio,
+		&backgroundImage,
+		&backgroundPosition,
+		&user.CreatedAt,
+		&user.UpdatedAt,
+	)
 
 	if err != nil {
 		// Return a friendly fallback (200) so frontend does not produce a network 404.
@@ -229,9 +245,14 @@ func (h *UserHandler) GetProfile(c *fiber.Ctx) error {
 		})
 	}
 
+	// Return user plus background fields so clients can access them even if models.User lacks those fields
 	return c.JSON(models.APIResponse{
 		Success: true,
-		Data:    user,
+		Data: fiber.Map{
+			"user":                user,
+			"background_image":    backgroundImage,
+			"background_position": backgroundPosition,
+		},
 	})
 }
 

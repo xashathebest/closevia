@@ -278,6 +278,8 @@ func CreateTables() error {
 			FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE,
 			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
 			UNIQUE KEY uniq_product_user_vote (product_id, user_id)
+		)`,
+
 		`CREATE TABLE IF NOT EXISTS riders (
 			id INT AUTO_INCREMENT PRIMARY KEY,
 			user_id INT NOT NULL,
@@ -294,6 +296,7 @@ func CreateTables() error {
 			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
 			UNIQUE KEY unique_rider_user (user_id)
 		)`,
+
 		`CREATE TABLE IF NOT EXISTS deliveries (
 			id INT AUTO_INCREMENT PRIMARY KEY,
 			user_id INT NOT NULL,
@@ -327,6 +330,7 @@ func CreateTables() error {
 			INDEX idx_delivery_status (status),
 			INDEX idx_delivery_type (delivery_type)
 		)`,
+
 		`CREATE TABLE IF NOT EXISTS delivery_items (
 			id INT AUTO_INCREMENT PRIMARY KEY,
 			delivery_id INT NOT NULL,
