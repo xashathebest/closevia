@@ -18,6 +18,7 @@ export interface User {
   response_rating?: 'excellent' | 'good' | 'average' | 'poor'
   latitude?: number
   longitude?: number
+  is_premium?: boolean
 }
 
 export interface Product {
@@ -160,6 +161,50 @@ export interface Trade {
   option_change_requested_by?: number // User ID who requested the change
   delivery_address?: string // Delivery address if option is 'delivery'
   delivery_estimated_time?: string // Estimated delivery time
+}
+
+// Multi-way/Three-way Trading Types
+export interface TradeEdge {
+  from_user: number
+  to_user: number
+  trade_id: number
+  from_user_name?: string
+  to_user_name?: string
+  product_title?: string
+  status?: TradeStatus
+}
+
+export interface TradeLoop {
+  edges: TradeEdge[]
+  loop_length: number
+  participants: number[]
+}
+
+export interface MultiWayTradeParticipant {
+  user_id: number
+  user_name: string
+  product_id: number
+  product_title: string
+  product_image?: string
+  trade_id: number
+  trade_status: TradeStatus
+  position_in_loop: number // 0 = first, 1 = second, etc.
+}
+
+export interface MultiWayTrade {
+  loop_id: string
+  participants: MultiWayTradeParticipant[]
+  edges: TradeEdge[]
+  total_value?: number
+  status: 'active' | 'completed' | 'cancelled'
+  created_at?: string
+}
+
+export interface TradeLoopNotification {
+  loop_id: string
+  message: string
+  participant_count: number
+  created_at: string
 }
 
 export interface TradeCreate {

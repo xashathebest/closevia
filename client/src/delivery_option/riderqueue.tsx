@@ -24,7 +24,7 @@ import {
   AlertIcon,
   AlertDescription,
 } from '@chakra-ui/react'
-import { FaMapMarkerAlt, FaClock, FaBox, FaMoneyBillWave, FaStar, FaWifi, FaWifiSlash } from 'react-icons/fa'
+import { FaMapMarkerAlt, FaClock, FaBox, FaMoneyBillWave, FaStar, FaWifi } from 'react-icons/fa'
 import { InfoIcon, WarningIcon } from '@chakra-ui/icons'
 import { api } from '../services/api'
 import { Delivery } from '../types'
@@ -228,7 +228,7 @@ const RiderQueue: React.FC = () => {
             </Text>
           </VStack>
           <HStack spacing={1} px={3} py={2} bg={isOnline ? 'green.50' : 'red.50'} borderRadius="lg">
-            <Icon as={isOnline ? FaWifi : FaWifiSlash} color={isOnline ? 'green.600' : 'red.600'} />
+            <Icon as={FaWifi} color={isOnline ? 'green.600' : 'red.600'} />
             <Text fontSize="xs" fontWeight="bold" color={isOnline ? 'green.700' : 'red.700'}>
               {isOnline ? 'Online' : 'Offline'}
             </Text>
@@ -268,34 +268,26 @@ const RiderQueue: React.FC = () => {
                 No active batches. Claim deliveries from the Available Deliveries screen to see batches here.
               </AlertDescription>
             </Alert>
-          ) : (
-            batches.map((batch) => (
-              <Card
-                key={batch.id}
-                bg="white"
-                border="1px"
-                borderColor="gray.200"
-                cursor="pointer"
-                transition="all 0.2s"
-                _hover={{ shadow: 'md', borderColor: 'brand.400' }}
-                onClick={() => setSelectedBatch(batch.id)}
-              >
-                <CardBody p={3}>
-                  {/* Top Row: Zone + High Demand Badge */}
-                  <HStack justify="space-between" align="start">
-                    <VStack align="start" spacing={1}>
-                      <HStack spacing={2}>
-                        <Text fontWeight="bold" fontSize="md" color="gray.800">
-                          {batch.taskCount} tasks
-                        </Text>
-                        {batch.isHighDemand && (
-                          <Badge colorScheme="orange" fontSize="xs">
-                            🔥 High Demand
-                          </Badge>
-                        )}
-                      </HStack>
-                      <Text fontSize="sm" color="gray.600">
-                        {batch.zone} zone
+          )}
+          {batches.map((batch) => (
+            <Card
+              key={batch.id}
+              bg="white"
+              border="1px"
+              borderColor="gray.200"
+              cursor="pointer"
+              transition="all 0.2s"
+              _hover={{ shadow: 'md', borderColor: 'brand.400' }}
+              onClick={() => setSelectedBatch(batch.id)}
+            >
+              <CardBody>
+                <VStack spacing={4}>
+                {/* Top Row: Zone + High Demand Badge */}
+                <HStack justify="space-between" align="start">
+                  <VStack align="start" spacing={1}>
+                    <HStack spacing={2}>
+                      <Text fontWeight="bold" fontSize="md" color="gray.800">
+                        {batch.taskCount} tasks
                       </Text>
                     </VStack>
                     <VStack align="end" spacing={0}>

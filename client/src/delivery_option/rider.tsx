@@ -649,7 +649,7 @@ const RiderJobs: React.FC = () => {
                     <HStack justify="space-between">
                       <Text color="gray.600">Distance:</Text>
                       <Text fontWeight="bold">
-                        {suggestedBatch.reduce((sum, j) => sum + j.distanceKm, 0).toFixed(1)} km
+                        {suggestedBatch.reduce((sum, j) => sum + (j.distanceKm || 0), 0).toFixed(1)} km
                       </Text>
                     </HStack>
                   </VStack>

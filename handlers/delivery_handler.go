@@ -6,6 +6,7 @@ import (
 	"log"
 	"math"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -92,7 +93,7 @@ func (h *DeliveryHandler) checkFragileItems(productIDs []int) (bool, error) {
 }
 
 // FindNearestRider finds the nearest available rider to pickup location
-func (h *DeliveryHandler) findNearestRider(pickupLat, pickupLon *float64, deliveryType string) (*models.Rider, error) {
+func (h *DeliveryHandler) findNearestRider(pickupLat, pickupLon *float64, _ string) (*models.Rider, error) {
 	if pickupLat == nil || pickupLon == nil {
 		// If no GPS, return first available rider
 		var rider models.Rider
@@ -141,7 +142,7 @@ func (h *DeliveryHandler) findNearestRider(pickupLat, pickupLon *float64, delive
 	}
 
 	if nearestRider == nil {
-		// Fallback to any available rider
+		// Fallback to any availa	le rider
 		var rider models.Rider
 		err := h.db.QueryRow(`
 			SELECT id, user_id, name, vehicle_type, vehicle_plate, phone, rating, is_active, latitude, longitude, created_at, updated_at
@@ -160,7 +161,7 @@ func (h *DeliveryHandler) findNearestRider(pickupLat, pickupLon *float64, delive
 }
 
 // FindAvailableBatch finds an available batch for standard delivery (up to 5 items)
-func (h *DeliveryHandler) findAvailableBatch(pickupLat, pickupLon *float64, itemCount int) (int, error) {
+func (h *DeliveryHandler) findAvailableBatch(_, _ *float64, _ int) (int, error) {
 	// Find a pending standard delivery with space for more items
 	// For simplicity, we'll create a new batch for each delivery
 	// In a production system, you'd implement smart batching logic here
@@ -285,9 +286,12 @@ func (h *DeliveryHandler) CreateDelivery(c *fiber.Ctx) error {
 	// Insert delivery items
 	for _, productID := range req.ProductIDs {
 		var productName string
-		tx.QueryRow("SELECT title FROM products WHERE id = ?", productID).Scan(&productName)
+		err = tx.QueryRow("SELECT title FROM products WHERE id = ?", productID).Scan(&productName)
+		if err != nil {
+			return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to get product name"})
+		}
 
-		_, err := tx.Exec(`
+		_, err = tx.Exec(`
 			INSERT INTO delivery_items (delivery_id, product_id, product_name, is_fragile)
 			VALUES (?, ?, ?, ?)
 		`, deliveryID, productID, productName, isFragile)
@@ -492,15 +496,10 @@ func (h *DeliveryHandler) UpdateDeliveryStatus(c *fiber.Ctx) error {
 	if len(updates) == 0 {
 		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "No updates provided"})
 	}
-
 	updates = append(updates, "updated_at = CURRENT_TIMESTAMP")
 	args = append(args, deliveryID)
 
-	query := "UPDATE deliveries SET " + fmt.Sprintf("%s", updates[0])
-	for i := 1; i < len(updates); i++ {
-		query += ", " + updates[i]
-	}
-	query += " WHERE id = ?"
+	query := "UPDATE deliveries SET " + strings.Join(updates, ", ") + " WHERE id = ?"
 
 	_, err = h.db.Exec(query, args...)
 	if err != nil {
@@ -755,19 +754,25 @@ func (h *DeliveryHandler) ClaimDelivery(c *fiber.Ctx) error {
 	// For standard deliveries, check if rider already has an active batch
 	if deliveryType == "standard" {
 		var activeCount int
-		h.db.QueryRow(`
+		err = h.db.QueryRow(`
 			SELECT COUNT(*) FROM deliveries 
 			WHERE rider_id = ? AND status IN ('claimed', 'picked_up', 'in_transit')
 			AND delivery_type = 'standard'
 		`, actualRiderID).Scan(&activeCount)
+		if err != nil {
+			return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to check active deliveries"})
+		}
 
 		// Check total items in active batches (max 5 for standard)
 		var totalItems int
-		h.db.QueryRow(`
+		err = h.db.QueryRow(`
 			SELECT COALESCE(SUM(item_count), 0) FROM deliveries 
 			WHERE rider_id = ? AND status IN ('claimed', 'picked_up', 'in_transit')
 			AND delivery_type = 'standard'
 		`, actualRiderID).Scan(&totalItems)
+		if err != nil {
+			return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to check total items"})
+		}
 
 		if totalItems+itemCount > 5 {
 			return c.Status(400).JSON(models.APIResponse{
@@ -822,7 +827,7 @@ func (h *DeliveryHandler) GetRiderEarnings(c *fiber.Ctx) error {
 	// Get today's earnings
 	var todayEarnings float64
 	var todayCompleted int
-	h.db.QueryRow(`
+	err = h.db.QueryRow(`
 		SELECT 
 			COALESCE(SUM(total_cost), 0) as earnings,
 			COUNT(*) as completed
@@ -831,11 +836,14 @@ func (h *DeliveryHandler) GetRiderEarnings(c *fiber.Ctx) error {
 		AND status = 'delivered'
 		AND delivered_at >= ? AND delivered_at <= ?
 	`, actualRiderID, startOfDay, endOfDay).Scan(&todayEarnings, &todayCompleted)
+	if err != nil {
+		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to fetch today's earnings"})
+	}
 
 	// Get total earnings
 	var totalEarnings float64
 	var totalCompleted int
-	h.db.QueryRow(`
+	err = h.db.QueryRow(`
 		SELECT 
 			COALESCE(SUM(total_cost), 0) as earnings,
 			COUNT(*) as completed
@@ -843,6 +851,9 @@ func (h *DeliveryHandler) GetRiderEarnings(c *fiber.Ctx) error {
 		WHERE rider_id = ? 
 		AND status = 'delivered'
 	`, actualRiderID).Scan(&totalEarnings, &totalCompleted)
+	if err != nil {
+		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to fetch total earnings"})
+	}
 
 	// Get recent deliveries for remittance ledger
 	rows, err := h.db.Query(`
@@ -967,15 +978,14 @@ func (h *DeliveryHandler) loadDeliveryItems(d *models.Delivery) {
 	}
 	defer rows.Close()
 
-	items := []models.DeliveryItem{}
+	_ = []models.DeliveryItem{} // Reserved for future use when Delivery model has Items field
 	for rows.Next() {
 		var item models.DeliveryItem
 		err := rows.Scan(&item.ID, &item.DeliveryID, &item.ProductID, &item.ProductName, &item.IsFragile, &item.CreatedAt)
 		if err != nil {
 			continue
 		}
-		items = append(items, item)
+		// Note: Delivery model doesn't have Items field yet, but we scan the data for future use
+		_ = item
 	}
-	// Note: Delivery model doesn't have Items field, but we could add it if needed
 }
-

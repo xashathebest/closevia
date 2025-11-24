@@ -20,8 +20,9 @@ import UserProfile from './pages/UserProfile'
 import ProductsList from './pages/ProductsList'
 import SavedProducts from './pages/SavedProducts'
 import AdminDashboard from './pages/AdminDashboard'
-import DeliveryOption from './delivery_option/Delivery'
-import RiderOption from './delivery_option/Rider'
+import Premium from './pages/premium'
+import DeliveryOption from './delivery_option/delivery'
+import RiderOption from './delivery_option/rider'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
 import { ProductProvider } from './contexts/ProductContext'
 import { RealtimeProvider } from './contexts/RealtimeContext'
@@ -54,7 +55,7 @@ const ThemeApplier: React.FC<{ children: React.ReactNode }> = ({ children }) => 
   return <>{children}</>
 }
 // Lazy load delivery option components with error handling
-const RiderQueue = lazy(() => import('./delivery_option/Riderqueue').catch(() => ({ default: () => <Box p={4}><Text>Failed to load Rider Queue</Text></Box> })))
+const RiderQueue = lazy(() => import('./delivery_option/riderqueue').catch(() => ({ default: () => <Box p={4}><Text>Failed to load Rider Queue</Text></Box> })))
 const BatchPreview = lazy(() => import('./delivery_option/BatchPreview').catch(() => ({ default: () => <Box p={4}><Text>Failed to load Batch Preview</Text></Box> })))
 const BatchStatus = lazy(() => import('./delivery_option/BatchStatus').catch(() => ({ default: () => <Box p={4}><Text>Failed to load Batch Status</Text></Box> })))
 const RemittanceLedger = lazy(() => import('./delivery_option/RemittanceLedger').catch(() => ({ default: () => <Box p={4}><Text>Failed to load Remittance Ledger</Text></Box> })))
@@ -152,6 +153,7 @@ const AppContent: React.FC = () => {
               <Route path="/offers" element={<ProtectedRoute><Offers /></ProtectedRoute>} />
               <Route path="/saved-products" element={<PrivateRoute><SavedProducts /></PrivateRoute>} />
               <Route path="/admin" element={<AdminRoute><AdminDashboard /></AdminRoute>} />
+              <Route path="/premium" element={<ProtectedRoute><Premium /></ProtectedRoute>} />
 
               <Route path="*" element={<Home />} />
             </Routes>

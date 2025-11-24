@@ -25,3 +25,4 @@ CREATE INDEX IF NOT EXISTS idx_users_profile_score ON users(profile_score);
 CREATE INDEX IF NOT EXISTS idx_products_counterfeit_confidence ON products(counterfeit_confidence);
 
 
+

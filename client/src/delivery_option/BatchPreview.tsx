@@ -24,6 +24,7 @@ import {
   useToast,
   Spinner,
   Center,
+  SimpleGrid,
 } from '@chakra-ui/react'
 import { ChevronDownIcon, ChevronUpIcon, CheckCircleIcon, LockIcon } from '@chakra-ui/icons'
 import { FaMapMarkerAlt, FaClock, FaMoneyBillWave, FaShieldAlt } from 'react-icons/fa'
@@ -41,6 +42,8 @@ interface BatchCluster {
   pickupCount: number
   deliveryCount: number
   systemFee: number
+  isHighDemand?: boolean
+  maxCapacity?: number
 }
 
 interface PickupAddress {
