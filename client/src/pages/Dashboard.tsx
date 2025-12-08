@@ -131,9 +131,37 @@ const Dashboard: React.FC = () => {
   const [productsForDelivery, setProductsForDelivery] = useState<Product[]>([])
   const [currentDeliveryId, setCurrentDeliveryId] = useState<number | null>(null)
   
+  // New state for layout selection
+  const [layout, setLayout] = useState<'grid' | 'compact' | 'spacious'>('grid') // Updated type
+
   // Color mode values
   const cardBg = useColorModeValue('white', 'gray.800')
   const borderColor = useColorModeValue('gray.200', 'gray.700')
+
+  // Layout configuration
+  const layoutConfig = useMemo(() => {
+    const configs = {
+      grid: {
+        columns: { base: 1, md: 2, lg: 3, xl: 4 },
+        spacing: 4,
+        cardSize: 'md',
+        cardSpacing: 2,
+      },
+      compact: {
+        columns: { base: 1, md: 3, lg: 4, xl: 5 },
+        spacing: 2,
+        cardSize: 'sm',
+        cardSpacing: 1.5,
+      },
+      spacious: {
+        columns: { base: 1, md: 2, lg: 2, xl: 3 },
+        spacing: 6,
+        cardSize: 'lg',
+        cardSpacing: 3,
+      },
+    }
+    return configs[layout]
+  }, [layout])
 
   useEffect(() => {
     if (user) {
@@ -1555,82 +1583,6 @@ const Dashboard: React.FC = () => {
                )}
              </InputGroup>
 
-             {/* Right: Compact Stats Buttons (Row) 
-             <HStack spacing={2} flexShrink={0}>
-               <Tooltip 
-                 label={`${dashboardStats.totalProducts} total • ${dashboardStats.activeProducts} active • ${userProducts.filter(p => p.premium).length} premium`}
-                 placement="bottom"
-                 hasArrow
-               >
-                 <Button
-                   size="sm"
-                   variant="outline"
-                   leftIcon={<Icon as={FiShoppingBag} />}
-                   onClick={() => setActiveTab(0)}
-                   _hover={{ bg: 'brand.50', borderColor: 'brand.400' }}
-                   borderColor={activeTab === 0 ? 'brand.400' : borderColor}
-                   bg={activeTab === 0 ? 'brand.50' : 'white'}
-                   whiteSpace="nowrap"
-                 >
-                   Products
-                   {dashboardStats.totalProducts > 0 && (
-                     <Badge ml={2} colorScheme="brand" borderRadius="full" fontSize="xs">
-                       {dashboardStats.totalProducts}
-                     </Badge>
-                   )}
-                 </Button>
-               </Tooltip>
-
-               <Tooltip 
-                 label={dashboardStats.newOffers > 0 ? `${dashboardStats.newOffers} pending offers` : 'No pending offers'}
-                 placement="bottom"
-                 hasArrow
-               >
-                 <Button
-                   size="sm"
-                   variant="outline"
-                   leftIcon={<Icon as={FiMessageCircle} />}
-                   onClick={() => { setActiveTab(1); setOffersSubTab(1) }}
-                   _hover={{ bg: 'orange.50', borderColor: 'orange.400' }}
-                   borderColor={activeTab === 1 ? 'orange.400' : (dashboardStats.newOffers > 0 ? 'orange.300' : borderColor)}
-                   bg={activeTab === 1 ? 'orange.50' : (dashboardStats.newOffers > 0 ? 'orange.50' : 'white')}
-                   whiteSpace="nowrap"
-                 >
-                   Offers
-                   {dashboardStats.newOffers > 0 && (
-                     <Badge ml={2} colorScheme="orange" borderRadius="full" fontSize="xs">
-                       {dashboardStats.newOffers}
-                     </Badge>
-                   )}
-                 </Button>
-               </Tooltip>
-
-               <Tooltip 
-                 label={`${dashboardStats.activeTrades} active trades • ${completedTradesCount} completed`}
-                 placement="bottom"
-                 hasArrow
-               >
-                 <Button
-                   size="sm"
-                   variant="outline"
-                   leftIcon={<Icon as={FiRefreshCw} />}
-                   onClick={() => setActiveTab(2)}
-                   _hover={{ bg: 'green.50', borderColor: 'green.400' }}
-                   borderColor={activeTab === 2 ? 'green.400' : borderColor}
-                   bg={activeTab === 2 ? 'green.50' : 'white'}
-                   whiteSpace="nowrap"
-                 >
-                   History
-                   {completedTradesCount > 0 && (
-                     <Badge ml={2} colorScheme="green" borderRadius="full" fontSize="xs">
-                       {completedTradesCount}
-                     </Badge>
-                   )}
-                 </Button>
-               </Tooltip>
-             </HStack>
-             */}
-
              {/* Notifications & Profile */}
              <HStack spacing={2} flexShrink={0}>
                <Box position="relative">
@@ -1681,7 +1633,7 @@ const Dashboard: React.FC = () => {
              borderColor="gray.200"
              py={2}
            >
-             <Flex justify="space-between" align="center" px={4} gap={4}>
+             <Flex justify="space-between" align="center" px={4} gap={4} flexWrap={{ base: 'wrap', lg: 'nowrap' }}>
                <Tabs index={activeTab} onChange={setActiveTab} variant="line" colorScheme="brand" flex={1}>
                  <TabList overflowX="auto" sx={{
                    '&::-webkit-scrollbar': { display: 'none' },
@@ -1772,6 +1724,84 @@ const Dashboard: React.FC = () => {
                    </Tab>
                  </TabList>
                </Tabs>
+
+               {/* Layout Selection Buttons */}
+               <HStack
+                 spacing={1}
+                 flexShrink={0}
+                 borderLeftWidth={{ base: '0', lg: '1px' }}
+                 borderColor={borderColor}
+                 pl={{ base: 0, lg: 4 }}
+                 pt={{ base: 2, lg: 0 }}
+                 w={{ base: 'full', lg: 'auto' }}
+                 order={{ base: 4, lg: 0 }}
+               >
+                 <Text fontSize="xs" fontWeight="semibold" color="gray.600" textTransform="uppercase" mr={1} display={{ base: 'none', md: 'block' }}>
+                   Layout:
+                 </Text>
+                 <Tooltip label="Grid Layout (Default)" placement="bottom" hasArrow>
+                   <IconButton
+                     aria-label="Grid layout"
+                     icon={<Icon as={() => (
+                       <svg width="1em" height="1em" viewBox="0 0 24 24" fill="currentColor">
+                         <rect x="2" y="2" width="8" height="8" fill="none" stroke="currentColor" strokeWidth="2"/>
+                         <rect x="14" y="2" width="8" height="8" fill="none" stroke="currentColor" strokeWidth="2"/>
+                         <rect x="2" y="14" width="8" height="8" fill="none" stroke="currentColor" strokeWidth="2"/>
+                         <rect x="14" y="14" width="8" height="8" fill="none" stroke="currentColor" strokeWidth="2"/>
+                       </svg>
+                     )} />}
+                     size="sm"
+                     variant={layout === 'grid' ? 'solid' : 'outline'}
+                     colorScheme={layout === 'grid' ? 'brand' : 'gray'}
+                     onClick={() => setLayout('grid')}
+                     _hover={{ transform: 'scale(1.05)' }}
+                     transition="all 0.2s"
+                   />
+                 </Tooltip>
+                 <Tooltip label="Compact Layout" placement="bottom" hasArrow>
+                   <IconButton
+                     aria-label="Compact layout"
+                     icon={<Icon as={() => (
+                       <svg width="1em" height="1em" viewBox="0 0 24 24" fill="currentColor">
+                         <rect x="2" y="2" width="5" height="5" fill="none" stroke="currentColor" strokeWidth="2"/>
+                         <rect x="9.5" y="2" width="5" height="5" fill="none" stroke="currentColor" strokeWidth="2"/>
+                         <rect x="17" y="2" width="5" height="5" fill="none" stroke="currentColor" strokeWidth="2"/>
+                         <rect x="2" y="9.5" width="5" height="5" fill="none" stroke="currentColor" strokeWidth="2"/>
+                         <rect x="9.5" y="9.5" width="5" height="5" fill="none" stroke="currentColor" strokeWidth="2"/>
+                         <rect x="17" y="9.5" width="5" height="5" fill="none" stroke="currentColor" strokeWidth="2"/>
+                         <rect x="2" y="17" width="5" height="5" fill="none" stroke="currentColor" strokeWidth="2"/>
+                         <rect x="9.5" y="17" width="5" height="5" fill="none" stroke="currentColor" strokeWidth="2"/>
+                         <rect x="17" y="17" width="5" height="5" fill="none" stroke="currentColor" strokeWidth="2"/>
+                       </svg>
+                     )} />}
+                     size="sm"
+                     variant={layout === 'compact' ? 'solid' : 'outline'}
+                     colorScheme={layout === 'compact' ? 'brand' : 'gray'}
+                     onClick={() => setLayout('compact')}
+                     _hover={{ transform: 'scale(1.05)' }}
+                     transition="all 0.2s"
+                   />
+                 </Tooltip>
+                 <Tooltip label="Spacious Layout" placement="bottom" hasArrow>
+                   <IconButton
+                     aria-label="Spacious layout"
+                     icon={<Icon as={() => (
+                       <svg width="1em" height="1em" viewBox="0 0 24 24" fill="currentColor">
+                         <rect x="2" y="2" width="8" height="8" fill="none" stroke="currentColor" strokeWidth="2"/>
+                         <rect x="14" y="2" width="8" height="8" fill="none" stroke="currentColor" strokeWidth="2"/>
+                         <rect x="2" y="14" width="8" height="8" fill="none" stroke="currentColor" strokeWidth="2"/>
+                         <rect x="14" y="14" width="8" height="8" fill="none" stroke="currentColor" strokeWidth="2"/>
+                       </svg>
+                     )} />}
+                     size="sm"
+                     variant={layout === 'spacious' ? 'solid' : 'outline'}
+                     colorScheme={layout === 'spacious' ? 'brand' : 'gray'}
+                     onClick={() => setLayout('spacious')}
+                     _hover={{ transform: 'scale(1.05)' }}
+                     transition="all 0.2s"
+                   />
+                 </Tooltip>
+               </HStack>
 
                {/* Right: Filter/Sort Controls - Responsive */}
                <HStack
@@ -1941,9 +1971,9 @@ const Dashboard: React.FC = () => {
                     </HStack>
                   </HStack>
 
-                   {/* Products Grid - Apply Sort */}
+                   {/* Products Grid - Apply Layout */}
                    {productsLoading ? (
-                     <SimpleGrid columns={{ base: 1, md: 2, lg: 3, xl: 4 }} spacing={4}>
+                     <SimpleGrid columns={layoutConfig.columns} spacing={layoutConfig.spacing}>
                        {Array.from({ length: 8 }).map((_, i) => (
                          <ProductCardSkeleton key={i} />
                        ))}
@@ -1984,7 +2014,7 @@ const Dashboard: React.FC = () => {
                      </Fade>
                    ) : (
                      <>
-                       <SimpleGrid columns={{ base: 1, md: 2, lg: 3, xl: 4 }} spacing={4}>
+                       <SimpleGrid columns={layoutConfig.columns} spacing={layoutConfig.spacing}>
                          {getPaginatedItems(
                            filteredProducts.sort((a, b) => {
                              const aDate = new Date(a.created_at).getTime()
@@ -2051,7 +2081,7 @@ const Dashboard: React.FC = () => {
                       {/* Sent Offers */}
                       <TabPanel px={0}>
                         {offersLoading ? (
-                          <SimpleGrid columns={{ base: 1, md: 2, lg: 3, xl: 4 }} spacing={4}>
+                          <SimpleGrid columns={layoutConfig.columns} spacing={layoutConfig.spacing}>
                             {Array.from({ length: 8 }).map((_, i) => (
                               <ProductCardSkeleton key={i} />
                             ))}
@@ -2081,7 +2111,7 @@ const Dashboard: React.FC = () => {
                           </Fade>
                         ) : (
                           <>
-                            <SimpleGrid columns={{ base: 1, md: 2, lg: 3, xl: 4 }} spacing={4} mb={6}>
+                            <SimpleGrid columns={layoutConfig.columns} spacing={layoutConfig.spacing} mb={6}>
                               {paginatedTrades.map((trade) => {
                                 const isIncoming = false
                                 return (
@@ -2126,7 +2156,7 @@ const Dashboard: React.FC = () => {
                       {/* Received Offers */}
                       <TabPanel px={0}>
                         {offersLoading ? (
-                          <SimpleGrid columns={{ base:  1, md: 2, lg: 3, xl: 4 }} spacing={4}>
+                          <SimpleGrid columns={layoutConfig.columns} spacing={layoutConfig.spacing}>
                             {Array.from({ length: 8 }).map((_, i) => (
                               <ProductCardSkeleton key={i} />
                             ))}
@@ -2156,7 +2186,7 @@ const Dashboard: React.FC = () => {
                           </Fade>
                         ) : (
                           <>
-                            <SimpleGrid columns={{ base: 1, md: 2, lg: 3, xl: 4 }} spacing={4} mb={6}>
+                            <SimpleGrid columns={layoutConfig.columns} spacing={layoutConfig.spacing} mb={6}>
                               {paginatedTrades.map((trade) => {
                                 const isIncoming = true
                                 return (
@@ -2168,7 +2198,7 @@ const Dashboard: React.FC = () => {
                                     onAccept={() => updateTrade(trade.id, { action: 'accept' })}
                                     onDecline={() => handleDeclineTradeClick(trade)}
                                   />
-                                                               )
+                                )
                               })}
                             </SimpleGrid>
                             {totalPages > 1 && (
@@ -2201,7 +2231,7 @@ const Dashboard: React.FC = () => {
                       {/* Ongoing Trades */}
                       <TabPanel px={0}>
                         {offersLoading ? (
-                          <SimpleGrid columns={{ base: 1, md: 2, lg: 3, xl: 4 }} spacing={4}>
+                          <SimpleGrid columns={layoutConfig.columns} spacing={layoutConfig.spacing}>
                             {Array.from({ length: 8 }).map((_, i) => (
                               <ProductCardSkeleton key={i} />
                             ))}
@@ -2231,7 +2261,7 @@ const Dashboard: React.FC = () => {
                           </Fade>
                         ) : (
                           <>
-                            <SimpleGrid columns={{ base: 1, md: 2, lg: 3, xl: 4 }} spacing={4} mb={6}>
+                            <SimpleGrid columns={layoutConfig.columns} spacing={layoutConfig.spacing} mb={6}>
                               {paginatedTrades.map((trade) => {
                                 const isIncoming = incoming.some(t => t.id === trade.id)
                                 return (
@@ -2380,7 +2410,7 @@ const Dashboard: React.FC = () => {
                     )}
                   </HStack>
 
-                  {/* Trade History Grid */}
+                  {/* Trade History Grid - Apply Layout for card view (optional) */}
                   {allCompletedTrades.length === 0 ? (
                     <Fade in={true}>
                       <Box
