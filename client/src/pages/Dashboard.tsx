@@ -1818,25 +1818,28 @@ const Dashboard: React.FC = () => {
                  {activeTab === 1 && (
                    <>
                      <Select
-                       value={offersStatusFilter}
+                       value={productFilter}
                        onChange={(e) => {
-                         setOffersStatusFilter(e.target.value)
-                         setOffersPage(1)
+                         setProductFilter(e.target.value as any)
+                         setCurrentPage(1)
                        }}
-                       w={{ base: '120px', md: '140px' }}
+                       w={{ base: '120px', md: '150px' }}
                        bg={cardBg}
                        borderColor={borderColor}
                        size="sm"
                      >
                        <option value="all">All Status</option>
-                       <option value="pending">Pending</option>
-                       <option value="accepted">Accepted</option>
-                       <option value="active">Active</option>
-                       <option value="countered">Countered</option>
+                       <option value="available">Active</option>
+                       <option value="sold">Sold</option>
+                       <option value="traded">Traded</option>
+                       <option value="locked">Hidden</option>
                      </Select>
                      <Select
-                       value={offersSort}
-                       onChange={(e) => setOffersSort(e.target.value as any)}
+                       value={productSort}
+                       onChange={(e) => {
+                         setProductSort(e.target.value as any)
+                         setCurrentPage(1)
+                       }}
                        w={{ base: '120px', md: '140px' }}
                        bg={cardBg}
                        borderColor={borderColor}
@@ -1849,20 +1852,74 @@ const Dashboard: React.FC = () => {
                  )}
 
                  {activeTab === 2 && (
-                   <Select
-                     value={tradeHistorySort}
-                     onChange={(e) => {
-                       setTradeHistorySort(e.target.value as any)
-                       setTradeHistoryPage(1)
-                     }}
-                     w={{ base: '120px', md: '140px' }}
-                     bg={cardBg}
-                     borderColor={borderColor}
-                     size="sm"
-                   >
-                     <option value="newest">Newest First</option>
-                     <option value="oldest">Oldest First</option>
-                   </Select>
+                   <>
+                     <Select
+                       value={productFilter}
+                       onChange={(e) => {
+                         setProductFilter(e.target.value as any)
+                         setCurrentPage(1)
+                       }}
+                       w={{ base: '120px', md: '150px' }}
+                       bg={cardBg}
+                       borderColor={borderColor}
+                       size="sm"
+                     >
+                       <option value="all">All Status</option>
+                       <option value="available">Active</option>
+                       <option value="sold">Sold</option>
+                       <option value="traded">Traded</option>
+                       <option value="locked">Hidden</option>
+                     </Select>
+                     <Select
+                       value={productSort}
+                       onChange={(e) => {
+                         setProductSort(e.target.value as any)
+                         setCurrentPage(1)
+                       }}
+                       w={{ base: '120px', md: '140px' }}
+                       bg={cardBg}
+                       borderColor={borderColor}
+                       size="sm"
+                     >
+                       <option value="newest">Newest First</option>
+                       <option value="oldest">Oldest First</option>
+                     </Select>
+                   </>
+                 )}
+                 {activeTab === 3 && (
+                   <>
+                     <Select
+                       value={productFilter}
+                       onChange={(e) => {
+                         setProductFilter(e.target.value as any)
+                         setCurrentPage(1)
+                       }}
+                       w={{ base: '120px', md: '150px' }}
+                       bg={cardBg}
+                       borderColor={borderColor}
+                       size="sm"
+                     >
+                       <option value="all">All Status</option>
+                       <option value="available">Active</option>
+                       <option value="sold">Sold</option>
+                       <option value="traded">Traded</option>
+                       <option value="locked">Hidden</option>
+                     </Select>
+                     <Select
+                       value={productSort}
+                       onChange={(e) => {
+                         setProductSort(e.target.value as any)
+                         setCurrentPage(1)
+                       }}
+                       w={{ base: '120px', md: '140px' }}
+                       bg={cardBg}
+                       borderColor={borderColor}
+                       size="sm"
+                     >
+                       <option value="newest">Newest First</option>
+                       <option value="oldest">Oldest First</option>
+                     </Select>
+                   </>
                  )}
                </HStack>
              </Flex>
@@ -2321,20 +2378,6 @@ const Dashboard: React.FC = () => {
                         Searching: "{unifiedSearch}"
                       </Badge>
                     )}
-                    <Select
-                      value={tradeHistorySort}
-                      onChange={(e) => {
-                        setTradeHistorySort(e.target.value as any)
-                        setTradeHistoryPage(1)
-                      }}
-                      w="150px"
-                      bg={cardBg}
-                      borderColor={borderColor}
-                      ml="auto"
-                    >
-                      <option value="newest">Newest First</option>
-                      <option value="oldest">Oldest First</option>
-                    </Select>
                   </HStack>
 
                   {/* Trade History Grid */}

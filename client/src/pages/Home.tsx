@@ -413,24 +413,24 @@ const Home: React.FC = () => {
       overflow="hidden"
       transition="all 0.2s ease"
       w="full"
+      display="flex"
+      flexDirection="column"
+      h="100%" // ensure card fills the grid cell
       _hover={{ boxShadow: 'md', transform: 'translateY(-2px)', cursor: 'pointer' }}
       onClick={() => navigate(getProductUrl(product))}
     >
-      {/* Square Product Image */}
-      <Box position="relative" w="full" pt="100%" overflow="hidden">
+      {/* Image container: use the same responsive height as the slider so sizes match */}
+      <Box position="relative" w="full" overflow="hidden" h={{ base: 140, md: 200, lg: 220 }}>
         <Image
           src={getFirstImage(product.image_urls)}
           alt={product.title}
-          position="absolute"
-          top={0}
-          left={0}
           w="100%"
           h="100%"
           objectFit="cover"
           loading="lazy"
           fallbackSrc="https://via.placeholder.com/600x600?text=No+Image"
         />
-        
+
         {/* Premium Badge */}
         {product.premium && (
           <Badge
@@ -443,7 +443,6 @@ const Home: React.FC = () => {
             px={2}
           >
             <StarIcon mr={0} />
-            
           </Badge>
         )}
         
@@ -493,8 +492,8 @@ const Home: React.FC = () => {
         </Badge>
       </Box>
 
-      {/* Product Info (fixed height) */}
-      <Box p={4} display="flex" flexDirection="column" h={{ base: 180, md: 192 }} overflow="hidden">
+      {/* Product Info: flex so cards stay equal height; buttons pinned to bottom */}
+      <Box p={4} display="flex" flexDirection="column" flex="1 1 auto" overflow="hidden">
         <Flex justify="space-between" align="center" mb={2}>
           <HStack spacing={2}>
             <Box
@@ -879,7 +878,7 @@ const Home: React.FC = () => {
         <Box
           position="relative"
           overflow="hidden"
-          h={{ base: 28, md: 28, lg: 40 }}   
+          h={{ base: 140, md: 200, lg: 220 }}
           rounded="lg"
           border="1px"
           borderColor="gray.200"
@@ -1059,16 +1058,16 @@ const Home: React.FC = () => {
     <Grid
       templateColumns={{ base: 'repeat(2, 1fr)', md: 'repeat(3, 1fr)', lg: 'repeat(4, 1fr)', xl: 'repeat(5, 1fr)' }}
       gap={{ base: 3, md: 4 }}
-      alignItems="start"
-    >
-      {products
-        .filter((p) => p.status === 'available' && p.seller_id !== user?.id)
-        .map((product) => (
-          <Box key={product.id}>
+      alignItems="stretch" // force grid cells to match heights
+     >
+       {products
+         .filter((p) => p.status === 'available' && p.seller_id !== user?.id)
+         .map((product) => (
+          <Box key={product.id} h="100%"> {/* ensure grid item fills track height */}
             {renderProductCard(product)}
           </Box>
-        ))}
-    </Grid>
+         ))}
+     </Grid>
 
     {/* Sentinel for infinite scroll */}
     <Box ref={sentinelRef} h="1px" />
