@@ -30,7 +30,6 @@ import { getFirstImage } from '../utils/imageUtils'
 import { formatPHP } from '../utils/currency'
 import { getProductUrl } from '../utils/productUtils'
 import { api } from '../services/api'
-import FloatingTab from '../components/FloatingTab'
 
 interface Notification {
   id: number
@@ -384,7 +383,24 @@ const Notifications: React.FC = () => {
         </VStack>
       </Container>
 
-    <FloatingTab />
+    {/* Floating Add Product FAB */}
+    <IconButton
+      as={RouterLink}
+      to="/add-product"
+      aria-label="Add product"
+      icon={<AddIcon />}
+      position="fixed"
+      bottom={12}
+      right={6}
+      h={14}
+      w={14}
+      bgGradient="linear(to-br, brand.500, teal.400)"
+      color="white"
+      borderRadius="full"
+      zIndex={200}
+      boxShadow="lg"
+      _hover={{ transform: 'scale(1.05)' }}
+    />
     </Box>
   )
 }

@@ -18,7 +18,6 @@ import { useProducts } from '../contexts/ProductContext'
 import { getFirstImage } from '../utils/imageUtils'
 import { getProductUrl } from '../utils/productUtils'
 import { formatPHP } from '../utils/currency'
-import FloatingTab from '../components/FloatingTab'
 
 const ProductsList: React.FC = () => {
   const { products, loading, error, searchProducts, clearError } = useProducts()
@@ -102,7 +101,7 @@ const ProductsList: React.FC = () => {
   )
 
   return (
-    <Box bg="#FFFDF1" minH="100vh" w="100%" pb={{ base: 20, lg: 6 }}>
+    <Box bg="#FFFDF1" minH="100vh" w="100%">
       <Container maxW="container.xl" py={6}>
         <VStack align="stretch" spacing={4}>
           <HStack justify="space-between" align="center">
@@ -143,8 +142,6 @@ const ProductsList: React.FC = () => {
           )}
         </VStack>
       </Container>
-
-      <FloatingTab />
     </Box>
   )
 }

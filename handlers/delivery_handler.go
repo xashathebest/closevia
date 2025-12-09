@@ -6,6 +6,7 @@ import (
 	"log"
 	"math"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -92,7 +93,7 @@ func (h *DeliveryHandler) checkFragileItems(productIDs []int) (bool, error) {
 }
 
 // FindNearestRider finds the nearest available rider to pickup location
-func (h *DeliveryHandler) findNearestRider(pickupLat, pickupLon *float64, deliveryType string) (*models.Rider, error) {
+func (h *DeliveryHandler) findNearestRider(pickupLat, pickupLon *float64, _ string) (*models.Rider, error) {
 	if pickupLat == nil || pickupLon == nil {
 		// If no GPS, return first available rider
 		var rider models.Rider
@@ -141,7 +142,7 @@ func (h *DeliveryHandler) findNearestRider(pickupLat, pickupLon *float64, delive
 	}
 
 	if nearestRider == nil {
-		// Fallback to any available rider
+		// Fallback to any availa	le rider
 		var rider models.Rider
 		err := h.db.QueryRow(`
 			SELECT id, user_id, name, vehicle_type, vehicle_plate, phone, rating, is_active, latitude, longitude, created_at, updated_at
@@ -157,14 +158,6 @@ func (h *DeliveryHandler) findNearestRider(pickupLat, pickupLon *float64, delive
 	}
 
 	return nearestRider, nil
-}
-
-// FindAvailableBatch finds an available batch for standard delivery (up to 5 items)
-func (h *DeliveryHandler) findAvailableBatch(pickupLat, pickupLon *float64, itemCount int) (int, error) {
-	// Find a pending standard delivery with space for more items
-	// For simplicity, we'll create a new batch for each delivery
-	// In a production system, you'd implement smart batching logic here
-	return 0, nil // Return 0 to indicate new batch
 }
 
 // CreateDelivery creates a new delivery request
@@ -285,9 +278,12 @@ func (h *DeliveryHandler) CreateDelivery(c *fiber.Ctx) error {
 	// Insert delivery items
 	for _, productID := range req.ProductIDs {
 		var productName string
-		tx.QueryRow("SELECT title FROM products WHERE id = ?", productID).Scan(&productName)
+		err = tx.QueryRow("SELECT title FROM products WHERE id = ?", productID).Scan(&productName)
+		if err != nil {
+			return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to get product name"})
+		}
 
-		_, err := tx.Exec(`
+		_, err = tx.Exec(`
 			INSERT INTO delivery_items (delivery_id, product_id, product_name, is_fragile)
 			VALUES (?, ?, ?, ?)
 		`, deliveryID, productID, productName, isFragile)
@@ -492,15 +488,10 @@ func (h *DeliveryHandler) UpdateDeliveryStatus(c *fiber.Ctx) error {
 	if len(updates) == 0 {
 		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "No updates provided"})
 	}
-
 	updates = append(updates, "updated_at = CURRENT_TIMESTAMP")
 	args = append(args, deliveryID)
 
-	query := "UPDATE deliveries SET " + fmt.Sprintf("%s", updates[0])
-	for i := 1; i < len(updates); i++ {
-		query += ", " + updates[i]
-	}
-	query += " WHERE id = ?"
+	query := "UPDATE deliveries SET " + strings.Join(updates, ", ") + " WHERE id = ?"
 
 	_, err = h.db.Exec(query, args...)
 	if err != nil {
@@ -583,6 +574,327 @@ func (h *DeliveryHandler) AssignRider(c *fiber.Ctx) error {
 	})
 }
 
+// GetAvailableDeliveries gets pending deliveries available for riders to claim
+func (h *DeliveryHandler) GetAvailableDeliveries(c *fiber.Ctx) error {
+	riderID, ok := middleware.GetUserIDFromContext(c)
+	if !ok {
+		return c.Status(401).JSON(models.APIResponse{Success: false, Error: "User not authenticated"})
+	}
+
+	// Verify user is a rider
+	var isRider bool
+	err := h.db.QueryRow("SELECT COUNT(*) > 0 FROM riders WHERE user_id = ? AND is_active = TRUE", riderID).Scan(&isRider)
+	if err != nil || !isRider {
+		return c.Status(403).JSON(models.APIResponse{Success: false, Error: "User is not an active rider"})
+	}
+
+	// Get pending deliveries (not yet claimed)
+	rows, err := h.db.Query(`
+		SELECT d.id, d.user_id, d.trade_id, d.delivery_type, d.status, d.rider_id,
+			d.pickup_latitude, d.pickup_longitude, d.pickup_address,
+			d.delivery_latitude, d.delivery_longitude, d.delivery_address,
+			d.special_instructions, d.total_cost, d.estimated_eta, d.item_count, d.is_fragile,
+			d.claimed_at, d.picked_up_at, d.in_transit_at, d.delivered_at,
+			d.created_at, d.updated_at,
+			u.name AS user_name
+		FROM deliveries d
+		JOIN users u ON d.user_id = u.id
+		WHERE d.status = 'pending'
+		ORDER BY d.created_at DESC
+	`)
+	if err != nil {
+		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to fetch available deliveries"})
+	}
+	defer rows.Close()
+
+	deliveries := []models.Delivery{}
+	for rows.Next() {
+		var d models.Delivery
+		err := rows.Scan(
+			&d.ID, &d.UserID, &d.TradeID, &d.DeliveryType, &d.Status, &d.RiderID,
+			&d.PickupLatitude, &d.PickupLongitude, &d.PickupAddress,
+			&d.DeliveryLatitude, &d.DeliveryLongitude, &d.DeliveryAddress,
+			&d.SpecialInstructions, &d.TotalCost, &d.EstimatedETA, &d.ItemCount, &d.IsFragile,
+			&d.ClaimedAt, &d.PickedUpAt, &d.InTransitAt, &d.DeliveredAt,
+			&d.CreatedAt, &d.UpdatedAt,
+			&d.UserName,
+		)
+		if err != nil {
+			continue
+		}
+
+		// Calculate distance if we have GPS coordinates
+		if d.PickupLatitude != nil && d.PickupLongitude != nil && d.DeliveryLatitude != nil && d.DeliveryLongitude != nil {
+			// Distance calculation would go here if needed
+		}
+
+		deliveries = append(deliveries, d)
+	}
+
+	return c.JSON(models.APIResponse{
+		Success: true,
+		Data:    deliveries,
+	})
+}
+
+// GetRiderDeliveries gets deliveries claimed by the current rider
+func (h *DeliveryHandler) GetRiderDeliveries(c *fiber.Ctx) error {
+	riderID, ok := middleware.GetUserIDFromContext(c)
+	if !ok {
+		return c.Status(401).JSON(models.APIResponse{Success: false, Error: "User not authenticated"})
+	}
+
+	// Get rider ID from user ID
+	var actualRiderID int
+	err := h.db.QueryRow("SELECT id FROM riders WHERE user_id = ?", riderID).Scan(&actualRiderID)
+	if err != nil {
+		return c.Status(403).JSON(models.APIResponse{Success: false, Error: "User is not a rider"})
+	}
+
+	status := c.Query("status", "")
+	query := `
+		SELECT d.id, d.user_id, d.trade_id, d.delivery_type, d.status, d.rider_id,
+			d.pickup_latitude, d.pickup_longitude, d.pickup_address,
+			d.delivery_latitude, d.delivery_longitude, d.delivery_address,
+			d.special_instructions, d.total_cost, d.estimated_eta, d.item_count, d.is_fragile,
+			d.claimed_at, d.picked_up_at, d.in_transit_at, d.delivered_at,
+			d.created_at, d.updated_at,
+			u.name AS user_name
+		FROM deliveries d
+		JOIN users u ON d.user_id = u.id
+		WHERE d.rider_id = ?
+	`
+	args := []interface{}{actualRiderID}
+
+	if status != "" {
+		query += " AND d.status = ?"
+		args = append(args, status)
+	}
+
+	query += " ORDER BY d.created_at DESC"
+
+	rows, err := h.db.Query(query, args...)
+	if err != nil {
+		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to fetch rider deliveries"})
+	}
+	defer rows.Close()
+
+	deliveries := []models.Delivery{}
+	for rows.Next() {
+		var d models.Delivery
+		err := rows.Scan(
+			&d.ID, &d.UserID, &d.TradeID, &d.DeliveryType, &d.Status, &d.RiderID,
+			&d.PickupLatitude, &d.PickupLongitude, &d.PickupAddress,
+			&d.DeliveryLatitude, &d.DeliveryLongitude, &d.DeliveryAddress,
+			&d.SpecialInstructions, &d.TotalCost, &d.EstimatedETA, &d.ItemCount, &d.IsFragile,
+			&d.ClaimedAt, &d.PickedUpAt, &d.InTransitAt, &d.DeliveredAt,
+			&d.CreatedAt, &d.UpdatedAt,
+			&d.UserName,
+		)
+		if err != nil {
+			continue
+		}
+
+		h.loadRiderInfo(&d)
+		h.loadDeliveryItems(&d)
+
+		deliveries = append(deliveries, d)
+	}
+
+	return c.JSON(models.APIResponse{
+		Success: true,
+		Data:    deliveries,
+	})
+}
+
+// ClaimDelivery allows a rider to claim a pending delivery
+func (h *DeliveryHandler) ClaimDelivery(c *fiber.Ctx) error {
+	riderID, ok := middleware.GetUserIDFromContext(c)
+	if !ok {
+		return c.Status(401).JSON(models.APIResponse{Success: false, Error: "User not authenticated"})
+	}
+
+	deliveryID, err := strconv.Atoi(c.Params("id"))
+	if err != nil {
+		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "Invalid delivery ID"})
+	}
+
+	// Get rider ID from user ID
+	var actualRiderID int
+	err = h.db.QueryRow("SELECT id FROM riders WHERE user_id = ? AND is_active = TRUE", riderID).Scan(&actualRiderID)
+	if err != nil {
+		return c.Status(403).JSON(models.APIResponse{Success: false, Error: "User is not an active rider"})
+	}
+
+	// Verify delivery exists and is pending
+	var status string
+	var deliveryType string
+	var itemCount int
+	err = h.db.QueryRow(`
+		SELECT status, delivery_type, item_count
+		FROM deliveries 
+		WHERE id = ?
+	`, deliveryID).Scan(&status, &deliveryType, &itemCount)
+	if err != nil {
+		return c.Status(404).JSON(models.APIResponse{Success: false, Error: "Delivery not found"})
+	}
+
+	if status != "pending" {
+		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "Delivery is not pending"})
+	}
+
+	// For standard deliveries, check if rider already has an active batch
+	if deliveryType == "standard" {
+		var activeCount int
+		err = h.db.QueryRow(`
+			SELECT COUNT(*) FROM deliveries 
+			WHERE rider_id = ? AND status IN ('claimed', 'picked_up', 'in_transit')
+			AND delivery_type = 'standard'
+		`, actualRiderID).Scan(&activeCount)
+		if err != nil {
+			return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to check active deliveries"})
+		}
+
+		// Check total items in active batches (max 5 for standard)
+		var totalItems int
+		err = h.db.QueryRow(`
+			SELECT COALESCE(SUM(item_count), 0) FROM deliveries 
+			WHERE rider_id = ? AND status IN ('claimed', 'picked_up', 'in_transit')
+			AND delivery_type = 'standard'
+		`, actualRiderID).Scan(&totalItems)
+		if err != nil {
+			return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to check total items"})
+		}
+
+		if totalItems+itemCount > 5 {
+			return c.Status(400).JSON(models.APIResponse{
+				Success: false,
+				Error:   fmt.Sprintf("Cannot add delivery: would exceed 5 item limit (current: %d, adding: %d)", totalItems, itemCount),
+			})
+		}
+	}
+
+	// Claim delivery
+	now := time.Now()
+	_, err = h.db.Exec(`
+		UPDATE deliveries 
+		SET rider_id = ?, status = 'claimed', claimed_at = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE id = ?
+	`, actualRiderID, now, deliveryID)
+	if err != nil {
+		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to claim delivery"})
+	}
+
+	delivery, err := h.getDeliveryByID(deliveryID, 0)
+	if err != nil {
+		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to retrieve delivery"})
+	}
+
+	return c.JSON(models.APIResponse{
+		Success: true,
+		Message: "Delivery claimed successfully",
+		Data:    delivery,
+	})
+}
+
+// GetRiderEarnings gets earnings and statistics for a rider
+func (h *DeliveryHandler) GetRiderEarnings(c *fiber.Ctx) error {
+	riderID, ok := middleware.GetUserIDFromContext(c)
+	if !ok {
+		return c.Status(401).JSON(models.APIResponse{Success: false, Error: "User not authenticated"})
+	}
+
+	// Get rider ID from user ID
+	var actualRiderID int
+	err := h.db.QueryRow("SELECT id FROM riders WHERE user_id = ?", riderID).Scan(&actualRiderID)
+	if err != nil {
+		return c.Status(403).JSON(models.APIResponse{Success: false, Error: "User is not a rider"})
+	}
+
+	// Get today's date range
+	today := time.Now().Format("2006-01-02")
+	startOfDay := today + " 00:00:00"
+	endOfDay := today + " 23:59:59"
+
+	// Get today's earnings
+	var todayEarnings float64
+	var todayCompleted int
+	err = h.db.QueryRow(`
+		SELECT 
+			COALESCE(SUM(total_cost), 0) as earnings,
+			COUNT(*) as completed
+		FROM deliveries 
+		WHERE rider_id = ? 
+		AND status = 'delivered'
+		AND delivered_at >= ? AND delivered_at <= ?
+	`, actualRiderID, startOfDay, endOfDay).Scan(&todayEarnings, &todayCompleted)
+	if err != nil {
+		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to fetch today's earnings"})
+	}
+
+	// Get total earnings
+	var totalEarnings float64
+	var totalCompleted int
+	err = h.db.QueryRow(`
+		SELECT 
+			COALESCE(SUM(total_cost), 0) as earnings,
+			COUNT(*) as completed
+		FROM deliveries 
+		WHERE rider_id = ? 
+		AND status = 'delivered'
+	`, actualRiderID).Scan(&totalEarnings, &totalCompleted)
+	if err != nil {
+		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to fetch total earnings"})
+	}
+
+	// Get recent deliveries for remittance ledger
+	rows, err := h.db.Query(`
+		SELECT 
+			d.id, d.delivery_type, d.total_cost, d.delivered_at,
+			u.name AS customer_name
+		FROM deliveries d
+		JOIN users u ON d.user_id = u.id
+		WHERE d.rider_id = ? AND d.status = 'delivered'
+		ORDER BY d.delivered_at DESC
+		LIMIT 50
+	`, actualRiderID)
+	if err != nil {
+		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to fetch earnings data"})
+	}
+	defer rows.Close()
+
+	type EarningsEntry struct {
+		DeliveryID   int       `json:"delivery_id"`
+		DeliveryType string    `json:"delivery_type"`
+		Amount       float64   `json:"amount"`
+		DeliveredAt  time.Time `json:"delivered_at"`
+		CustomerName string    `json:"customer_name"`
+	}
+
+	ledger := []EarningsEntry{}
+	for rows.Next() {
+		var entry EarningsEntry
+		err := rows.Scan(&entry.DeliveryID, &entry.DeliveryType, &entry.Amount, &entry.DeliveredAt, &entry.CustomerName)
+		if err != nil {
+			continue
+		}
+		ledger = append(ledger, entry)
+	}
+
+	result := map[string]interface{}{
+		"today_earnings":    todayEarnings,
+		"today_completed":   todayCompleted,
+		"total_earnings":    totalEarnings,
+		"total_completed":   totalCompleted,
+		"remittance_ledger": ledger,
+	}
+
+	return c.JSON(models.APIResponse{
+		Success: true,
+		Data:    result,
+	})
+}
+
 // Helper function to get delivery by ID
 func (h *DeliveryHandler) getDeliveryByID(deliveryID, userID int) (*models.Delivery, error) {
 	var d models.Delivery
@@ -658,15 +970,14 @@ func (h *DeliveryHandler) loadDeliveryItems(d *models.Delivery) {
 	}
 	defer rows.Close()
 
-	items := []models.DeliveryItem{}
+	_ = []models.DeliveryItem{} // Reserved for future use when Delivery model has Items field
 	for rows.Next() {
 		var item models.DeliveryItem
 		err := rows.Scan(&item.ID, &item.DeliveryID, &item.ProductID, &item.ProductName, &item.IsFragile, &item.CreatedAt)
 		if err != nil {
 			continue
 		}
-		items = append(items, item)
+		// Note: Delivery model doesn't have Items field yet, but we scan the data for future use
+		_ = item
 	}
-	// Note: Delivery model doesn't have Items field, but we could add it if needed
 }
-

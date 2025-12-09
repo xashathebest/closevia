@@ -22,6 +22,7 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
   const [cashAmount, setCashAmount] = useState<string>('')
   const [showConfirmModal, setShowConfirmModal] = useState<boolean>(false)
   const [tradeOption, setTradeOption] = useState<TradeOption | null>(null)
+  const [deliveryAddress, setDeliveryAddress] = useState<string>('')
   const cardBg = useColorModeValue('white', 'gray.800')
   const borderColor = useColorModeValue('gray.200', 'gray.700')
   const selectedBg = useColorModeValue('brand.50', 'brand.900')
@@ -35,10 +36,7 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
     setTradeMessage('')
     setCashAmount('')
     setTradeOption(null)
-    // Auto-set delivery option if user has location
-    if (user?.latitude && user?.longitude) {
-      setTradeOption('delivery')
-    }
+    setDeliveryAddress('')
     if (user) {
       ;(async () => {
         try {
@@ -76,13 +74,12 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
       toast({ title: 'Select trade option', description: 'Please select Meetup or Delivery option.', status: 'warning' })
       return
     }
+    if (tradeOption === 'delivery' && !deliveryAddress.trim()) {
+      toast({ title: 'Delivery address required', description: 'Please provide a delivery address for delivery option.', status: 'warning' })
+      return
+    }
     try {
       setSubmittingTrade(true)
-      // Use user's coordinates for delivery if available
-      const deliveryAddress = user?.latitude && user?.longitude 
-        ? `${user.latitude}, ${user.longitude}`
-        : undefined
-      
       const payload: TradeCreate = {
         target_product_id: targetProductId,
         offered_product_ids: selectedOfferIds,
@@ -98,6 +95,7 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
       setTradeMessage('')
       setCashAmount('')
       setTradeOption(null)
+      setDeliveryAddress('')
       setShowConfirmModal(false)
       onClose()
     } catch (e: any) {
@@ -233,46 +231,25 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
                   </Card>
                 </Grid>
 
-                {/* Delivery Address Display (shown when delivery is selected) */}
+                {/* Delivery Address Input (shown when delivery is selected) */}
                 {tradeOption === 'delivery' && (
                   <Box mt={4}>
-                    <FormControl>
-                      <FormLabel fontSize="sm">Delivery Location</FormLabel>
-                      {user?.latitude && user?.longitude ? (
-                        <Box
-                          p={3}
-                          bg="blue.50"
-                          borderWidth="1px"
-                          borderColor="blue.200"
-                          rounded="md"
-                          borderLeftWidth="4px"
-                          borderLeftColor="blue.500"
-                        >
-                          <Text fontSize="sm" color="blue.900" fontWeight="medium">
-                            📍 {user.latitude.toFixed(4)}, {user.longitude.toFixed(4)}
-                          </Text>
-                          <Text fontSize="xs" color="blue.700" mt={1}>
-                            This is your predefined delivery location from your profile
-                          </Text>
-                        </Box>
-                      ) : (
-                        <Box
-                          p={3}
-                          bg="yellow.50"
-                          borderWidth="1px"
-                          borderColor="yellow.200"
-                          rounded="md"
-                          borderLeftWidth="4px"
-                          borderLeftColor="yellow.500"
-                        >
-                          <Text fontSize="sm" color="yellow.900" fontWeight="medium">
-                            ⚠️ Location not set
-                          </Text>
-                          <Text fontSize="xs" color="yellow.700" mt={1}>
-                            Please set your location in your profile to use delivery option
-                          </Text>
-                        </Box>
-                      )}
+                    <FormControl isRequired>
+                      <FormLabel fontSize="sm">Delivery Address</FormLabel>
+                      <Textarea
+                        placeholder="Enter your complete delivery address..."
+                        value={deliveryAddress}
+                        onChange={(e) => setDeliveryAddress(e.target.value)}
+                        rows={3}
+                        resize="vertical"
+                        _focus={{
+                          borderColor: 'brand.400',
+                          boxShadow: '0 0 0 1px var(--chakra-colors-brand-400)',
+                        }}
+                      />
+                      <Text fontSize="xs" color="gray.500" mt={1}>
+                        This address will be shared with the seller for delivery purposes
+                      </Text>
                     </FormControl>
                   </Box>
                 )}
@@ -286,7 +263,7 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
                   colorScheme="brand" 
                   isLoading={submittingTrade} 
                   onClick={() => setShowConfirmModal(true)} 
-                  isDisabled={selectedOfferIds.length === 0 || !tradeOption}
+                  isDisabled={selectedOfferIds.length === 0 || !tradeOption || (tradeOption === 'delivery' && !deliveryAddress.trim())}
                 >
                   Proceed
                 </Button>
@@ -372,9 +349,9 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
                       {tradeOption === 'meetup' ? 'Meetup' : 'Delivery'}
                     </Text>
                   </HStack>
-                  {tradeOption === 'delivery' && (
+                  {tradeOption === 'delivery' && deliveryAddress && (
                     <Text fontSize="xs" color="blue.600" mt={2}>
-                      📍 Location: {user?.latitude && user?.longitude ? `${user.latitude.toFixed(4)}, ${user.longitude.toFixed(4)}` : 'Location not set'}
+                      Address: {deliveryAddress}
                     </Text>
                   )}
                 </Box>

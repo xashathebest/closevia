@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   Box,
@@ -20,9 +20,16 @@ import {
   ModalFooter,
   useDisclosure,
   useToast,
+  Spinner,
+  Center,
+  Alert,
+  AlertIcon,
+  AlertDescription,
 } from '@chakra-ui/react'
 import { CheckCircleIcon, WarningIcon } from '@chakra-ui/icons'
 import { FaMoneyBillWave, FaCreditCard, FaUniversity, FaLock } from 'react-icons/fa'
+import { api } from '../services/api'
+import { useAuth } from '../contexts/AuthContext'
 
 interface RemittanceEntry {
   date: string
@@ -31,45 +38,81 @@ interface RemittanceEntry {
   earnings: number
   systemFee: number
   status: 'pending' | 'paid'
+  delivery_id?: number
+  delivery_type?: string
+  customer_name?: string
 }
 
 const RemittanceLedger: React.FC = () => {
   const { batchId } = useParams()
   const navigate = useNavigate()
   const toast = useToast()
+  const { user } = useAuth()
   const { isOpen, onOpen, onClose } = useDisclosure()
   
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState('')
   const [isProcessing, setIsProcessing] = useState(false)
+  const [ledger, setLedger] = useState<RemittanceEntry[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [earnings, setEarnings] = useState({
+    today_earnings: 0,
+    today_completed: 0,
+    total_earnings: 0,
+    total_completed: 0,
+  })
 
-  const [ledger] = useState<RemittanceEntry[]>([
-    {
-      date: '2024-01-15',
-      description: 'Batch BGC-001 (4 tasks)',
-      batchId: 'batch-001',
-      earnings: 450,
-      systemFee: 45,
-      status: 'paid',
-    },
-    {
-      date: '2024-01-15',
-      description: 'Batch Makati-002 (3 tasks)',
-      batchId: 'batch-002',
-      earnings: 320,
-      systemFee: 32,
-      status: 'paid',
-    },
-    {
-      date: '2024-01-15',
-      description: 'Batch Ortigas-003 (5 tasks)',
-      batchId: 'batch-003',
-      earnings: 600,
-      systemFee: 60,
-      status: 'pending',
-    },
-  ])
+  // Fetch earnings and remittance ledger
+  const fetchEarnings = async () => {
+    if (!user) return
 
-  const totalEarnings = ledger.reduce((sum, entry) => sum + entry.earnings, 0)
+    try {
+      setLoading(true)
+      setError(null)
+      const response = await api.get('/api/deliveries/rider/earnings')
+      const data = response.data?.data || {}
+
+      setEarnings({
+        today_earnings: data.today_earnings || 0,
+        today_completed: data.today_completed || 0,
+        total_earnings: data.total_earnings || 0,
+        total_completed: data.total_completed || 0,
+      })
+
+      // Convert remittance ledger to RemittanceEntry format
+      const ledgerEntries: RemittanceEntry[] = (data.remittance_ledger || []).map((entry: any) => ({
+        date: new Date(entry.delivered_at).toLocaleDateString(),
+        description: `Delivery #${entry.delivery_id} (${entry.delivery_type})`,
+        batchId: `delivery-${entry.delivery_id}`,
+        earnings: entry.amount,
+        systemFee: entry.amount * 0.1, // 10% system fee
+        status: 'paid' as const, // All delivered items are considered paid
+        delivery_id: entry.delivery_id,
+        delivery_type: entry.delivery_type,
+        customer_name: entry.customer_name,
+      }))
+
+      setLedger(ledgerEntries)
+    } catch (err: any) {
+      console.error('Failed to fetch earnings:', err)
+      setError(err?.response?.data?.error || 'Failed to load remittance ledger')
+      toast({
+        title: 'Error',
+        description: 'Failed to load earnings data',
+        status: 'error',
+      })
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (user) {
+      fetchEarnings()
+    }
+  }, [user])
+
+  const totalEarnings = earnings.total_earnings
   const totalFeesDue = ledger.filter(e => e.status === 'pending').reduce((sum, entry) => sum + entry.systemFee, 0)
   const totalPaid = ledger.filter(e => e.status === 'paid').reduce((sum, entry) => sum + entry.systemFee, 0)
 
@@ -110,6 +153,35 @@ const RemittanceLedger: React.FC = () => {
     }
   }
 
+  if (loading) {
+    return (
+      <Box minH="100vh" bg="#FFFDF1" py={6} px={4}>
+        <Center h="50vh">
+          <VStack spacing={4}>
+            <Spinner size="xl" color="brand.500" />
+            <Text>Loading earnings data...</Text>
+          </VStack>
+        </Center>
+      </Box>
+    )
+  }
+
+  if (error) {
+    return (
+      <Box minH="100vh" bg="#FFFDF1" py={6} px={4}>
+        <VStack spacing={4} maxW="md" mx="auto">
+          <Alert status="error" borderRadius="md">
+            <AlertIcon />
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+          <Button onClick={fetchEarnings} colorScheme="brand">
+            Retry
+          </Button>
+        </VStack>
+      </Box>
+    )
+  }
+
   return (
     <Box minH="100vh" bg="#FFFDF1" py={6} px={4}>
       <VStack spacing={6} maxW="md" mx="auto">
@@ -122,6 +194,31 @@ const RemittanceLedger: React.FC = () => {
             Transparent ledger of your work
           </Text>
         </VStack>
+
+        {/* Today's Stats */}
+        <Card bg="brand.50" w="full" border="1px" borderColor="brand.200">
+          <CardBody p={4}>
+            <VStack spacing={3} align="stretch">
+              <Text fontWeight="bold" fontSize="sm" color="brand.900">
+                Today's Performance
+              </Text>
+              <SimpleGrid columns={2} spacing={4}>
+                <VStack spacing={1} align="start">
+                  <Text fontSize="xs" color="gray.600">Today's Earnings</Text>
+                  <Text fontWeight="bold" fontSize="lg" color="green.600">
+                    ₱{earnings.today_earnings.toFixed(2)}
+                  </Text>
+                </VStack>
+                <VStack spacing={1} align="start">
+                  <Text fontSize="xs" color="gray.600">Completed</Text>
+                  <Text fontWeight="bold" fontSize="lg" color="brand.600">
+                    {earnings.today_completed} delivery(ies)
+                  </Text>
+                </VStack>
+              </SimpleGrid>
+            </VStack>
+          </CardBody>
+        </Card>
 
         {/* Summary Cards */}
         <SimpleGrid columns={3} spacing={3} w="full">
@@ -210,7 +307,13 @@ const RemittanceLedger: React.FC = () => {
             Transaction History
           </Heading>
           
-          {ledger.map((entry, idx) => (
+          {ledger.length === 0 ? (
+            <Alert status="info" borderRadius="md">
+              <AlertIcon />
+              <AlertDescription>No delivery history yet. Start claiming deliveries to see earnings!</AlertDescription>
+            </Alert>
+          ) : (
+            ledger.map((entry, idx) => (
             <Card key={idx} bg="white" border="1px" borderColor="gray.200">
               <CardBody p={3}>
                 <VStack spacing={2} align="stretch">
@@ -253,7 +356,8 @@ const RemittanceLedger: React.FC = () => {
                 </VStack>
               </CardBody>
             </Card>
-          ))}
+            ))
+          )}
         </VStack>
 
         {/* Remit Button */}

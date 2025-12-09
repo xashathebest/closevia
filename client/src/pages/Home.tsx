@@ -34,8 +34,6 @@ import {
   PopoverContent,
   PopoverBody,
   Divider,
-  Icon,
-  Link,
 } from '@chakra-ui/react'
 import { 
   SearchIcon, 
@@ -50,22 +48,17 @@ import {
   ArrowRightIcon,   
   CloseIcon,
 } from '@chakra-ui/icons'
-import { FaUserCircle, FaHandshake, FaHome } from 'react-icons/fa'
-import { FaBagShopping, FaBook, FaClock, FaShirt, FaShop, FaGem, FaHouse, FaBox, FaStar } from 'react-icons/fa6'
-import { FiShoppingBag } from 'react-icons/fi'
-import { MdSchool, MdLocalOffer } from 'react-icons/md'
+import { FaUserCircle, FaHandshake } from 'react-icons/fa'
 import { useProducts } from '../contexts/ProductContext'
 import { useAuth } from '../contexts/AuthContext'
 import { SearchFilters } from '../types'
-import { getFirstImage, getImageUrl } from '../utils/imageUtils'
+import { getFirstImage } from '../utils/imageUtils'
 import { formatPHP } from '../utils/currency'
 import { getProductUrl } from '../utils/productUtils'
 import { useMobileNav } from '../contexts/MobileNavContext'
 import { api } from '../services/api'
 import TradeModal from '../components/TradeModal'
 import { useRealtime } from '../contexts/RealtimeContext' // added import
-import FloatingTab from '../components/FloatingTab'
-import { useStudentAdInjection, StudentAdCard } from '../components/StudentAdInjector'
 
 // Custom debounce hook
 const useDebounce = (value: string, delay: number) => {
@@ -115,39 +108,53 @@ const Home: React.FC = () => {
   
   const toast = useToast()
 
-  // Category pills state with enhanced metadata
+  // Category pills state
   const categories = [
-    { name: 'All', icon: MdLocalOffer, color: 'brand', lightColor: 'brand.50', accentColor: 'brand.600' },
-    { name: 'Bag', icon: FaBagShopping, color: 'orange', lightColor: 'orange.50', accentColor: 'orange.600' },
-    { name: 'School Supply', icon: MdSchool, color: 'cyan', lightColor: 'cyan.50', accentColor: 'cyan.600' },
-    { name: 'Book', icon: FaBook, color: 'purple', lightColor: 'purple.50', accentColor: 'purple.600' },
-    { name: 'Electronic', icon: FaClock, color: 'indigo', lightColor: 'indigo.50', accentColor: 'indigo.600' },
-    { name: 'Clothing', icon: FaShirt, color: 'pink', lightColor: 'pink.50', accentColor: 'pink.600' },
-    { name: 'Shoe', icon: FaShop, color: 'red', lightColor: 'red.50', accentColor: 'red.600' },
-    { name: 'Accessory', icon: FaGem, color: 'yellow', lightColor: 'yellow.50', accentColor: 'yellow.600' },
-    { name: 'Home & Living', icon: FaHouse, color: 'green', lightColor: 'green.50', accentColor: 'green.600' },
-    { name: 'Toy', icon: FaBox, color: 'teal', lightColor: 'teal.50', accentColor: 'teal.600' },
-    { name: 'Beauty', icon: FaStar, color: 'rose', lightColor: 'rose.50', accentColor: 'rose.600' },
+    'All',
+    'Bag',
+    'School Supply',
+    'Book',
+    'Electronic',
+    'Clothing',
+    'Shoe',
+    'Accessory',
+    'Home & Living',
+    'Toy',
+    'Beauty',
   ]
   const [selectedCategory, setSelectedCategory] = useState<string>('All')
 
-  const handleCategorySelect = (categoryName: string) => {
-    setSelectedCategory(categoryName)
-    if (categoryName === 'All') {
+  // Category colors mapping
+  const categoryColors: { [key: string]: string } = {
+    'Bag': '#FFE5D0',
+    'School Supply': '#CFF6DA',
+    'Book': '#B9EEDC',
+    'Electronic': '#D8D8FA',
+    'Clothing': '#B8C5FF',
+    'Shoe': '#FAD8EB',
+    'Accessory': '#FADCB8',
+    'Home & Living': '#FFE5D0',
+    'Toy': '#CFF6DA',
+    'Beauty': '#B9EEDC',
+  }
+
+  const handleCategorySelect = (category: string) => {
+    setSelectedCategory(category)
+    if (category === 'All') {
       setSearchTerm('')
       setFilters(prev => ({ ...prev, keyword: '', page: 1 }))
       setHasSearched(true)
       return
     }
-    setSearchTerm(categoryName)
-    setFilters(prev => ({ ...prev, keyword: categoryName, page: 1 }))
+    setSearchTerm(category)
+    setFilters(prev => ({ ...prev, keyword: category, page: 1 }))
     setHasSearched(true)
   }
 
   // Load products immediately on component mount
   useEffect(() => {
-  // Always fetch latest 50 available products on mount (default feed)
-  searchProducts({ ...filters, status: 'available', limit: 50, page: 1 })
+  // Always fetch latest 10 available products on mount (default feed)
+  searchProducts({ ...filters, status: 'available', limit: 10, page: 1 })
   setHasSearched(false)
   // empty deps intentional — only once on mount
   }, [])
@@ -155,7 +162,7 @@ const Home: React.FC = () => {
   // Refetch when navigating back to Home route to ensure newest items appear
   useEffect(() => {
     if (location.pathname === '/home') {
-      searchProducts({ ...filters, status: 'available', limit: 50, page: 1 })
+      searchProducts({ ...filters, status: 'available', limit: 10, page: 1 })
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.pathname])
@@ -181,7 +188,7 @@ const Home: React.FC = () => {
   useEffect(() => {
     const handleFocus = () => {
       if (window.location.pathname === '/home') {
-        searchProducts({ ...filters, status: 'available', limit: 50, page: 1 })
+        searchProducts({ ...filters, status: 'available', limit: 10, page: 1 })
       }
     }
     window.addEventListener('focus', handleFocus)
@@ -241,8 +248,10 @@ const Home: React.FC = () => {
   const touchStartX = useRef<number | null>(null)
 
   const startAuto = () => {
-    // Auto-advance disabled to prevent dizziness
-    // Slider now only changes on user interaction (swipe/click)
+    if (sliderIntervalRef.current) window.clearInterval(sliderIntervalRef.current)
+    sliderIntervalRef.current = window.setInterval(() => {
+      setSlideIndex(i => (i + 1) % sliderImages.length)
+    }, 3000)
   }
 
   const stopAuto = () => {
@@ -253,12 +262,16 @@ const Home: React.FC = () => {
   }
 
   const scheduleResume = (delay = 2000) => {
-    // Resume logic disabled - slider stays on user-selected slide
+    // stop immediate auto and restart after delay
     stopAuto()
+    if (resumeTimeoutRef.current) window.clearTimeout(resumeTimeoutRef.current)
+    resumeTimeoutRef.current = window.setTimeout(() => {
+      startAuto()
+    }, delay)
   }
 
   useEffect(() => {
-    // Auto-start disabled - slider stays on initial image
+    startAuto()
     return () => {
       stopAuto()
       if (resumeTimeoutRef.current) window.clearTimeout(resumeTimeoutRef.current)
@@ -400,33 +413,24 @@ const Home: React.FC = () => {
       overflow="hidden"
       transition="all 0.2s ease"
       w="full"
+      display="flex"
+      flexDirection="column"
+      h="100%" // ensure card fills the grid cell
       _hover={{ boxShadow: 'md', transform: 'translateY(-2px)', cursor: 'pointer' }}
       onClick={() => navigate(getProductUrl(product))}
-       ml={-0.5}
     >
-      {/* Square Product Image - Fixed Dimensions for Mobile */}
-      <Box 
-        position="relative" 
-        w={{ base: '170px', md: 'full' }}
-        h={{ base: '150px', md: 'auto' }}
-        pt={{ base: '0', md: '100%' }}
-        overflow="hidden"
-        mx={{ base: 'auto', md: '0' }}
-      >
+      {/* Image container: use the same responsive height as the slider so sizes match */}
+      <Box position="relative" w="full" overflow="hidden" h={{ base: 140, md: 200, lg: 220 }}>
         <Image
           src={getFirstImage(product.image_urls)}
           alt={product.title}
-          position={{ base: 'static', md: 'absolute' }}
-          top={0}
-          left={0}
           w="100%"
           h="100%"
           objectFit="cover"
           loading="lazy"
           fallbackSrc="https://via.placeholder.com/600x600?text=No+Image"
-          ml={0.5}
         />
-        
+
         {/* Premium Badge */}
         {product.premium && (
           <Badge
@@ -439,7 +443,6 @@ const Home: React.FC = () => {
             px={2}
           >
             <StarIcon mr={0} />
-            
           </Badge>
         )}
         
@@ -451,9 +454,7 @@ const Home: React.FC = () => {
           colorScheme={product.allow_buying && product.price && !product.barter_only ? "blue" : "green"}
           variant="solid"
           borderRadius="full"
-          px={1.5}
-          py={0.5}
-          fontSize="2xs"
+          px={2}
         >
           {product.allow_buying && product.price && !product.barter_only ? "Buy Available" : "Barter Only"}
         </Badge>
@@ -487,74 +488,39 @@ const Home: React.FC = () => {
           fontSize="xs"
         >
           <Text as="span" mr={1}>📍</Text>
-          {product.distance || '1.2km'}
-        </Badge>
-
-        {/* Condition Badge for Image Section */}
-        <Badge
-          position="absolute"
-          bottom={2}
-          right={2}
-          fontSize="3xs"
-          colorScheme="blue"
-          variant="subtle"
-          borderWidth="0"
-          display={{ base: 'inline-flex', md: 'none' }}
-          px={1.5}
-          py={0.5}
-          height="fit-content"
-        >
-          {product.condition || 'Used'}
+          {product.distance || '1.2km nearby'}
         </Badge>
       </Box>
 
-      {/* Product Info (fixed height) */}
-      <Box p={4} display="flex" flexDirection="column" h={{ base: 140, md: 192 }} overflow="hidden">
-        <Flex justify="space-between" align="center" mb={2} display={{ base: 'none', md: 'flex' }}>
+      {/* Product Info: flex so cards stay equal height; buttons pinned to bottom */}
+      <Box p={4} display="flex" flexDirection="column" flex="1 1 auto" overflow="hidden">
+        <Flex justify="space-between" align="center" mb={2}>
           <HStack spacing={2}>
-            <Link
+            <Box
               as={RouterLink}
               to={`/users/${product.seller_id}`}
+              w={7}
+              h={7}
+              rounded="full"
+              bg="brand.500"
+              display="flex"
+              alignItems="center"
+              justifyContent="center"
+              flexShrink={0}
+              cursor="pointer"
+              _hover={{ opacity: 0.8 }}
               onClick={(e: React.MouseEvent) => e.stopPropagation()}
-              _hover={{ textDecoration: 'none' }}
             >
-              {product.seller_profile_picture ? (
-                <Image
-                  w={7}
-                  h={7}
-                  rounded="full"
-                  objectFit="cover"
-                  src={getImageUrl(product.seller_profile_picture)}
-                  alt={product.seller_name || 'Seller'}
-                  flexShrink={0}
-                  cursor="pointer"
-                  _hover={{ opacity: 0.9 }}
-                />
-              ) : (
-                <Box
-                  w={7}
-                  h={7}
-                  rounded="full"
-                  bg="brand.500"
-                  display="flex"
-                  alignItems="center"
-                  justifyContent="center"
-                  flexShrink={0}
-                  cursor="pointer"
-                  _hover={{ opacity: 0.8 }}
-                >
-                  <Text fontSize="md" fontWeight="bold" color="white">
-                    {(product.seller_name || 'U').charAt(0).toUpperCase()}
-                  </Text>
-                </Box>
-              )}
-            </Link>
+              <Text fontSize="md" fontWeight="bold" color="white">
+                {(product.seller_name || 'U').charAt(0).toUpperCase()}
+              </Text>
+            </Box>
             <Text fontSize="sm" color="black" fontWeight="medium" noOfLines={1}>
               {product.seller_name || 'Unknown'}
             </Text>
           </HStack>
           <Badge 
-            fontSize={{ base: 'xs', md: '2xs' }}
+            fontSize="xs" 
             colorScheme="blue" 
             flexShrink={0}
             borderWidth="1px"
@@ -570,7 +536,7 @@ const Home: React.FC = () => {
         <Text 
           color="gray.600" 
           noOfLines={{ base: 1, md: 2 }} 
-          mb={3}
+          mb={3} 
           fontSize="sm" 
           flexShrink={0}
         >
@@ -633,68 +599,6 @@ const Home: React.FC = () => {
       </Box>
     </Box>
   )
-
-  // Component to render product grid with ad injections
-  const ProductGridWithAds: React.FC<{ products: any[]; user: any }> = ({ products, user }) => {
-    const filteredProducts = products.filter(
-      (p) => p.status === 'available'
-    )
-
-    // Use the ad injection hook
-    const { shouldInsertAdAt, getAdForPosition, getAdIndexAt } = useStudentAdInjection(
-      filteredProducts.length,
-      undefined, // Use default ads
-      { min: 3, max: 6 } // Insertion interval
-    )
-
-    // Build the combined list with ads
-    const itemsWithAds: Array<{ type: 'product' | 'ad'; data: any; index: number }> = []
-
-    filteredProducts.forEach((product, idx) => {
-      itemsWithAds.push({
-        type: 'product',
-        data: product,
-        index: idx,
-      })
-
-      // Check if ad should be inserted after this product
-      if (shouldInsertAdAt(idx + 1)) {
-        const ad = getAdForPosition(getAdIndexAt(idx + 1))
-        if (ad) {
-          itemsWithAds.push({
-            type: 'ad',
-            data: ad,
-            index: idx + 1,
-          })
-        }
-      }
-    })
-
-    return (
-      <Grid
-        templateColumns={{
-          base: 'repeat(2, 1fr)',
-          md: 'repeat(3, 1fr)',
-          lg: 'repeat(4, 1fr)',
-          xl: 'repeat(5, 1fr)',
-        }}
-        gap={{ base: 3, md: 4 }}
-        alignItems="start"
-      >
-        {itemsWithAds.map((item, displayIndex) =>
-          item.type === 'product' ? (
-            <Box key={`product-${item.data.id}`}>
-              {renderProductCard(item.data)}
-            </Box>
-          ) : (
-            <Box key={`ad-${item.data.id}`}>
-              <StudentAdCard ad={item.data} />
-            </Box>
-          )
-        )}
-      </Grid>
-    )
-  }
 
   return (
     <Box minH="100vh" bg="#FFFDF1">
@@ -974,7 +878,7 @@ const Home: React.FC = () => {
         <Box
           position="relative"
           overflow="hidden"
-          h={{ base: 28, md: 28, lg: 40 }}   
+          h={{ base: 140, md: 200, lg: 220 }}
           rounded="lg"
           border="1px"
           borderColor="gray.200"
@@ -1050,23 +954,22 @@ const Home: React.FC = () => {
           </HStack>
         </Box>
       </Box>
-      {/* Horizontal category pills with modern styling and animations */}
-      <Box 
-        px={{ base: 3, md: 7 }} 
-        bg="linear-gradient(135deg, #FFFDF1 0%, #FFFCF0 100%)"
-        borderBottomColor="gray.100"
-      >
+      {/* Horizontal category pills under search bar */}
+      <Box px={{ base: 3, md: 7 }} py={0}>
         <Box
           w="full"
           maxW="8xl"
           mx="auto"
+          rounded="lg"
+          px={{ base: 0, md: 0 }}
+          py={{ base: 0, md: 0 }}
         >
           <HStack
-            spacing={{ base: 2.5, md: 3 }}
+            spacing={{ base: 2, md: 2.5 }}
             overflowX="auto"
             whiteSpace="nowrap"
             align="center"
-            pb={{ base: 2, md: 0 }}
+            pb={2}
             sx={{
               '::-webkit-scrollbar': { 
                 display: 'none',
@@ -1079,74 +982,32 @@ const Home: React.FC = () => {
               }
             }}
           >
-            {categories.map((category) => {
-              const isSelected = selectedCategory === category.name
-              const IconComponent = category.icon
+            {categories.map((cat) => {
+              const isSelected = selectedCategory === cat
+              const bgColor = isSelected ? 'gray.200' : (categoryColors[cat] || 'gray.100')
               
               return (
-                <Box 
-                  key={category.name} 
-                  flexShrink={0}
-                  as="button"
-                  onClick={() => handleCategorySelect(category.name)}
-                  cursor="pointer"
-                  transition="all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1)"
-                  _active={{
-                    transform: 'scale(0.95)',
-                  }}
-                >
-                  <Box
-                    display="flex"
-                    alignItems="center"
-                    gap={{ base: 1.5, md: 2 }}
-                    px={{ base: 3, md: 5 }}
-                    py={{ base: 2, md: 3 }}
+                <Box key={cat} flexShrink={0} pl={3}>
+                  <Button
+                    size="sm"
                     rounded="full"
-                    bg={isSelected ? (category.name === 'All' ? 'brand.600' : category.color) : 'white'}
-                    color={isSelected ? 'white' : 'gray.700'}
-                    fontWeight={isSelected ? '600' : '500'}
-                    fontSize={{ base: 'xs', md: 'sm' }}
-                    border="2px solid"
-                    borderColor={isSelected ? category.accentColor : 'gray.200'}
-                    boxShadow="0 2px 4px rgba(0, 0, 0, 0.05)"
-                    transition="all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1)"
-                    position="relative"
-                    overflow="hidden"
-                    _before={{
-                      content: '""',
-                      position: 'absolute',
-                      inset: 0,
-                      bg: isSelected ? 'rgba(255, 255, 255, 0.1)' : 'transparent',
-                      transition: 'background 0.3s ease',
+                    px={{ base: 4, md: 8 }}
+                    py={{ base: 2, md: 2.5 }}
+                    fontWeight="medium"
+                    variant="solid"
+                    bg={bgColor}
+                    _hover={{ 
+                      filter: 'brightness(0.85)',
+                      transform: 'scale(1.02)',
                     }}
-                    _hover={{
-                      transform: 'translateY(-0.5px)',
-                      boxShadow: '0 6px 12px rgba(0, 0, 0, 0.1)',
-                      borderColor: category.accentColor,
-                      bg: isSelected ? (category.name === 'All' ? 'brand.600' : category.color) : category.lightColor,
-                    }}
-                    _focusVisible={{
-                      outline: '2px solid',
-                      outlineColor: category.accentColor,
-                      outlineOffset: '2px',
-                    }}
+                    color="gray.800"
+                    border={isSelected ? '2px solid' : '1px solid'}
+                    borderColor={isSelected ? 'gray.400' : 'transparent'}
+                    onClick={() => handleCategorySelect(cat)}
+                    transition="all 0.2s ease"
                   >
-                    <Icon
-                      as={IconComponent}
-                      w={{ base: 3.5, md: 4 }}
-                      h={{ base: 3.5, md: 4 }}
-                      transition="all 0.3s ease"
-                      transform={isSelected ? 'scale(1.1)' : 'scale(1)'}
-                      opacity={isSelected ? 1 : 0.7}
-                    />
-                    <Text
-                      as="span"
-                      transition="all 0.3s ease"
-                      display={{ base: category.name === 'All' ? 'inline' : 'none', md: 'inline' }}
-                    >
-                      {category.name}
-                    </Text>
-                  </Box>
+                    {cat}
+                  </Button>
                 </Box>
               )
             })}
@@ -1187,16 +1048,26 @@ const Home: React.FC = () => {
           </Box>
         )}
 
-     {/* Products Grid - Shopee/Lazada Style with Ad Injection */}
+     {/* Products Grid - Shopee/Lazada Style */}
      {!loading && products.length > 0 && (
   <Box
     maxW={{ base: 'calc(100% - 12px)', md: '100%' }}
     mx="auto"
     px={{ base: 2, md: 4 }}
-    pb={{ base: 20, md: 0 }}
-    minH={{ base: '1200px', md: '1600px' }}
   >
-    <ProductGridWithAds products={products} user={user} />
+    <Grid
+      templateColumns={{ base: 'repeat(2, 1fr)', md: 'repeat(3, 1fr)', lg: 'repeat(4, 1fr)', xl: 'repeat(5, 1fr)' }}
+      gap={{ base: 3, md: 4 }}
+      alignItems="stretch" // force grid cells to match heights
+     >
+       {products
+         .filter((p) => p.status === 'available' && p.seller_id !== user?.id)
+         .map((product) => (
+          <Box key={product.id} h="100%"> {/* ensure grid item fills track height */}
+            {renderProductCard(product)}
+          </Box>
+         ))}
+     </Grid>
 
     {/* Sentinel for infinite scroll */}
     <Box ref={sentinelRef} h="1px" />
@@ -1356,7 +1227,24 @@ const Home: React.FC = () => {
         </ModalContent>
       </Modal>
 
-      <FloatingTab />
+    {/* Floating Add Product FAB */}
+    <IconButton
+      as={RouterLink}
+      to="/add-product"
+      aria-label="Add product"
+      icon={<AddIcon />}
+      position="fixed"
+      bottom={12}
+      right={6}
+      h={14}
+      w={14}
+      bgGradient="linear(to-br, brand.500, teal.400)"
+      color="white"
+      borderRadius="full"
+      zIndex={200}
+      boxShadow="lg"
+      _hover={{ transform: 'scale(1.05)' }}
+    />
     </Box>
   )
 }

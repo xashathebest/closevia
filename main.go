@@ -4,7 +4,6 @@ package main
 import (
 	"log"
 	"os"
-	"strings"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
@@ -51,33 +50,11 @@ func main() {
 	// Middleware
 	app.Use(recover.New())
 	app.Use(logger.New())
-
-	corsOrigins := os.Getenv("CORS_ORIGINS")
-	if corsOrigins == "" {
-		corsOrigins = strings.Join([]string{
-			"http://localhost:5173",
-			"http://localhost:5174",
-			"http://localhost:3000",
-			"https://cloviaph.netlify.app",
-			"https://closevia.onrender.com",
-		}, ",")
-	}
-
-	log.Printf("CORS Origins configured: %s", corsOrigins)
-
 	app.Use(cors.New(cors.Config{
-		AllowOrigins:     corsOrigins,
-		AllowHeaders:     "Origin, Content-Type, Accept, Authorization, X-Requested-With",
-		AllowMethods:     "GET, POST, PUT, DELETE, OPTIONS, PATCH",
-		AllowCredentials: true,
-		MaxAge:           3600,
-		ExposeHeaders:    "Content-Length, Content-Type, Authorization",
+		AllowOrigins: "http://localhost:5173,http://localhost:5174,http://localhost:3000",
+		AllowHeaders: "Origin, Content-Type, Accept, Authorization",
+		AllowMethods: "GET, POST, PUT, DELETE, OPTIONS",
 	}))
-
-	// Explicit OPTIONS handler for preflight requests
-	app.Options("/*", func(c *fiber.Ctx) error {
-		return c.SendStatus(fiber.StatusNoContent)
-	})
 
 	// Serve static files (uploads directory)
 	app.Static("/uploads", "./uploads")
@@ -114,18 +91,6 @@ func main() {
 			"product_count": count,
 		})
 	})
-	app.Get("/api/fix-profile-picture", func(c *fiber.Ctx) error {
-		if _, err := database.DB.Exec("ALTER TABLE users ADD COLUMN profile_picture VARCHAR(255) NULL"); err != nil {
-			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-				"success": false,
-				"error":   err.Error(),
-			})
-		}
-		return c.JSON(fiber.Map{
-			"success": true,
-			"message": "profile_picture column ensured",
-		})
-	})
 
 	// API routes
 	api := app.Group("/api")
@@ -142,33 +107,27 @@ func main() {
 	wishlistHandler := handlers.NewWishlistHandler()
 	aiFeaturesHandler := handlers.NewAIFeaturesHandler()
 	deliveryHandler := handlers.NewDeliveryHandler()
-	reviewHandler := handlers.NewReviewHandler()
 
 	// Auth routes (no authentication required)
 	auth := api.Group("/auth")
 	auth.Post("/register", userHandler.Register)
 	auth.Post("/login", userHandler.Login)
-	auth.Post("/google", userHandler.GoogleLogin)
 
 	// User routes (authentication required)
 	users := api.Group("/users")
 	users.Get("/profile", middleware.AuthMiddleware(), userHandler.GetProfile)
 	users.Put("/profile", middleware.AuthMiddleware(), userHandler.UpdateProfile)
 	users.Post("/profile-picture", middleware.AuthMiddleware(), userHandler.UploadProfilePicture)
+	// Change password (accept POST, PUT and PATCH to be resilient to client method differences)
+	users.Post("/change-password", middleware.AuthMiddleware(), userHandler.ChangePassword)
+	users.Put("/change-password", middleware.AuthMiddleware(), userHandler.ChangePassword)
+	users.Patch("/change-password", middleware.AuthMiddleware(), userHandler.ChangePassword)
 
 	// Saved products routes (must be BEFORE dynamic ":id" route)
 	users.Post("/saved-products", middleware.AuthMiddleware(), userHandler.SaveProduct)
 	users.Delete("/saved-products/:id", middleware.AuthMiddleware(), userHandler.UnsaveProduct)
 	users.Get("/saved-products/:id", middleware.AuthMiddleware(), userHandler.CheckSavedProduct)
 	users.Get("/saved-products", middleware.AuthMiddleware(), userHandler.GetSavedProducts)
-
-	// User stats route (must be BEFORE dynamic ":id" route)
-	users.Get("/:id/stats", userHandler.GetSellerStats) // Public route
-
-	// Review routes (must be BEFORE dynamic ":id" route)
-	users.Get("/:id/reviews", reviewHandler.GetUserReviews)                             // Public route
-	users.Post("/:id/reviews", middleware.AuthMiddleware(), reviewHandler.CreateReview) // Auth required
-	users.Get("/:id/rating", reviewHandler.GetUserRating)                               // Public route
 
 	// Dynamic and list routes placed after static subpaths
 	users.Get("/:id", userHandler.GetUserByID) // Public route
@@ -181,12 +140,22 @@ func main() {
 	products.Get("/user/:id", productHandler.GetUserProducts)          // Public route
 	products.Get("/user/:id/listings", productHandler.GetUserProducts) // alias for listings
 	// Specific routes must come before generic :id route
-	products.Post("/generate-details", middleware.AuthMiddleware(), productHandler.GenerateProductDetailsWithAI)
 	products.Get("/:id/wishlist/status", middleware.AuthMiddleware(), productHandler.GetUserWishlistStatus)
 	products.Get("/:id/comments", commentHandler.GetComments)
 	products.Post("/:id/comments", middleware.AuthMiddleware(), commentHandler.CreateComment)
 	products.Get("/:id", productHandler.GetProduct) // Public route (must be last)
 	products.Post("/", middleware.AuthMiddleware(), productHandler.CreateProduct)
+	products.Get("/", productHandler.GetProducts) // Public route
+	products.Get("", productHandler.GetProducts)  // Support no trailing slash
+	products.Post("/", middleware.AuthMiddleware(), productHandler.CreateProduct)
+	products.Get("/user/:id", productHandler.GetUserProducts)          // Public route
+	products.Get("/user/:id/listings", productHandler.GetUserProducts) // alias for listings
+	products.Post("/:id/vote", middleware.AuthMiddleware(), productHandler.VoteProduct)
+	products.Get("/:id/comments", commentHandler.GetComments)
+	products.Post("/:id/comments", middleware.AuthMiddleware(), commentHandler.CreateComment)
+	// User-specific wishlist status for a product
+	products.Get("/:id/wishlist/status", middleware.AuthMiddleware(), productHandler.GetUserWishlistStatus)
+	products.Get("/:id", productHandler.GetProduct) // Public route - must be last
 	products.Put("/:id", middleware.AuthMiddleware(), productHandler.UpdateProduct)
 	products.Delete("/:id", middleware.AuthMiddleware(), productHandler.DeleteProduct)
 
@@ -211,14 +180,13 @@ func main() {
 	trades := api.Group("/trades")
 	trades.Post("/", middleware.AuthMiddleware(), tradeHandler.CreateTrade)
 	trades.Get("/", middleware.AuthMiddleware(), tradeHandler.GetTrades)
-	// Allow optional auth for counts endpoint so unauthenticated UI polling returns a safe zero value
-	// IMPORTANT: /count must be BEFORE /:id routes to avoid matching "count" as an ID
-	trades.Get("/count", middleware.OptionalAuthMiddleware(), tradeHandler.CountTrades)
 	trades.Put("/:id", middleware.AuthMiddleware(), tradeHandler.UpdateTrade)
 	trades.Get("/:id", middleware.AuthMiddleware(), tradeHandler.GetTrade)
 	trades.Get("/:id/messages", middleware.AuthMiddleware(), tradeHandler.GetTradeMessages)
 	trades.Post("/:id/messages", middleware.AuthMiddleware(), tradeHandler.SendTradeMessage)
 	trades.Get("/:id/history", middleware.AuthMiddleware(), tradeHandler.GetTradeHistory)
+	// Allow optional auth for counts endpoint so unauthenticated UI polling returns a safe zero value
+	trades.Get("/count", middleware.OptionalAuthMiddleware(), tradeHandler.CountTrades)
 	trades.Put("/:id/complete", middleware.AuthMiddleware(), tradeHandler.CompleteTrade)
 	trades.Get("/:id/completion-status", middleware.AuthMiddleware(), tradeHandler.GetTradeCompletionStatus)
 
@@ -245,6 +213,11 @@ func main() {
 	deliveries.Get("/:id", middleware.AuthMiddleware(), deliveryHandler.GetDelivery)
 	deliveries.Put("/:id/status", middleware.AuthMiddleware(), deliveryHandler.UpdateDeliveryStatus)
 	deliveries.Post("/:id/assign", middleware.AuthMiddleware(), deliveryHandler.AssignRider)
+	// Rider-specific routes
+	deliveries.Get("/available", middleware.AuthMiddleware(), deliveryHandler.GetAvailableDeliveries)
+	deliveries.Get("/rider/my-deliveries", middleware.AuthMiddleware(), deliveryHandler.GetRiderDeliveries)
+	deliveries.Post("/:id/claim", middleware.AuthMiddleware(), deliveryHandler.ClaimDelivery)
+	deliveries.Get("/rider/earnings", middleware.AuthMiddleware(), deliveryHandler.GetRiderEarnings)
 
 	// AI Features routes
 	ai := api.Group("/ai")

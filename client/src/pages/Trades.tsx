@@ -52,13 +52,20 @@ const Trades: React.FC = () => {
     }
   }
 
+  const [processingIds, setProcessingIds] = useState<Set<number>>(new Set())
+
   const updateTrade = async (id: number, action: TradeAction) => {
+    // Prevent rapid repeated submissions for same trade
+    if (processingIds.has(id)) return
+    setProcessingIds(prev => new Set(prev).add(id))
     try {
       await api.put(`/api/trades/${id}`, action)
       toast({ title: 'Success', description: 'Trade updated', status: 'success' })
-      fetchTrades()
+      await fetchTrades()
     } catch (e: any) {
       toast({ title: 'Error', description: e?.response?.data?.error || 'Failed to update trade', status: 'error' })
+    } finally {
+      setProcessingIds(prev => { const next = new Set(prev); next.delete(id); return next })
     }
   }
 
@@ -103,8 +110,8 @@ const Trades: React.FC = () => {
                     <Badge colorScheme={t.status === 'pending' ? 'yellow' : t.status === 'accepted' ? 'green' : t.status === 'declined' ? 'red' : 'purple'}>{t.status}</Badge>
                   </HStack>
                   <HStack mt={3} spacing={3}>
-                    <Button size="sm" colorScheme="green" variant="outline" onClick={() => updateTrade(t.id, { action: 'accept' })}>Accept</Button>
-                    <Button size="sm" colorScheme="red" variant="outline" onClick={() => updateTrade(t.id, { action: 'decline' })}>Decline</Button>
+                    <Button size="sm" colorScheme="green" variant="outline" onClick={() => updateTrade(t.id, { action: 'accept' })} isDisabled={processingIds.has(t.id)} isLoading={processingIds.has(t.id)}>Accept</Button>
+                    <Button size="sm" colorScheme="red" variant="outline" onClick={() => updateTrade(t.id, { action: 'decline' })} isDisabled={processingIds.has(t.id)} isLoading={processingIds.has(t.id)}>Decline</Button>
                     <Button size="sm" variant="ghost" onClick={() => openTrade(t.id)}>Open</Button>
                   </HStack>
                   {activeTradeId === t.id && (

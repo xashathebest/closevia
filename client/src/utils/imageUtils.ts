@@ -1,5 +1,3 @@
-import { API_BASE_URL } from '../services/api'
-
 // Utility function to construct proper image URLs
 export const getImageUrl = (imagePath: string | null | undefined): string => {
   if (!imagePath) {
@@ -13,7 +11,7 @@ export const getImageUrl = (imagePath: string | null | undefined): string => {
   }
   
   // If it's a relative path, prepend the backend URL
-  const backendUrl = API_BASE_URL.replace(/\/$/, '')
+  const backendUrl = import.meta.env.VITE_API_URL || 'http://localhost:4000'
   return `${backendUrl}${imagePath}`
 }
 

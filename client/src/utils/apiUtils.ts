@@ -1,6 +1,4 @@
-import { api, API_BASE_URL } from '../services/api';
-
-const API_BASE = API_BASE_URL.replace(/\/$/, '');
+import { api } from '../services/api';
 
 // Retry configuration
 interface RetryConfig {
@@ -101,7 +99,7 @@ export const checkConnectionStatus = async (): Promise<{
     }
 
     // Test API connectivity
-    const response = await fetch(`${API_BASE}/health`, {
+    const response = await fetch('http://localhost:4000/health', {
       method: 'GET',
       signal: AbortSignal.timeout(5000), // 5 second timeout
     });

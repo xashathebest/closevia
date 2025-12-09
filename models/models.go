@@ -95,26 +95,24 @@ func (a StringArray) Value() (driver.Value, error) {
 
 // User represents a user in the system
 type User struct {
-	ID                 int       `json:"id"`
-	Name               string    `json:"name" validate:"required,min=2,max=255"`
-	Email              string    `json:"email" validate:"required,email"`
-	PasswordHash       string    `json:"-" validate:"required"`
-	Role               string    `json:"role" validate:"oneof=user admin"`
-	Verified           bool      `json:"verified"`
-	IsOrganization     bool      `json:"is_organization"`
-	OrgVerified        bool      `json:"org_verified"`
-	OrgName            string    `json:"org_name,omitempty"`
-	OrgLogoURL         string    `json:"org_logo_url,omitempty"`
-	Department         string    `json:"department,omitempty"`
-	Bio                string    `json:"bio,omitempty"`
-	Badges             IntArray  `json:"badges,omitempty"`
-	ProfilePicture     string    `json:"profile_picture"`
-	BackgroundImage    string    `json:"background_image"`
-	BackgroundPosition string    `json:"background_position"`
-	Latitude           *float64  `json:"latitude,omitempty"`
-	Longitude          *float64  `json:"longitude,omitempty"`
-	CreatedAt          time.Time `json:"created_at"`
-	UpdatedAt          time.Time `json:"updated_at"`
+	ID             int       `json:"id"`
+	Name           string    `json:"name" validate:"required,min=2,max=255"`
+	Email          string    `json:"email" validate:"required,email"`
+	PasswordHash   string    `json:"-" validate:"required"`
+	Role           string    `json:"role" validate:"oneof=user admin"`
+	Verified       bool      `json:"verified"`
+	IsOrganization bool      `json:"is_organization"`
+	OrgVerified    bool      `json:"org_verified"`
+	OrgName        string    `json:"org_name,omitempty"`
+	OrgLogoURL     string    `json:"org_logo_url,omitempty"`
+	Department     string    `json:"department,omitempty"`
+	Bio            string    `json:"bio,omitempty"`
+	Badges         IntArray  `json:"badges,omitempty"`
+	ProfilePicture string    `json:"profile_picture,omitempty"`
+	Latitude       *float64  `json:"latitude,omitempty"`
+	Longitude      *float64  `json:"longitude,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 // UserLogin represents login credentials
@@ -138,30 +136,29 @@ type UserRegister struct {
 
 // Product represents a product listing
 type Product struct {
-	ID                   int         `json:"id"`
-	Slug                 string      `json:"slug,omitempty"` // SEO-friendly URL identifier
-	Title                string      `json:"title" validate:"required,min=2,max=255"`
-	Description          string      `json:"description"`
-	Price                *float64    `json:"price,omitempty"`      // Optional for barter-only items
-	ImageURLs            StringArray `json:"image_urls,omitempty"` // Multiple images
-	ImageURL             string      `json:"image_url,omitempty"`  // Single image for compatibility
-	SellerID             int         `json:"seller_id"`
-	SellerName           string      `json:"seller_name,omitempty"`
-	SellerProfilePicture string      `json:"seller_profile_picture,omitempty"`
-	Premium              bool        `json:"premium"`
-	Status               string      `json:"status" validate:"oneof=available sold traded locked"`
-	AllowBuying          bool        `json:"allow_buying"` // Whether buying is allowed
-	BarterOnly           bool        `json:"barter_only"`  // Whether it's barter only
-	Location             string      `json:"location,omitempty"`
-	Condition            string      `json:"condition,omitempty" validate:"omitempty,oneof=New Like-New Used Fair"`
-	SuggestedValue       int         `json:"suggested_value,omitempty"`
-	Category             string      `json:"category,omitempty"`
-	Latitude             *float64    `json:"latitude,omitempty"`
-	Longitude            *float64    `json:"longitude,omitempty"`
-	CreatedAt            time.Time   `json:"created_at"`
-	UpdatedAt            time.Time   `json:"updated_at"`
-	BiddingType          string      `json:"bidding_type,omitempty" validate:"omitempty,oneof=none blind open"`
-	WishlistCount        int         `json:"wishlist_count,omitempty"`
+	ID             int         `json:"id"`
+	Slug           string      `json:"slug,omitempty"` // SEO-friendly URL identifier
+	Title          string      `json:"title" validate:"required,min=2,max=255"`
+	Description    string      `json:"description"`
+	Price          *float64    `json:"price,omitempty"`      // Optional for barter-only items
+	ImageURLs      StringArray `json:"image_urls,omitempty"` // Multiple images
+	ImageURL       string      `json:"image_url,omitempty"`  // Single image for compatibility
+	SellerID       int         `json:"seller_id"`
+	SellerName     string      `json:"seller_name,omitempty"`
+	Premium        bool        `json:"premium"`
+	Status         string      `json:"status" validate:"oneof=available sold traded locked"`
+	AllowBuying    bool        `json:"allow_buying"` // Whether buying is allowed
+	BarterOnly     bool        `json:"barter_only"`  // Whether it's barter only
+	Location       string      `json:"location,omitempty"`
+	Condition      string      `json:"condition,omitempty" validate:"omitempty,oneof=New Like-New Used Fair"`
+	SuggestedValue int         `json:"suggested_value,omitempty"`
+	Category       string      `json:"category,omitempty"`
+	Latitude       *float64    `json:"latitude,omitempty"`
+	Longitude      *float64    `json:"longitude,omitempty"`
+	CreatedAt      time.Time   `json:"created_at"`
+	UpdatedAt      time.Time   `json:"updated_at"`
+	BiddingType    string      `json:"bidding_type,omitempty" validate:"omitempty,oneof=none blind open"`
+	WishlistCount  int         `json:"wishlist_count,omitempty"`
 }
 
 // ProductCreate represents data for creating a product
@@ -254,23 +251,9 @@ type Trade struct {
 	FirstCompletionAt         *time.Time `json:"first_completion_at,omitempty"`
 	AwaitingConfirmationSince *time.Time `json:"awaiting_confirmation_since,omitempty"`
 	AutoCompletedAt           *time.Time `json:"auto_completed_at,omitempty"`
-	// Trade option and delivery fields
-	TradeOption     string `json:"trade_option,omitempty" validate:"omitempty,oneof=meetup delivery"`
-	DeliveryAddress string `json:"delivery_address,omitempty"`
-	// Review and proof fields
-	BuyerRating    *int   `json:"buyer_rating,omitempty"`
-	SellerRating   *int   `json:"seller_rating,omitempty"`
-	BuyerFeedback  string `json:"buyer_feedback,omitempty"`
-	SellerFeedback string `json:"seller_feedback,omitempty"`
-	BuyerProofURL  string `json:"buyer_proof_url,omitempty"`
-	SellerProofURL string `json:"seller_proof_url,omitempty"`
-	// Meetup-related fields
-	MeetupLocation        string `json:"meetup_location,omitempty"`
-	BuyerMeetupConfirmed  bool   `json:"buyer_meetup_confirmed"`
-	SellerMeetupConfirmed bool   `json:"seller_meetup_confirmed"`
-	BuyerName             string `json:"buyer_name,omitempty"`
-	SellerName            string `json:"seller_name,omitempty"`
-	ProductTitle          string `json:"product_title,omitempty"`
+	BuyerName                 string     `json:"buyer_name,omitempty"`
+	SellerName                string     `json:"seller_name,omitempty"`
+	ProductTitle              string     `json:"product_title,omitempty"`
 }
 
 // TradeItem represents an item offered in a trade
@@ -292,17 +275,14 @@ type TradeCreate struct {
 	OfferedProductIDs []int    `json:"offered_product_ids" validate:"required,min=1,dive,gt=0"`
 	Message           string   `json:"message"`
 	OfferedCashAmount *float64 `json:"offered_cash_amount,omitempty"`
-	TradeOption       string   `json:"trade_option" validate:"required,oneof=meetup delivery"`
-	DeliveryAddress   string   `json:"delivery_address,omitempty"`
 }
 
 // TradeAction represents accept/decline/counter actions
 type TradeAction struct {
-	Action                   string   `json:"action" validate:"required,oneof=accept decline counter complete cancel confirm_meetup"`
+	Action                   string   `json:"action" validate:"required,oneof=accept decline counter complete cancel"`
 	Message                  string   `json:"message,omitempty"`
 	CounterOfferedProductIDs []int    `json:"counter_offered_product_ids,omitempty"`
 	CounterOfferedCashAmount *float64 `json:"counter_offered_cash_amount,omitempty"`
-	MeetupLocation           string   `json:"meetup_location,omitempty"`
 }
 
 // ChatConversation represents a conversation between a buyer and seller about a product
@@ -442,36 +422,36 @@ type Rider struct {
 
 // Delivery represents a delivery request
 type Delivery struct {
-	ID                  int        `json:"id"`
-	UserID              int        `json:"user_id"`
-	TradeID             *int       `json:"trade_id,omitempty"` // Optional: can be standalone delivery
-	DeliveryType        string     `json:"delivery_type" validate:"oneof=standard express"`
-	Status              string     `json:"status" validate:"oneof=pending claimed picked_up in_transit delivered cancelled"`
-	RiderID             *int       `json:"rider_id,omitempty"`
-	PickupLatitude      *float64   `json:"pickup_latitude,omitempty"`
-	PickupLongitude     *float64   `json:"pickup_longitude,omitempty"`
-	PickupAddress       string     `json:"pickup_address"`
-	DeliveryLatitude    *float64   `json:"delivery_latitude,omitempty"`
-	DeliveryLongitude   *float64   `json:"delivery_longitude,omitempty"`
-	DeliveryAddress     string     `json:"delivery_address"`
-	SpecialInstructions string     `json:"special_instructions,omitempty"`
-	TotalCost           float64    `json:"total_cost"`
-	EstimatedETA        *time.Time `json:"estimated_eta,omitempty"`
-	ItemCount           int        `json:"item_count"` // Number of items in delivery
-	IsFragile           bool       `json:"is_fragile"` // Flag for fragile items
-	ClaimedAt           *time.Time `json:"claimed_at,omitempty"`
-	PickedUpAt          *time.Time `json:"picked_up_at,omitempty"`
-	InTransitAt         *time.Time `json:"in_transit_at,omitempty"`
-	DeliveredAt         *time.Time `json:"delivered_at,omitempty"`
-	CreatedAt           time.Time  `json:"created_at"`
-	UpdatedAt           time.Time  `json:"updated_at"`
+	ID                 int        `json:"id"`
+	UserID             int        `json:"user_id"`
+	TradeID            *int       `json:"trade_id,omitempty"` // Optional: can be standalone delivery
+	DeliveryType       string     `json:"delivery_type" validate:"oneof=standard express"`
+	Status             string     `json:"status" validate:"oneof=pending claimed picked_up in_transit delivered cancelled"`
+	RiderID            *int       `json:"rider_id,omitempty"`
+	PickupLatitude     *float64   `json:"pickup_latitude,omitempty"`
+	PickupLongitude    *float64   `json:"pickup_longitude,omitempty"`
+	PickupAddress      string     `json:"pickup_address"`
+	DeliveryLatitude   *float64   `json:"delivery_latitude,omitempty"`
+	DeliveryLongitude  *float64   `json:"delivery_longitude,omitempty"`
+	DeliveryAddress    string     `json:"delivery_address"`
+	SpecialInstructions string    `json:"special_instructions,omitempty"`
+	TotalCost          float64    `json:"total_cost"`
+	EstimatedETA       *time.Time `json:"estimated_eta,omitempty"`
+	ItemCount          int        `json:"item_count"` // Number of items in delivery
+	IsFragile          bool       `json:"is_fragile"`  // Flag for fragile items
+	ClaimedAt          *time.Time `json:"claimed_at,omitempty"`
+	PickedUpAt         *time.Time `json:"picked_up_at,omitempty"`
+	InTransitAt        *time.Time `json:"in_transit_at,omitempty"`
+	DeliveredAt        *time.Time `json:"delivered_at,omitempty"`
+	CreatedAt          time.Time  `json:"created_at"`
+	UpdatedAt          time.Time  `json:"updated_at"`
 	// Denormalized fields for display
-	UserName       string   `json:"user_name,omitempty"`
-	RiderName      string   `json:"rider_name,omitempty"`
-	RiderVehicle   string   `json:"rider_vehicle,omitempty"`
-	RiderRating    *float64 `json:"rider_rating,omitempty"`
-	RiderLatitude  *float64 `json:"rider_latitude,omitempty"`
-	RiderLongitude *float64 `json:"rider_longitude,omitempty"`
+	UserName           string    `json:"user_name,omitempty"`
+	RiderName          string    `json:"rider_name,omitempty"`
+	RiderVehicle       string    `json:"rider_vehicle,omitempty"`
+	RiderRating        *float64  `json:"rider_rating,omitempty"`
+	RiderLatitude      *float64  `json:"rider_latitude,omitempty"`
+	RiderLongitude     *float64  `json:"rider_longitude,omitempty"`
 }
 
 // DeliveryItem represents an item in a delivery
@@ -486,25 +466,25 @@ type DeliveryItem struct {
 
 // DeliveryRequest represents a request to create a delivery
 type DeliveryRequest struct {
-	TradeID             *int     `json:"trade_id,omitempty"`
-	DeliveryType        string   `json:"delivery_type" validate:"required,oneof=standard express"`
-	PickupLatitude      *float64 `json:"pickup_latitude,omitempty"`
-	PickupLongitude     *float64 `json:"pickup_longitude,omitempty"`
-	PickupAddress       string   `json:"pickup_address" validate:"required"`
-	DeliveryLatitude    *float64 `json:"delivery_latitude,omitempty"`
-	DeliveryLongitude   *float64 `json:"delivery_longitude,omitempty"`
-	DeliveryAddress     string   `json:"delivery_address" validate:"required"`
-	SpecialInstructions string   `json:"special_instructions,omitempty"`
-	ProductIDs          []int    `json:"product_ids" validate:"required,min=1"` // Products to deliver
+	TradeID            *int     `json:"trade_id,omitempty"`
+	DeliveryType       string   `json:"delivery_type" validate:"required,oneof=standard express"`
+	PickupLatitude     *float64 `json:"pickup_latitude,omitempty"`
+	PickupLongitude    *float64 `json:"pickup_longitude,omitempty"`
+	PickupAddress      string   `json:"pickup_address" validate:"required"`
+	DeliveryLatitude   *float64 `json:"delivery_latitude,omitempty"`
+	DeliveryLongitude  *float64 `json:"delivery_longitude,omitempty"`
+	DeliveryAddress    string   `json:"delivery_address" validate:"required"`
+	SpecialInstructions string  `json:"special_instructions,omitempty"`
+	ProductIDs         []int    `json:"product_ids" validate:"required,min=1"` // Products to deliver
 }
 
 // DeliveryUpdate represents an update to delivery status
 type DeliveryUpdate struct {
-	Status       *string    `json:"status,omitempty" validate:"omitempty,oneof=claimed picked_up in_transit delivered cancelled"`
-	RiderID      *int       `json:"rider_id,omitempty"`
-	Latitude     *float64   `json:"latitude,omitempty"`
-	Longitude    *float64   `json:"longitude,omitempty"`
-	EstimatedETA *time.Time `json:"estimated_eta,omitempty"`
+	Status             *string   `json:"status,omitempty" validate:"omitempty,oneof=claimed picked_up in_transit delivered cancelled"`
+	RiderID            *int      `json:"rider_id,omitempty"`
+	Latitude           *float64  `json:"latitude,omitempty"`
+	Longitude          *float64  `json:"longitude,omitempty"`
+	EstimatedETA       *time.Time `json:"estimated_eta,omitempty"`
 }
 
 // JWTClaims represents JWT token claims
@@ -524,17 +504,4 @@ func (p Product) MarshalJSON() ([]byte, error) {
 	}
 	// Ensure nil slice becomes empty array in JSON (optional; StringArray.MarshalJSON already handles this)
 	return json.Marshal(a)
-}
-
-// SellerStats represents seller statistics for display on product pages
-type SellerStats struct {
-	UserID          int     `json:"user_id"`
-	AvgRating       float64 `json:"avg_rating"`
-	PositivePercent float64 `json:"positive_percent"`
-	TotalTrades     int     `json:"total_trades"`
-	AvgResponseTime string  `json:"avg_response_time"`
-	TotalFeedback   int     `json:"total_feedback"`
-	ResponseMetric  string  `json:"response_metric,omitempty"`   // "excellent", "good", etc.
-	MemberSinceYear int     `json:"member_since_year,omitempty"` // Year user joined
-	CompletedTrades int     `json:"completed_trades,omitempty"`
 }

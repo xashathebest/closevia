@@ -1,12 +1,6 @@
 import axios, { AxiosError, AxiosRequestConfig } from 'axios'
 
-// Use environment variable for API URL, default to localhost for development
-export const API_BASE_URL = import.meta.env.VITE_API_URL || (
-  import.meta.env.PROD 
-    ? 'https://closevia.onrender.com'  // Update with your actual Render backend URL
-    : 'http://localhost:4000'                        // Development localhost
-)
-
+export const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:4000'
 const DEBUG_API = localStorage.getItem('debug_api') === 'true'
 
 export const api = axios.create({
@@ -81,10 +75,6 @@ api.interceptors.response.use(
   async (error: AxiosError) => {
     const cfg = error.config as (AxiosRequestConfig & { _retry?: boolean }) | undefined
     const status = error.response?.status
-    const url = cfg?.url || ''
-
-    // Detect review submissions so we don't hard-redirect on 401; the UI can prompt login
-    const isReviewEndpoint = typeof url === 'string' && /\/api\/users\/\d+\/reviews/i.test(url)
 
     if (DEBUG_API) {
       try {
@@ -112,12 +102,8 @@ api.interceptors.response.use(
       }
     }
 
-    // On 401, clear token and redirect to login unless handled by caller (e.g., review submissions)
+    // On 401, clear token and redirect to login
     if (status === 401) {
-      if (isReviewEndpoint) {
-        return Promise.reject(error)
-      }
-
       localStorage.removeItem('clovia_token')
       // Avoid infinite redirect loops in debug
       if (window.location.pathname !== '/login') {

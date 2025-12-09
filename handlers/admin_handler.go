@@ -17,214 +17,576 @@ func NewAdminHandler() *AdminHandler {
 	return &AdminHandler{db: database.DB}
 }
 
-// GetAdminStats returns essential dashboard statistics for admin
+// GetAdminStats returns comprehensive dashboard statistics for admin
 func (h *AdminHandler) GetAdminStats(c *fiber.Ctx) error {
+	// Get current time and 30 days ago for date calculations
 	now := time.Now()
+	thirtyDaysAgo := now.AddDate(0, 0, -30)
 
-	// ===== ESSENTIAL METRICS =====
+	// ===== KPI METRICS =====
 
-	// Total Users
-	var totalUsers int
-	err := h.db.QueryRow(`SELECT COUNT(*) FROM users WHERE deleted_at IS NULL`).Scan(&totalUsers)
-	if err != nil {
-		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to fetch total users"})
-	}
-
-	// Premium Users (users with premium listings)
-	var premiumUsers int
-	err = h.db.QueryRow(`
-		SELECT COUNT(DISTINCT u.id) FROM users u
-		JOIN products p ON p.seller_id = u.id
-		WHERE p.is_premium = true AND p.status NOT IN ('sold', 'expired', 'draft')
-		AND u.deleted_at IS NULL AND p.deleted_at IS NULL
-	`).Scan(&premiumUsers)
-	if err != nil {
-		premiumUsers = 0
-	}
-
-	// Total Income (completed trades revenue)
-	var totalIncome float64
-	err = h.db.QueryRow(`
-		SELECT COALESCE(SUM(COALESCE(net_amount, 0)), 0) FROM trades
-		WHERE status = 'completed'
-	`).Scan(&totalIncome)
-	if err != nil {
-		totalIncome = 0
-	}
-
-	// Active Listings
+	// Active Listings (exclude sold/expired/draft)
 	var activeListings int
-	err = h.db.QueryRow(`
-		SELECT COUNT(*) FROM products
-		WHERE status NOT IN ('sold', 'expired', 'draft', 'locked')
+	err := h.db.QueryRow(`
+		SELECT COUNT(*) FROM products 
+		WHERE status NOT IN ('sold', 'expired', 'draft') 
 		AND deleted_at IS NULL
 	`).Scan(&activeListings)
 	if err != nil {
 		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to fetch active listings"})
 	}
 
-	// Total Trades/Completed Deals
-	var totalTrades int
-	err = h.db.QueryRow(`SELECT COUNT(*) FROM trades WHERE status = 'completed'`).Scan(&totalTrades)
-	if err != nil {
-		totalTrades = 0
-	}
-
-	// New Users Today
-	var newUsersToday int
+	// Premium Listings (active listings where is_premium=true)
+	var premiumListings int
 	err = h.db.QueryRow(`
-		SELECT COUNT(*) FROM users
-		WHERE DATE(created_at) = CURDATE() AND deleted_at IS NULL
-	`).Scan(&newUsersToday)
+		SELECT COUNT(*) FROM products 
+		WHERE is_premium = true 
+		AND status NOT IN ('sold', 'expired', 'draft') 
+		AND deleted_at IS NULL
+	`).Scan(&premiumListings)
 	if err != nil {
-		newUsersToday = 0
+		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to fetch premium listings"})
 	}
 
-	// New Listings Today
-	var newListingsToday int
+	// Transactions (Last 30 Days)
+	var transactions30Days int
 	err = h.db.QueryRow(`
-		SELECT COUNT(*) FROM products
-		WHERE DATE(created_at) = CURDATE() AND deleted_at IS NULL
-	`).Scan(&newListingsToday)
+		SELECT COUNT(*) FROM trades 
+		WHERE status = 'completed' 
+		AND created_at >= ?
+	`, thirtyDaysAgo).Scan(&transactions30Days)
 	if err != nil {
-		newListingsToday = 0
+		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to fetch transactions count"})
 	}
 
-	// Verified Users
-	var verifiedUsers int
-	err = h.db.QueryRow(`SELECT COUNT(*) FROM users WHERE verified = true AND deleted_at IS NULL`).Scan(&verifiedUsers)
-	if err != nil {
-		verifiedUsers = 0
-	}
-
-	// Pending Approvals (products awaiting approval)
-	var pendingApprovals int
+	// Net Revenue (Last 30 Days)
+	var netRevenue30Days float64
 	err = h.db.QueryRow(`
-		SELECT COUNT(*) FROM products
-		WHERE status = 'pending_approval' AND deleted_at IS NULL
-	`).Scan(&pendingApprovals)
+		SELECT COALESCE(SUM(net_amount), 0) FROM trades 
+		WHERE status = 'completed' 
+		AND created_at >= ? 
+		AND net_amount IS NOT NULL
+	`, thirtyDaysAgo).Scan(&netRevenue30Days)
 	if err != nil {
-		pendingApprovals = 0
+		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to fetch net revenue"})
 	}
 
-	// Reports Filed
-	var reportsFiled int
-	err = h.db.QueryRow(`SELECT COUNT(*) FROM reports`).Scan(&reportsFiled)
-	if err != nil {
-		reportsFiled = 0
-	}
-
-	// Suspended/Banned Users
-	var suspendedUsers int
-	err = h.db.QueryRow(`SELECT COUNT(*) FROM users WHERE role = 'suspended' AND deleted_at IS NULL`).Scan(&suspendedUsers)
-	if err != nil {
-		suspendedUsers = 0
-	}
-
-	// Storage Usage (estimate based on uploaded files - this is a rough calculation)
-	var storageUsageMB float64
+	// Registered Users breakdown
+	var totalUsers, adminUsers int
 	err = h.db.QueryRow(`
-		SELECT COALESCE(SUM(CASE
-			WHEN image_urls != '[]' THEN LENGTH(image_urls) * 0.001  -- Rough estimate per image
-			ELSE 0.1  -- Base size for products with minimal images
-		END), 0) as estimated_mb FROM products WHERE deleted_at IS NULL
-	`).Scan(&storageUsageMB)
+		SELECT COUNT(*) FROM users WHERE deleted_at IS NULL
+	`).Scan(&totalUsers)
 	if err != nil {
-		storageUsageMB = 0
+		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to fetch total users"})
 	}
 
-	// Revenue Breakdown (last 30 days by week)
-	revenueRows, err := h.db.Query(`
-		SELECT
-			DATE_FORMAT(created_at, '%Y-%U') as week,
-			COALESCE(SUM(COALESCE(net_amount, 0)), 0) as revenue
-		FROM trades
-		WHERE status = 'completed' AND created_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
-		GROUP BY week
-		ORDER BY week DESC
-		LIMIT 4
+	err = h.db.QueryRow(`
+		SELECT COUNT(*) FROM users WHERE role = 'admin' AND deleted_at IS NULL
+	`).Scan(&adminUsers)
+	if err != nil {
+		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to fetch admin users"})
+	}
+
+	// ===== OPERATIONAL METRICS =====
+
+	// Reports to Review
+	var reportsToReview int
+	err = h.db.QueryRow(`
+		SELECT COUNT(*) FROM reports WHERE status = 'pending'
+	`).Scan(&reportsToReview)
+	if err != nil {
+		reportsToReview = 0 // Set to 0 if table doesn't exist
+	}
+
+	// Pending Verifications
+	var pendingVerifications int
+	err = h.db.QueryRow(`
+		SELECT COUNT(*) FROM user_verifications WHERE status = 'pending'
+	`).Scan(&pendingVerifications)
+	if err != nil {
+		pendingVerifications = 0 // Set to 0 if table doesn't exist
+	}
+
+	// Listings Awaiting Approval
+	var listingsAwaitingApproval int
+	err = h.db.QueryRow(`
+		SELECT COUNT(*) FROM products WHERE status = 'pending_approval' AND deleted_at IS NULL
+	`).Scan(&listingsAwaitingApproval)
+	if err != nil {
+		listingsAwaitingApproval = 0 // Set to 0 if table doesn't exist
+	}
+
+	// Disputes Pending
+	var disputesPending int
+	err = h.db.QueryRow(`
+		SELECT COUNT(*) FROM disputes WHERE status = 'pending'
+	`).Scan(&disputesPending)
+	if err != nil {
+		disputesPending = 0 // Set to 0 if table doesn't exist
+	}
+
+	// Payouts Pending
+	var payoutsPending int
+	err = h.db.QueryRow(`
+		SELECT COUNT(*) FROM payouts WHERE status = 'pending'
+	`).Scan(&payoutsPending)
+	if err != nil {
+		payoutsPending = 0 // Set to 0 if table doesn't exist
+	}
+
+	// ===== GROWTH METRICS =====
+
+	// DAU (Daily Active Users)
+	var dau int
+	err = h.db.QueryRow(`
+		SELECT COUNT(DISTINCT user_id) FROM user_activity 
+		WHERE DATE(created_at) = CURDATE()
+	`).Scan(&dau)
+	if err != nil {
+		dau = 0 // Set to 0 if table doesn't exist
+	}
+
+	// WAU (Weekly Active Users)
+	var wau int
+	err = h.db.QueryRow(`
+		SELECT COUNT(DISTINCT user_id) FROM user_activity 
+		WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
+	`).Scan(&wau)
+	if err != nil {
+		wau = 0 // Set to 0 if table doesn't exist
+	}
+
+	// MAU (Monthly Active Users)
+	var mau int
+	err = h.db.QueryRow(`
+		SELECT COUNT(DISTINCT user_id) FROM user_activity 
+		WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+	`).Scan(&mau)
+	if err != nil {
+		mau = 0 // Set to 0 if table doesn't exist
+	}
+
+	// ===== CONVERSION FUNNEL =====
+
+	// Views (product views)
+	var totalViews int
+	err = h.db.QueryRow(`
+		SELECT COUNT(*) FROM product_views WHERE created_at >= ?
+	`, thirtyDaysAgo).Scan(&totalViews)
+	if err != nil {
+		totalViews = 0 // Set to 0 if table doesn't exist
+	}
+
+	// Chats initiated
+	var totalChats int
+	err = h.db.QueryRow(`
+		SELECT COUNT(*) FROM chats WHERE created_at >= ?
+	`, thirtyDaysAgo).Scan(&totalChats)
+	if err != nil {
+		totalChats = 0 // Set to 0 if table doesn't exist
+	}
+
+	// Offers made
+	var totalOffers int
+	err = h.db.QueryRow(`
+		SELECT COUNT(*) FROM offers WHERE created_at >= ?
+	`, thirtyDaysAgo).Scan(&totalOffers)
+	if err != nil {
+		totalOffers = 0 // Set to 0 if table doesn't exist
+	}
+
+	// Completed transactions
+	var completedTransactions int
+	err = h.db.QueryRow(`
+		SELECT COUNT(*) FROM trades WHERE status = 'completed' AND created_at >= ?
+	`, thirtyDaysAgo).Scan(&completedTransactions)
+	if err != nil {
+		completedTransactions = 0
+	}
+
+	// ===== TOP CATEGORIES =====
+
+	// Get top categories by share of active listings
+	categoryRows, err := h.db.Query(`
+		SELECT c.name, COUNT(p.id) as count
+		FROM categories c
+		LEFT JOIN products p ON p.category_id = c.id 
+		AND p.status NOT IN ('sold', 'expired', 'draft') 
+		AND p.deleted_at IS NULL
+		GROUP BY c.id, c.name
+		ORDER BY count DESC
+		LIMIT 5
 	`)
 	if err != nil {
-		revenueRows = nil
+		// If categories table doesn't exist, create empty data
+		categoryRows = nil
 	}
 
-	type RevenueBreakdown struct {
-		Period  string  `json:"period"`
-		Amount  float64 `json:"amount"`
+	type CategoryData struct {
+		Name  string  `json:"name"`
+		Count int     `json:"count"`
+		Share float64 `json:"share"`
 	}
 
-	var revenueBreakdown []RevenueBreakdown
-	if revenueRows != nil {
-		defer revenueRows.Close()
-		for revenueRows.Next() {
-			var rb RevenueBreakdown
-			if err := revenueRows.Scan(&rb.Period, &rb.Amount); err == nil {
-				// Format period as "Week X"
-				rb.Period = "Week " + rb.Period[len(rb.Period)-2:]
-				revenueBreakdown = append(revenueBreakdown, rb)
+	var topCategories []CategoryData
+	if categoryRows != nil {
+		defer categoryRows.Close()
+
+		for categoryRows.Next() {
+			var cat CategoryData
+			if err := categoryRows.Scan(&cat.Name, &cat.Count); err == nil {
+				if activeListings > 0 {
+					cat.Share = float64(cat.Count) / float64(activeListings) * 100
+				}
+				topCategories = append(topCategories, cat)
 			}
 		}
 	}
 
-	// Recent Activity (last 5 actions)
+	// ===== TRANSACTION TRENDS CHART =====
+
+	// Get transaction data for chart (last 30 days) with multiple metrics
+	trendRows, err := h.db.Query(`
+		SELECT 
+			DATE_FORMAT(created_at, '%Y-%m-%d') as date,
+			COUNT(*) as count,
+			COALESCE(SUM(net_amount), 0) as gmv,
+			COALESCE(SUM(net_amount), 0) as revenue
+		FROM trades 
+		WHERE status = 'completed' 
+		AND created_at >= ?
+		GROUP BY DATE(created_at)
+		ORDER BY date
+	`, thirtyDaysAgo)
+	if err != nil {
+		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to fetch transaction chart data"})
+	}
+	defer trendRows.Close()
+
+	type TrendData struct {
+		Date    string  `json:"date"`
+		Count   int     `json:"count"`
+		GMV     float64 `json:"gmv"`
+		Revenue float64 `json:"revenue"`
+	}
+
+	var trendData []TrendData
+	for trendRows.Next() {
+		var data TrendData
+		if err := trendRows.Scan(&data.Date, &data.Count, &data.GMV, &data.Revenue); err == nil {
+			trendData = append(trendData, data)
+		}
+	}
+
+	// ===== RECENT ADMIN ACTIVITY =====
+
+	// Get recent admin actions (reports, approvals, etc.)
 	activityRows, err := h.db.Query(`
-		SELECT 'New User' as action, COUNT(*) as count, MAX(created_at) as latest
-		FROM users WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL 1 DAY) AND deleted_at IS NULL
+		SELECT 
+			'Report' as action_type,
+			r.id,
+			r.status,
+			r.created_at,
+			CONCAT('Report #', r.id) as description,
+			u.name as user_name
+		FROM reports r
+		JOIN users u ON u.id = r.reported_user_id
+		WHERE r.created_at >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
 		UNION ALL
-		SELECT 'New Listing' as action, COUNT(*) as count, MAX(created_at) as latest
-		FROM products WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL 1 DAY) AND deleted_at IS NULL
-		UNION ALL
-		SELECT 'Trade Completed' as action, COUNT(*) as count, MAX(created_at) as latest
-		FROM trades WHERE status = 'completed' AND created_at >= DATE_SUB(CURDATE(), INTERVAL 1 DAY)
+		SELECT 
+			'Verification' as action_type,
+			v.id,
+			v.status,
+			v.created_at,
+			CONCAT('Verification for ', u.name) as description,
+			u.name as user_name
+		FROM user_verifications v
+		JOIN users u ON u.id = v.user_id
+		WHERE v.created_at >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
+		ORDER BY created_at DESC
+		LIMIT 10
 	`)
 	if err != nil {
+		// If tables don't exist, create empty data
 		activityRows = nil
 	}
 
-	type ActivityItem struct {
-		Action string    `json:"action"`
-		Count  int       `json:"count"`
-		Latest time.Time `json:"latest"`
+	type AdminActivity struct {
+		ActionType  string    `json:"action_type"`
+		ID          int       `json:"id"`
+		Status      string    `json:"status"`
+		CreatedAt   time.Time `json:"created_at"`
+		Description string    `json:"description"`
+		UserName    string    `json:"user_name"`
 	}
 
-	var recentActivity []ActivityItem
+	var recentAdminActivity []AdminActivity
 	if activityRows != nil {
 		defer activityRows.Close()
+
 		for activityRows.Next() {
-			var ai ActivityItem
-			if err := activityRows.Scan(&ai.Action, &ai.Count, &ai.Latest); err == nil {
-				recentActivity = append(recentActivity, ai)
+			var activity AdminActivity
+			if err := activityRows.Scan(&activity.ActionType, &activity.ID, &activity.Status, &activity.CreatedAt, &activity.Description, &activity.UserName); err == nil {
+				recentAdminActivity = append(recentAdminActivity, activity)
 			}
 		}
 	}
 
-	// ===== COMPILE ESSENTIAL STATISTICS =====
+	// ===== PRODUCT ANALYTICS =====
+
+	// Price Range Distribution
+	type PriceRange struct {
+		Range      string  `json:"range"`
+		Count      int     `json:"count"`
+		Percentage float64 `json:"percentage"`
+	}
+
+	priceRangeRows, err := h.db.Query(`
+		SELECT 
+			CASE 
+				WHEN price IS NULL OR price = 0 THEN 'Barter Only'
+				WHEN price <= 500 THEN '₱0 - ₱500'
+				WHEN price <= 1000 THEN '₱501 - ₱1,000'
+				WHEN price <= 2500 THEN '₱1,001 - ₱2,500'
+				WHEN price <= 5000 THEN '₱2,501 - ₱5,000'
+				ELSE '₱5,001+'
+			END as price_range,
+			COUNT(*) as count
+		FROM products 
+		WHERE status NOT IN ('sold', 'expired', 'draft') 
+		AND deleted_at IS NULL
+		GROUP BY price_range
+		ORDER BY count DESC
+	`)
+	if err != nil {
+		priceRangeRows = nil
+	}
+
+	var priceRanges []PriceRange
+	if priceRangeRows != nil {
+		defer priceRangeRows.Close()
+		for priceRangeRows.Next() {
+			var pr PriceRange
+			if err := priceRangeRows.Scan(&pr.Range, &pr.Count); err == nil {
+				if activeListings > 0 {
+					pr.Percentage = float64(pr.Count) / float64(activeListings) * 100
+				}
+				priceRanges = append(priceRanges, pr)
+			}
+		}
+	}
+
+	// Condition Distribution
+	type ConditionData struct {
+		Condition  string  `json:"condition"`
+		Count      int     `json:"count"`
+		Percentage float64 `json:"percentage"`
+	}
+
+	conditionRows, err := h.db.Query(`
+		SELECT 
+			COALESCE(condition, 'Not Specified') as condition,
+			COUNT(*) as count
+		FROM products 
+		WHERE status NOT IN ('sold', 'expired', 'draft') 
+		AND deleted_at IS NULL
+		GROUP BY condition
+		ORDER BY count DESC
+	`)
+	if err != nil {
+		conditionRows = nil
+	}
+
+	var conditionDistribution []ConditionData
+	if conditionRows != nil {
+		defer conditionRows.Close()
+		for conditionRows.Next() {
+			var cd ConditionData
+			if err := conditionRows.Scan(&cd.Condition, &cd.Count); err == nil {
+				if activeListings > 0 {
+					cd.Percentage = float64(cd.Count) / float64(activeListings) * 100
+				}
+				conditionDistribution = append(conditionDistribution, cd)
+			}
+		}
+	}
+
+	// Location Analytics
+	type LocationData struct {
+		City        string   `json:"city"`
+		Count       int      `json:"count"`
+		MeetupSpots []string `json:"meetup_spots"`
+	}
+
+	locationRows, err := h.db.Query(`
+		SELECT 
+			COALESCE(location, 'Not Specified') as location,
+			COUNT(*) as count
+		FROM products 
+		WHERE status NOT IN ('sold', 'expired', 'draft') 
+		AND deleted_at IS NULL
+		GROUP BY location
+		ORDER BY count DESC
+		LIMIT 10
+	`)
+	if err != nil {
+		locationRows = nil
+	}
+
+	var locationAnalytics []LocationData
+	if locationRows != nil {
+		defer locationRows.Close()
+		for locationRows.Next() {
+			var ld LocationData
+			if err := locationRows.Scan(&ld.City, &ld.Count); err == nil {
+				// Add some sample meetup spots based on city
+				switch ld.City {
+				case "Manila":
+					ld.MeetupSpots = []string{"SM Mall of Asia", "Greenbelt Mall", "Robinsons Place", "Ayala Center"}
+				case "Quezon City":
+					ld.MeetupSpots = []string{"SM North EDSA", "Trinoma Mall", "Eastwood City", "UP Diliman"}
+				case "Makati":
+					ld.MeetupSpots = []string{"Glorietta", "Power Plant Mall", "Greenbelt", "Ayala Avenue"}
+				case "Taguig":
+					ld.MeetupSpots = []string{"BGC High Street", "Market Market", "SM Aura", "Venice Grand Canal"}
+				case "Pasig":
+					ld.MeetupSpots = []string{"Ortigas Center", "Tiendesitas", "Robinsons Galleria", "Eastwood"}
+				default:
+					ld.MeetupSpots = []string{"City Center", "Main Mall", "Public Market"}
+				}
+				locationAnalytics = append(locationAnalytics, ld)
+			}
+		}
+	}
+
+	// Category Analytics
+	type CategoryAnalytics struct {
+		Category   string  `json:"category"`
+		Count      int     `json:"count"`
+		Percentage float64 `json:"percentage"`
+		Color      string  `json:"color"`
+	}
+
+	categoryAnalyticsRows, err := h.db.Query(`
+		SELECT 
+			COALESCE(category, 'Uncategorized') as category,
+			COUNT(*) as count
+		FROM products 
+		WHERE status NOT IN ('sold', 'expired', 'draft') 
+		AND deleted_at IS NULL
+		GROUP BY category
+		ORDER BY count DESC
+		LIMIT 10
+	`)
+	if err != nil {
+		categoryAnalyticsRows = nil
+	}
+
+	var categoryAnalytics []CategoryAnalytics
+	colors := []string{"blue", "green", "purple", "orange", "teal", "pink", "red", "yellow", "cyan", "indigo"}
+	if categoryAnalyticsRows != nil {
+		defer categoryAnalyticsRows.Close()
+		colorIndex := 0
+		for categoryAnalyticsRows.Next() {
+			var ca CategoryAnalytics
+			if err := categoryAnalyticsRows.Scan(&ca.Category, &ca.Count); err == nil {
+				if activeListings > 0 {
+					ca.Percentage = float64(ca.Count) / float64(activeListings) * 100
+				}
+				ca.Color = colors[colorIndex%len(colors)]
+				categoryAnalytics = append(categoryAnalytics, ca)
+				colorIndex++
+			}
+		}
+	}
+
+	// Recent Listings
+	type RecentListing struct {
+		ID         int       `json:"id"`
+		Title      string    `json:"title"`
+		Price      *float64  `json:"price"`
+		Condition  *string   `json:"condition"`
+		Location   *string   `json:"location"`
+		Category   *string   `json:"category"`
+		CreatedAt  time.Time `json:"created_at"`
+		SellerName string    `json:"seller_name"`
+		Status     string    `json:"status"`
+	}
+
+	recentListingsRows, err := h.db.Query(`
+		SELECT 
+			p.id,
+			p.title,
+			p.price,
+			p.condition,
+			p.location,
+			p.category,
+			p.created_at,
+			p.status,
+			u.name as seller_name
+		FROM products p
+		JOIN users u ON u.id = p.seller_id
+		WHERE p.status NOT IN ('sold', 'expired', 'draft') 
+		AND p.deleted_at IS NULL
+		ORDER BY p.created_at DESC
+		LIMIT 10
+	`)
+	if err != nil {
+		recentListingsRows = nil
+	}
+
+	var recentListings []RecentListing
+	if recentListingsRows != nil {
+		defer recentListingsRows.Close()
+		for recentListingsRows.Next() {
+			var rl RecentListing
+			if err := recentListingsRows.Scan(&rl.ID, &rl.Title, &rl.Price, &rl.Condition, &rl.Location, &rl.Category, &rl.CreatedAt, &rl.Status, &rl.SellerName); err == nil {
+				recentListings = append(recentListings, rl)
+			}
+		}
+	}
+
+	// ===== COMPILE ALL STATISTICS =====
 
 	stats := fiber.Map{
-		// Core Metrics
-		"total_users":         totalUsers,
-		"premium_users":       premiumUsers,
-		"total_income":        totalIncome,
-		"active_listings":     activeListings,
-		"total_trades":        totalTrades,
+		// KPI Metrics
+		"active_listings":      activeListings,
+		"premium_listings":     premiumListings,
+		"transactions_30_days": transactions30Days,
+		"net_revenue_30_days":  netRevenue30Days,
+		"total_users":          totalUsers,
+		"admin_users":          adminUsers,
+		"regular_users":        totalUsers - adminUsers,
 
-		// Daily Metrics
-		"new_users_today":     newUsersToday,
-		"new_listings_today":  newListingsToday,
+		// Operational Metrics
+		"reports_to_review":          reportsToReview,
+		"pending_verifications":      pendingVerifications,
+		"listings_awaiting_approval": listingsAwaitingApproval,
+		"disputes_pending":           disputesPending,
+		"payouts_pending":            payoutsPending,
 
-		// User Management
-		"verified_users":      verifiedUsers,
-		"pending_approvals":   pendingApprovals,
-		"reports_filed":       reportsFiled,
-		"suspended_users":     suspendedUsers,
+		// Growth Metrics
+		"dau": dau,
+		"wau": wau,
+		"mau": mau,
 
-		// System Metrics
-		"storage_usage_mb":    storageUsageMB,
-		"revenue_breakdown":   revenueBreakdown,
-		"recent_activity":     recentActivity,
+		// Conversion Funnel
+		"total_views":            totalViews,
+		"total_chats":            totalChats,
+		"total_offers":           totalOffers,
+		"completed_transactions": completedTransactions,
 
-		// Metadata
-		"last_updated":        now.Format("2006-01-02 15:04:05"),
+		// Product Analytics
+		"price_ranges":           priceRanges,
+		"condition_distribution": conditionDistribution,
+		"location_analytics":     locationAnalytics,
+		"category_analytics":     categoryAnalytics,
+		"recent_listings":        recentListings,
+
+		// Charts and Data
+		"top_categories":        topCategories,
+		"trend_data":            trendData,
+		"recent_admin_activity": recentAdminActivity,
 	}
 
 	return c.JSON(models.APIResponse{Success: true, Data: stats})

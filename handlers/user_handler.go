@@ -3,8 +3,6 @@ package handlers
 import (
 	"database/sql"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -14,7 +12,6 @@ import (
 	"github.com/xashathebest/clovia/database"
 	"github.com/xashathebest/clovia/middleware"
 	"github.com/xashathebest/clovia/models"
-	"github.com/xashathebest/clovia/services"
 	"github.com/xashathebest/clovia/utils"
 )
 
@@ -198,89 +195,6 @@ func (h *UserHandler) Login(c *fiber.Ctx) error {
 	})
 }
 
-// GoogleLogin handles Google OAuth authentication
-func (h *UserHandler) GoogleLogin(c *fiber.Ctx) error {
-	var req struct {
-		IDToken     string `json:"idToken"`
-		UID         string `json:"uid"`
-		Email       string `json:"email"`
-		DisplayName string `json:"displayName"`
-		PhotoURL    string `json:"photoURL"`
-	}
-
-	if err := c.BodyParser(&req); err != nil {
-		return c.Status(400).JSON(models.APIResponse{
-			Success: false,
-			Error:   "Invalid request body",
-		})
-	}
-
-	if req.Email == "" {
-		return c.Status(400).JSON(models.APIResponse{
-			Success: false,
-			Error:   "Email is required",
-		})
-	}
-
-	// Check if user exists
-	var user models.User
-	err := h.db.QueryRow(
-		"SELECT id, name, email, role, verified, profile_picture FROM users WHERE email = ?",
-		req.Email,
-	).Scan(&user.ID, &user.Name, &user.Email, &user.Role, &user.Verified, &user.ProfilePicture)
-
-	if err == sql.ErrNoRows {
-		// Create new user from Google info
-		result, err := h.db.Exec(
-			"INSERT INTO users (name, email, role, verified, profile_picture, is_organization, org_verified, badges) VALUES (?, ?, ?, ?, ?, ?, ?, JSON_ARRAY())",
-			req.DisplayName,
-			req.Email,
-			"user",
-			true, // Mark as verified since they authenticated with Google
-			req.PhotoURL,
-			false,
-			false,
-		)
-		if err != nil {
-			return c.Status(500).JSON(models.APIResponse{
-				Success: false,
-				Error:   "Failed to create user",
-			})
-		}
-
-		userID, _ := result.LastInsertId()
-		user.ID = int(userID)
-		user.Name = req.DisplayName
-		user.Email = req.Email
-		user.Verified = true
-		user.ProfilePicture = req.PhotoURL
-		user.Role = "user"
-	} else if err != nil {
-		return c.Status(500).JSON(models.APIResponse{
-			Success: false,
-			Error:   "Database error",
-		})
-	}
-
-	// Generate JWT token
-	token, err := utils.GenerateJWT(user.ID, user.Email)
-	if err != nil {
-		return c.Status(500).JSON(models.APIResponse{
-			Success: false,
-			Error:   "Failed to generate token",
-		})
-	}
-
-	return c.JSON(models.APIResponse{
-		Success: true,
-		Message: "Google login successful",
-		Data: fiber.Map{
-			"user":  user,
-			"token": token,
-		},
-	})
-}
-
 // GetProfile gets the current user's profile
 func (h *UserHandler) GetProfile(c *fiber.Ctx) error {
 	userID, ok := middleware.GetUserIDFromContext(c)
@@ -292,11 +206,27 @@ func (h *UserHandler) GetProfile(c *fiber.Ctx) error {
 	}
 
 	var user models.User
-	// Fixed: single SELECT and Scan (removed duplicated/invalid lines)
+	// Fixed: scan background fields into local variables (models.User may not have those fields)
+	var backgroundImage string
+	var backgroundPosition string
+
 	err := h.db.QueryRow(
-		"SELECT id, name, email, role, verified, org_logo_url, COALESCE(profile_picture, '') AS profile_picture, COALESCE(bio, '') AS bio, COALESCE(background_image, '') AS background_image, COALESCE(background_position, '') AS background_position, COALESCE(department, '') AS department, created_at, updated_at FROM users WHERE id = ?",
+		"SELECT id, name, email, role, verified, org_logo_url, COALESCE(profile_picture, '') as profile_picture, COALESCE(bio, '') as bio, COALESCE(background_image, '') as background_image, COALESCE(background_position, '') as background_position, created_at, updated_at FROM users WHERE id = ?",
 		userID,
-	).Scan(&user.ID, &user.Name, &user.Email, &user.Role, &user.Verified, &user.OrgLogoURL, &user.ProfilePicture, &user.Bio, &user.BackgroundImage, &user.BackgroundPosition, &user.Department, &user.CreatedAt, &user.UpdatedAt)
+	).Scan(
+		&user.ID,
+		&user.Name,
+		&user.Email,
+		&user.Role,
+		&user.Verified,
+		&user.OrgLogoURL,
+		&user.ProfilePicture,
+		&user.Bio,
+		&backgroundImage,
+		&backgroundPosition,
+		&user.CreatedAt,
+		&user.UpdatedAt,
+	)
 
 	if err != nil {
 		// Return a friendly fallback (200) so frontend does not produce a network 404.
@@ -315,9 +245,14 @@ func (h *UserHandler) GetProfile(c *fiber.Ctx) error {
 		})
 	}
 
+	// Return user plus background fields so clients can access them even if models.User lacks those fields
 	return c.JSON(models.APIResponse{
 		Success: true,
-		Data:    user,
+		Data: fiber.Map{
+			"user":                user,
+			"background_image":    backgroundImage,
+			"background_position": backgroundPosition,
+		},
 	})
 }
 
@@ -430,24 +365,17 @@ func (h *UserHandler) UploadProfilePicture(c *fiber.Ctx) error {
 		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "No file uploaded: " + err.Error()})
 	}
 
-	var finalURL string
-	if url, err := services.UploadFileToCloudinary(file, "profile-pictures"); err == nil && url != "" {
-		finalURL = url
-	} else {
-		if err != nil && err != services.ErrCloudinaryDisabled {
-			fmt.Printf("Cloudinary profile upload failed: %v\n", err)
-		}
-
-		fsPath, publicPath := services.GenerateLocalMediaPaths("profile-pictures", file.Filename)
-		if err := os.MkdirAll(filepath.Dir(fsPath), 0o755); err != nil {
-			return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to prepare upload directory"})
-		}
-		if err := c.SaveFile(file, fsPath); err != nil {
-			return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to save file"})
-		}
-
-		finalURL = buildAbsoluteURL(c, publicPath)
+	savePath := fmt.Sprintf("uploads/%d_%s", time.Now().UnixNano(), file.Filename)
+	if err := c.SaveFile(file, savePath); err != nil {
+		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to save file"})
 	}
+
+	// Build an absolute URL so clients (dev server on different port) can load images
+	host := c.Get("Host")
+	if host == "" {
+		host = "localhost:4000"
+	}
+	url := fmt.Sprintf("http://%s/%s", host, savePath)
 
 	// Ensure profile_picture column exists
 	var exists int
@@ -457,36 +385,12 @@ func (h *UserHandler) UploadProfilePicture(c *fiber.Ctx) error {
 	}
 
 	// Save URL to user's profile
-	_, err = h.db.Exec("UPDATE users SET profile_picture = ? WHERE id = ?", finalURL, userID)
+	_, err = h.db.Exec("UPDATE users SET profile_picture = ? WHERE id = ?", url, userID)
 	if err != nil {
 		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to update user profile picture"})
 	}
 
-	return c.JSON(models.APIResponse{Success: true, Data: finalURL, Message: "Uploaded"})
-}
-
-func buildAbsoluteURL(c *fiber.Ctx, path string) string {
-	if path == "" {
-		return ""
-	}
-	if strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://") {
-		return path
-	}
-	scheme := c.Protocol()
-	if scheme == "" {
-		scheme = "http"
-	}
-	host := c.Hostname()
-	if host == "" {
-		host = c.Get("Host")
-	}
-	if host == "" {
-		host = "localhost:4000"
-	}
-	if !strings.HasPrefix(path, "/") {
-		path = "/" + path
-	}
-	return fmt.Sprintf("%s://%s%s", scheme, host, path)
+	return c.JSON(models.APIResponse{Success: true, Data: url, Message: "Uploaded"})
 }
 
 // ChangePassword allows an authenticated user to change their password.
@@ -560,15 +464,12 @@ func (h *UserHandler) GetUserByID(c *fiber.Ctx) error {
 	}
 
 	var user models.User
-	var profilePicture, backgroundImage, backgroundPosition, department, bio sql.NullString
 	err = h.db.QueryRow(
-		"SELECT id, name, email, role, verified, is_organization, org_verified, org_name, org_logo_url, profile_picture, background_image, background_position, department, bio, badges, created_at, updated_at FROM users WHERE id = ?",
+		"SELECT id, name, email, role, verified, is_organization, org_verified, org_name, org_logo_url, COALESCE(profile_picture, '') as profile_picture, department, bio, badges, created_at, updated_at FROM users WHERE id = ?",
 		userID,
-	).Scan(&user.ID, &user.Name, &user.Email, &user.Role, &user.Verified, &user.IsOrganization, &user.OrgVerified, &user.OrgName, &user.OrgLogoURL, &profilePicture, &backgroundImage, &backgroundPosition, &department, &bio, &user.Badges, &user.CreatedAt, &user.UpdatedAt)
+	).Scan(&user.ID, &user.Name, &user.Email, &user.Role, &user.Verified, &user.IsOrganization, &user.OrgVerified, &user.OrgName, &user.OrgLogoURL, &user.ProfilePicture, &user.Department, &user.Bio, &user.Badges, &user.CreatedAt, &user.UpdatedAt)
 
-	fmt.Printf("🔍 GetUserByID(%d) query result - error: %v\n", userID, err)
 	if err != nil {
-		fmt.Printf("❌ Database error for user %d: %v\n", userID, err)
 		// Return a friendly fallback (200) so frontend does not produce a network 404.
 		fallback := models.User{
 			ID:             userID,
@@ -582,26 +483,6 @@ func (h *UserHandler) GetUserByID(c *fiber.Ctx) error {
 			Success: true,
 			Data:    fallback,
 		})
-	}
-
-	// Convert sql.NullString to regular strings AFTER error check
-	if profilePicture.Valid {
-		user.ProfilePicture = profilePicture.String
-		fmt.Printf("✅ Setting profile_picture for user %d: '%s'\n", userID, profilePicture.String)
-	} else {
-		fmt.Printf("⚠️ profile_picture for user %d is NULL/invalid\n", userID)
-	}
-	if backgroundImage.Valid {
-		user.BackgroundImage = backgroundImage.String
-	}
-	if backgroundPosition.Valid {
-		user.BackgroundPosition = backgroundPosition.String
-	}
-	if department.Valid {
-		user.Department = department.String
-	}
-	if bio.Valid {
-		user.Bio = bio.String
 	}
 
 	return c.JSON(models.APIResponse{
@@ -906,114 +787,5 @@ func (h *UserHandler) GetSavedProducts(c *fiber.Ctx) error {
 			Limit:      limit,
 			TotalPages: totalPages,
 		},
-	})
-}
-
-// GetSellerStats gets comprehensive seller statistics
-func (h *UserHandler) GetSellerStats(c *fiber.Ctx) error {
-	userID, err := strconv.Atoi(c.Params("id"))
-	if err != nil {
-		return c.Status(400).JSON(models.APIResponse{
-			Success: false,
-			Error:   "Invalid user ID",
-		})
-	}
-
-	// Check if user exists
-	var userCreatedAt time.Time
-	err = h.db.QueryRow("SELECT created_at FROM users WHERE id = ?", userID).Scan(&userCreatedAt)
-	if err != nil {
-		return c.Status(404).JSON(models.APIResponse{
-			Success: false,
-			Error:   "User not found",
-		})
-	}
-
-	stats := models.SellerStats{
-		UserID:          userID,
-		MemberSinceYear: userCreatedAt.Year(),
-	}
-
-	// Calculate total trades (completed trades for this user as seller)
-	err = h.db.QueryRow(`
-		SELECT COUNT(*) FROM trades 
-		WHERE seller_id = ? AND status IN ('completed', 'auto_completed')
-	`, userID).Scan(&stats.TotalTrades)
-	if err != nil {
-		stats.TotalTrades = 0
-	}
-
-	// Calculate completed trades
-	err = h.db.QueryRow(`
-		SELECT COUNT(*) FROM trades 
-		WHERE seller_id = ? AND status = 'completed' AND seller_completed = true
-	`, userID).Scan(&stats.CompletedTrades)
-	if err != nil {
-		stats.CompletedTrades = 0
-	}
-
-	// Calculate average rating and positive feedback percentage from reviews table
-	var avgRating sql.NullFloat64
-	var totalReviews sql.NullInt64
-	var positivePercent sql.NullFloat64
-
-	err = h.db.QueryRow(`
-		SELECT 
-			COALESCE(AVG(rating), 0) AS avg_rating,
-			COUNT(*) AS total_reviews,
-			COALESCE(SUM(CASE WHEN rating >= 4 THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*), 0), 0) AS positive_feedback
-		FROM reviews
-		WHERE reviewed_user_id = ?
-	`, userID).Scan(&avgRating, &totalReviews, &positivePercent)
-
-	if err == nil && avgRating.Valid {
-		stats.AvgRating = avgRating.Float64
-		stats.TotalFeedback = int(totalReviews.Int64)
-		if positivePercent.Valid {
-			stats.PositivePercent = positivePercent.Float64
-		}
-	}
-
-	// Determine response metric based on average rating
-	if stats.AvgRating >= 4.5 {
-		stats.ResponseMetric = "excellent"
-	} else if stats.AvgRating >= 3.5 {
-		stats.ResponseMetric = "good"
-	} else if stats.AvgRating >= 2.5 {
-		stats.ResponseMetric = "average"
-	} else {
-		stats.ResponseMetric = "poor"
-	}
-
-	// Calculate average response time (estimated as hours from trade creation to first completion activity)
-	var avgResponseTimeMinutes sql.NullFloat64
-	err = h.db.QueryRow(`
-		SELECT AVG(EXTRACT(EPOCH FROM (CASE 
-			WHEN seller_completed THEN COALESCE(updated_at, NOW())
-			ELSE NOW()
-		END - created_at)) / 60) as avg_response_minutes
-		FROM trades
-		WHERE seller_id = ? AND created_at > DATE_SUB(NOW(), INTERVAL 90 DAY)
-		LIMIT 100
-	`, userID).Scan(&avgResponseTimeMinutes)
-
-	if err == nil && avgResponseTimeMinutes.Valid {
-		minutes := int(avgResponseTimeMinutes.Float64)
-		if minutes < 60 {
-			stats.AvgResponseTime = fmt.Sprintf("%dm", minutes)
-		} else if minutes < 1440 {
-			hours := minutes / 60
-			stats.AvgResponseTime = fmt.Sprintf("%dh", hours)
-		} else {
-			days := minutes / 1440
-			stats.AvgResponseTime = fmt.Sprintf("%dd", days)
-		}
-	} else {
-		stats.AvgResponseTime = "N/A"
-	}
-
-	return c.JSON(models.APIResponse{
-		Success: true,
-		Data:    stats,
 	})
 }

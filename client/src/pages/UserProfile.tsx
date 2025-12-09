@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState, useRef } from 'react'
-import { useParams, Link as RouterLink, useNavigate } from 'react-router-dom'
+import { useParams, Link as RouterLink } from 'react-router-dom'
 import {
   Box,
   Container,
@@ -75,18 +75,8 @@ import { getProductUrl } from '../utils/productUtils'
   is_following?: boolean
 }
 
-type SellerStats = {
-  avg_rating?: number
-  positive_percent?: number
-  total_feedback?: number
-  total_trades?: number
-  completed_trades?: number
-  avg_response_time?: string
-}
-
 const UserProfile: React.FC = () => {
   const { id } = useParams<{ id: string }>()
-  const navigate = useNavigate()
   const { user: currentUser } = useAuth()
   const [user, setUser] = useState<PublicUser | null>(null)
   const [isEditOpen, setIsEditOpen] = useState(false)
@@ -107,62 +97,33 @@ const UserProfile: React.FC = () => {
   const [activeTab, setActiveTab] = useState(0)
   const [sortBy, setSortBy] = useState('newest')
   const [reviews, setReviews] = useState<any[]>([])
-  const [sellerStats, setSellerStats] = useState<SellerStats | null>(null)
   const { getUserProducts } = useProducts()
   const { isOpen, onOpen, onClose } = useDisclosure()
   const toast = useToast()
   
-  // Review form state
-  const [reviewRating, setReviewRating] = useState(0)
-  const [reviewComment, setReviewComment] = useState('')
-  const [isSubmittingReview, setIsSubmittingReview] = useState(false)
-  
-  // Fetch reviews from API
+  // Mock reviews data - replace with actual API call
   useEffect(() => {
-    const fetchReviews = async () => {
-      if (!id) return
-      try {
-        const response = await api.get(`/api/users/${id}/reviews`)
-        setReviews(response.data?.data || response.data || [])
-      } catch (error) {
-        console.error('Failed to fetch reviews:', error)
-        // Fallback to mock data if API fails
-        const mockReviews = [
-          {
-            id: 1,
-            reviewer: 'John D.',
-            avatar: 'https://randomuser.me/api/portraits/men/1.jpg',
-            rating: 5,
-            comment: 'Great seller! Item was exactly as described.',
-            date: '2023-10-15',
-          },
-          {
-            id: 2,
-            reviewer: 'Sarah M.',
-            avatar: 'https://randomuser.me/api/portraits/women/1.jpg',
-            rating: 4,
-            comment: 'Smooth transaction, would trade again!',
-            date: '2023-10-10',
-          },
-        ]
-        setReviews(mockReviews)
-      }
-    }
-    fetchReviews()
-  }, [id])
-
-  useEffect(() => {
-    const fetchStats = async () => {
-      if (!id) return
-      try {
-        const res = await api.get(`/api/users/${id}/stats`)
-        setSellerStats(res.data?.data || res.data || null)
-      } catch (err) {
-        setSellerStats(null)
-      }
-    }
-    fetchStats()
-  }, [id])
+    // In a real app, fetch reviews from API
+    const mockReviews = [
+      {
+        id: 1,
+        reviewer: 'John D.',
+        avatar: 'https://randomuser.me/api/portraits/men/1.jpg',
+        rating: 5,
+        comment: 'Great seller! Item was exactly as described.',
+        date: '2023-10-15',
+      },
+      {
+        id: 2,
+        reviewer: 'Sarah M.',
+        avatar: 'https://randomuser.me/api/portraits/women/1.jpg',
+        rating: 4,
+        comment: 'Smooth transaction, would trade again!',
+        date: '2023-10-10',
+      },
+    ]
+    setReviews(mockReviews)
+  }, [])
 
   useEffect(() => {
     const run = async () => {
@@ -219,7 +180,7 @@ const UserProfile: React.FC = () => {
           org_verified: (apiUser as any).org_verified,
           org_name: (apiUser as any).org_name,
           org_logo_url: (apiUser as any).org_logo_url,
-          department: (apiUser as any).department || 'Unknown',
+          department: (apiUser as any).department,
         })
 
         // Fetch user's products to infer stats and successful trades
@@ -377,15 +338,9 @@ const UserProfile: React.FC = () => {
     const total = products.length
     const active = products.filter(p => p.status === 'available').length
     const completed = products.filter(p => p.status === 'sold' || p.status === 'traded').length
-    const rating = sellerStats?.avg_rating ?? user?.rating ?? 4.6
-    const tradesCompleted = sellerStats?.completed_trades ?? completed
-    const avgResponse = sellerStats?.avg_response_time ?? `${user?.response_time_minutes || 30} min`
-    return { total, active, completed: tradesCompleted, rating, avgResponse }
-  }, [products, user, sellerStats])
-
-  const displayRating = sellerStats?.avg_rating ?? user?.rating ?? 4.8
-  const displayTotalReviews = sellerStats?.total_feedback ?? user?.total_reviews ?? reviews.length
-  const displayPositivePercent = sellerStats?.positive_percent ?? user?.positive_feedback ?? 98
+    const rating = user?.rating ?? 4.6
+    return { total, active, completed, rating }
+  }, [products, user])
 
   // Successful trades with more details
   const successfulTrades = useMemo(() => {
@@ -443,124 +398,6 @@ const UserProfile: React.FC = () => {
       duration: 3000,
       isClosable: true,
     })
-  }
-
-  const handleSubmitReview = async () => {
-    const token = localStorage.getItem('clovia_token')
-    if (!currentUser || !token) {
-      toast({
-        title: 'Login required',
-        description: 'Please sign in to leave a review.',
-        status: 'warning',
-        duration: 3000,
-        isClosable: true,
-      })
-      navigate('/login')
-      return
-    }
-
-    if (!reviewRating || reviewRating === 0) {
-      toast({
-        title: 'Rating required',
-        description: 'Please select a star rating before submitting.',
-        status: 'warning',
-        duration: 3000,
-        isClosable: true,
-      })
-      return
-    }
-
-    if (!reviewComment.trim()) {
-      toast({
-        title: 'Review required',
-        description: 'Please write a review before submitting.',
-        status: 'warning',
-        duration: 3000,
-        isClosable: true,
-      })
-      return
-    }
-
-    setIsSubmittingReview(true)
-    try {
-      const payload = {
-        user_id: Number(id),
-        rating: reviewRating,
-        comment: reviewComment.trim(),
-      }
-
-      await api.post(`/api/users/${id}/reviews`, payload)
-
-      // Refresh reviews list; if it fails, fall back to optimistic append to avoid duplicates
-      try {
-        const response = await api.get(`/api/users/${id}/reviews`)
-        setReviews(response.data?.data || response.data || [])
-      } catch (fetchErr) {
-        const newReview = {
-          id: Date.now(),
-          reviewer: currentUser?.name || 'Anonymous',
-          avatar: currentUser?.profile_picture || '',
-          rating: reviewRating,
-          comment: reviewComment.trim(),
-          date: new Date().toISOString().split('T')[0],
-        }
-        setReviews(prev => [newReview, ...prev])
-      }
-
-      // Reset form
-      setReviewRating(0)
-      setReviewComment('')
-      onClose()
-
-      toast({
-        title: 'Review submitted',
-        description: 'Thank you for your feedback!',
-        status: 'success',
-        duration: 3000,
-        isClosable: true,
-      })
-    } catch (error: any) {
-      console.error('Failed to submit review:', error)
-      const status = error?.response?.status
-      if (status === 401) {
-        toast({
-          title: 'Login required',
-          description: 'Your session expired. Please sign in and try again.',
-          status: 'warning',
-          duration: 3000,
-          isClosable: true,
-        })
-        navigate('/login')
-      } else {
-        toast({
-          title: 'Failed to submit review',
-          description: error?.response?.data?.message || error?.message || 'Please try again later.',
-          status: 'error',
-          duration: 4000,
-          isClosable: true,
-        })
-      }
-    } finally {
-      setIsSubmittingReview(false)
-    }
-  }
-
-  const handleOpenReviewModal = () => {
-    const token = localStorage.getItem('clovia_token')
-    if (!currentUser || !token) {
-      toast({
-        title: 'Login required',
-        description: 'Please sign in to leave a review.',
-        status: 'warning',
-        duration: 3000,
-        isClosable: true,
-      })
-      navigate('/login')
-      return
-    }
-    setReviewRating(0)
-    setReviewComment('')
-    onOpen()
   }
 
   const badges = useMemo(() => {
@@ -664,10 +501,10 @@ const UserProfile: React.FC = () => {
                   <HStack spacing={6} mb={4} flexWrap="wrap">
                     <HStack>
                       <Icon as={FiStar} color="yellow.400" />
-                      <Text>{displayRating.toFixed(1)} <Text as="span" color="gray.500">({displayTotalReviews} reviews)</Text></Text>
+                      <Text>{user.rating?.toFixed(1) || '4.8'} <Text as="span" color="gray.500">({user.total_reviews || 98} reviews)</Text></Text>
                     </HStack>
                     <HStack>
-                      <Text color="green.500">{Math.round(displayPositivePercent)}%</Text>
+                      <Text color="green.500">{user.positive_feedback || 98}%</Text>
                       <Text color="gray.500">Positive Feedback</Text>
                     </HStack>
                     <HStack>
@@ -676,7 +513,7 @@ const UserProfile: React.FC = () => {
                     </HStack>
                     <HStack>
                       <Icon as={FiClock} color="gray.500" />
-                      <Text color="gray.500">Avg. Response: {stats.avgResponse}</Text>
+                      <Text color="gray.500">Avg. Response: {user.response_time_minutes || 30} min</Text>
                     </HStack>
                   </HStack>
                   
@@ -709,10 +546,12 @@ const UserProfile: React.FC = () => {
                       <Text color="gray.600">Member Since</Text>
                       <Text fontWeight="medium">{new Date(user.created_at).toLocaleDateString()}</Text>
                     </HStack>
-                    <HStack justify="space-between">
-                      <Text color="gray.600">Department</Text>
-                      <Text fontWeight="medium">{user.department || 'Unknown'}</Text>
-                    </HStack>
+                    {user.department && (
+                      <HStack justify="space-between">
+                        <Text color="gray.600">Department</Text>
+                        <Text fontWeight="medium">{user.department}</Text>
+                      </HStack>
+                    )}
                     <HStack justify="space-between">
                       <Text color="gray.600">Items for Sale</Text>
                       <Text fontWeight="medium">{stats.active}</Text>
@@ -925,27 +764,25 @@ const UserProfile: React.FC = () => {
                       <HStack spacing={1} mb={2}>
                         <Icon as={FiStar} color="yellow.400" boxSize={5} />
                         <Text fontSize="xl" fontWeight="bold">
-                          {displayRating.toFixed(1)}
+                          {user.rating?.toFixed(1) || '4.8'}
                           <Text as="span" fontSize="md" fontWeight="normal" color="gray.600" ml={1}>
-                            ({displayTotalReviews} reviews)
+                            ({reviews.length} reviews)
                           </Text>
                         </Text>
                       </HStack>
                       <Text color="green.600" fontSize="sm">
-                        {Math.round(displayPositivePercent)}% positive feedback
+                        {user.positive_feedback || 98}% positive feedback
                       </Text>
                     </Box>
                     
-                    {!(currentUser && Number(id) === currentUser.id) && (
-                      <Button 
-                        colorScheme="brand" 
-                        size="sm" 
-                        onClick={handleOpenReviewModal}
-                        leftIcon={<Icon as={FiStar} />}
-                      >
-                        Leave a Review
-                      </Button>
-                    )}
+                    <Button 
+                      colorScheme="brand" 
+                      size="sm" 
+                      onClick={onOpen}
+                      leftIcon={<Icon as={FiStar} />}
+                    >
+                      Leave a Review
+                    </Button>
                   </HStack>
                 </Box>
                 
@@ -953,17 +790,15 @@ const UserProfile: React.FC = () => {
                   <Center p={10}>
                     <VStack>
                       <Text color="gray.500">No reviews yet.</Text>
-                      {!(currentUser && Number(id) === currentUser.id) && (
-                        <Button 
-                          colorScheme="brand" 
-                          variant="outline" 
-                          size="sm" 
-                          mt={2}
-                          onClick={handleOpenReviewModal}
-                        >
-                          Be the first to review
-                        </Button>
-                      )}
+                      <Button 
+                        colorScheme="brand" 
+                        variant="outline" 
+                        size="sm" 
+                        mt={2}
+                        onClick={onOpen}
+                      >
+                        Be the first to review
+                      </Button>
                     </VStack>
                   </Center>
                 ) : (
@@ -1082,37 +917,14 @@ const UserProfile: React.FC = () => {
                     </Box>
                   </FormControl>
 
-                  <FormControl isRequired>
-                    <HStack justify="space-between" mb={2}>
-                      <FormLabel mb={0}>Bio</FormLabel>
-                      <Text fontSize="sm" color={draftBio.length < 30 ? 'red.500' : draftBio.length > 50 ? 'red.500' : 'green.500'}>
-                        {draftBio.length}/50 {draftBio.length >= 30 ? '✓' : '(min 30)'}
-                      </Text>
-                    </HStack>
-                    <Textarea 
-                      value={draftBio} 
-                      onChange={(e) => {
-                        if (e.target.value.length <= 50) {
-                          setDraftBio(e.target.value)
-                        }
-                      }} 
-                      rows={4}
-                      placeholder="Tell buyers about yourself (30-50 characters required)"
-                      maxLength={50}
-                      borderColor={draftBio.length < 30 ? 'red.300' : 'gray.300'}
-                    />
+                  <FormControl>
+                    <FormLabel>Bio</FormLabel>
+                    <Textarea value={draftBio} onChange={(e) => setDraftBio(e.target.value)} rows={4} />
                   </FormControl>
 
                   <HStack justify="flex-end">
                     <Button onClick={closeEdit} variant="ghost">Cancel</Button>
-                    <Button 
-                      colorScheme="brand" 
-                      onClick={handleSaveProfile}
-                      isDisabled={draftBio.length < 30}
-                      title={draftBio.length < 30 ? `Bio must be at least 30 characters (${30 - draftBio.length} more needed)` : ''}
-                    >
-                      Save Changes
-                    </Button>
+                    <Button colorScheme="brand" onClick={handleSaveProfile}>Save Changes</Button>
                   </HStack>
                 </VStack>
               </ModalBody>
@@ -1123,7 +935,7 @@ const UserProfile: React.FC = () => {
           <Modal isOpen={isOpen} onClose={onClose} size="lg">
             <ModalOverlay />
             <ModalContent>
-              <ModalHeader>Leave a Review for {user.name}</ModalHeader>
+              <ModalHeader>Leave a Review</ModalHeader>
               <ModalCloseButton />
               <ModalBody pb={6}>
                 <VStack spacing={4} align="stretch">
@@ -1134,60 +946,32 @@ const UserProfile: React.FC = () => {
                         <IconButton
                           key={star}
                           aria-label={`${star} star`}
-                          icon={<Icon as={FiStar} />}
+                          icon={<FiStar />}
                           variant="ghost"
-                          color={star <= reviewRating ? 'yellow.400' : 'gray.300'}
-                          _hover={{ color: 'yellow.500', transform: 'scale(1.1)' }}
-                          transition="all 0.2s"
+                          color={star <= 5 ? 'yellow.400' : 'gray.300'}
+                          _hover={{ color: 'yellow.500' }}
                           size="lg"
-                          onClick={() => setReviewRating(star)}
+                          onClick={() => {}}
                         />
                       ))}
                     </HStack>
-                    {reviewRating > 0 && (
-                      <Text fontSize="sm" color="gray.600">
-                        {reviewRating === 1 && 'Poor'}
-                        {reviewRating === 2 && 'Fair'}
-                        {reviewRating === 3 && 'Good'}
-                        {reviewRating === 4 && 'Very Good'}
-                        {reviewRating === 5 && 'Excellent'}
-                      </Text>
-                    )}
                   </FormControl>
                   
                   <FormControl isRequired>
                     <FormLabel>Your Review</FormLabel>
                     <Textarea 
-                      value={reviewComment}
-                      onChange={(e) => setReviewComment(e.target.value)}
                       placeholder="Share details about your experience with this seller..." 
                       rows={5}
-                      maxLength={500}
                     />
-                    <Text fontSize="xs" color="gray.500" mt={1} textAlign="right">
-                      {reviewComment.length}/500 characters
-                    </Text>
                   </FormControl>
                   
-                  <HStack justify="flex-end" spacing={3}>
-                    <Button 
-                      variant="ghost"
-                      onClick={onClose}
-                      isDisabled={isSubmittingReview}
-                    >
-                      Cancel
-                    </Button>
-                    <Button 
-                      colorScheme="brand" 
-                      leftIcon={<Icon as={FiSend} />}
-                      onClick={handleSubmitReview}
-                      isLoading={isSubmittingReview}
-                      loadingText="Submitting..."
-                      isDisabled={reviewRating === 0 || !reviewComment.trim()}
-                    >
-                      Submit Review
-                    </Button>
-                  </HStack>
+                  <Button 
+                    colorScheme="brand" 
+                    leftIcon={<Icon as={FiSend} />}
+                    alignSelf="flex-end"
+                  >
+                    Submit Review
+                  </Button>
                 </VStack>
               </ModalBody>
             </ModalContent>

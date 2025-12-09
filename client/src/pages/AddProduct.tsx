@@ -30,15 +30,11 @@ import {
   ModalBody,
   ModalCloseButton,
   Spinner,
-  Alert,
-  AlertIcon,
 } from '@chakra-ui/react'
 import { AddIcon, CloseIcon, ArrowForwardIcon, ArrowBackIcon, WarningIcon } from '@chakra-ui/icons'
 import { useAuth } from '../contexts/AuthContext'
 import { useProducts } from '../contexts/ProductContext'
 import { ProductCreate } from '../types'
-import FloatingTab from '../components/FloatingTab'
-import { prepareImageForUpload, isUnsupportedFormat, getFileTypeDescription } from '../utils/imageConverter'
 
 
 const AddProduct: React.FC = () => {
@@ -69,8 +65,6 @@ const AddProduct: React.FC = () => {
   const [locationCoordinates, setLocationCoordinates] = useState<{ lat: number; lng: number } | null>(null)
   const [isGettingLocation, setIsGettingLocation] = useState(true)
   const [locationError, setLocationError] = useState<string | null>(null)
-  const [isGenerating, setIsGenerating] = useState(false)
-  const [imageConversionMessages, setImageConversionMessages] = useState<Array<{ file: string; message: string; type: 'info' | 'warning' | 'error' }>>([])
   const { isOpen: isPremiumModalOpen, onOpen: onOpenPremiumModal, onClose: onClosePremiumModal } = useDisclosure()
   const { isOpen: isLocationModalOpen, onOpen: onOpenLocationModal, onClose: onCloseLocationModal } = useDisclosure()
 
@@ -104,83 +98,30 @@ const AddProduct: React.FC = () => {
       return
     }
 
-    // Process each file for format compatibility
-    const processFiles = async () => {
-      const messages: Array<{ file: string; message: string; type: 'info' | 'warning' | 'error' }> = []
-      const processedFiles: File[] = []
-      const previewUrls: string[] = []
-
-      for (const file of validFiles.slice(0, 8 - uploadedImages.length)) {
-        try {
-          const { file: processedFile, isConverted, warning } = await prepareImageForUpload(file, 5)
-          
-          if (isConverted) {
-            messages.push({
-              file: file.name,
-              message: `✓ Converted ${getFileTypeDescription(file)} to JPEG for compatibility`,
-              type: 'info',
-            })
-          }
-
-          if (warning) {
-            messages.push({
-              file: file.name,
-              message: warning,
-              type: 'warning',
-            })
-          }
-
-          // Create preview URL
-          const reader = new FileReader()
-          reader.onload = (e) => {
-            previewUrls.push(e.target?.result as string)
-            if (previewUrls.length === processedFiles.length) {
-              // All files processed
-              setImagePreviewUrls(prev => [...prev, ...previewUrls])
-            }
-          }
-          reader.readAsDataURL(processedFile)
-
-          processedFiles.push(processedFile)
-        } catch (error: any) {
-          messages.push({
-            file: file.name,
-            message: `✗ Error: ${error.message}`,
-            type: 'error',
-          })
-        }
+    // Enforce a maximum of 8 images overall
+    setUploadedImages(prev => {
+      const remainingSlots = Math.max(0, 8 - prev.length)
+      const filesToAdd = validFiles.slice(0, remainingSlots)
+      if (filesToAdd.length < validFiles.length) {
+        toast({
+          title: 'Image limit reached',
+          description: 'You can upload up to 8 images per product.',
+          status: 'warning',
+          duration: 3000,
+          isClosable: true,
+        })
       }
-
-      // Update state
-      setUploadedImages(prev => {
-        const newLength = prev.length + processedFiles.length
-        if (newLength > 8) {
-          toast({
-            title: 'Image limit reached',
-            description: `You can upload up to 8 images per product. Uploaded ${newLength} images.`,
-            status: 'warning',
-            duration: 3000,
-            isClosable: true,
-          })
-          return [...prev, ...processedFiles.slice(0, 8 - prev.length)]
+      // Create preview URLs for the files we actually accept
+      filesToAdd.forEach(file => {
+        const reader = new FileReader()
+        reader.onload = (e) => {
+          setImagePreviewUrls(prevUrls => [...prevUrls, e.target?.result as string])
         }
-        return [...prev, ...processedFiles]
+        reader.readAsDataURL(file)
       })
-
-      // Show messages
-      if (messages.length > 0) {
-        setImageConversionMessages(messages)
-        
-        // Auto-dismiss after 5 seconds if all successful
-        const hasErrors = messages.some(m => m.type === 'error')
-        if (!hasErrors) {
-          setTimeout(() => setImageConversionMessages([]), 5000)
-        }
-      }
-    }
-
-    processFiles()
-  }, [uploadedImages.length, toast])
+      return [...prev, ...filesToAdd]
+    })
+  }, [toast])
 
   const removeImage = (index: number) => {
     setUploadedImages(prev => prev.filter((_, i) => i !== index))
@@ -190,10 +131,10 @@ const AddProduct: React.FC = () => {
   const handleInputChange = (field: keyof ProductCreate, value: any) => {
     if (field === 'title') {
       const length = value?.length || 0
-      if (length > 25) {
+      if (length > 15) {
         toast({
-          title: 'Name too long',
-          description: `Maximum 25 characters allowed (currently ${length})`,
+          title: 'Title too long',
+          description: `Maximum 15 characters allowed (currently ${length})`,
           status: 'warning',
           duration: 2000,
           isClosable: true,
@@ -294,8 +235,8 @@ const AddProduct: React.FC = () => {
     // Validation before submission
     if (!formData.title.trim()) {
       toast({
-        title: 'Missing name',
-        description: 'Please enter a product name',
+        title: 'Missing title',
+        description: 'Please enter a product title',
         status: 'warning',
         duration: 3000,
         isClosable: true,
@@ -438,7 +379,7 @@ const AddProduct: React.FC = () => {
   const canProceed = () => {
     switch (currentStep) {
       case 1: return uploadedImages.length >= 3
-      case 2: return formData.title.trim() && formData.description.trim() && titleLength > 0 && titleLength <= 25 && descriptionLength >= 50 && descriptionLength <= 500
+      case 2: return formData.title.trim() && formData.description.trim() && titleLength > 0 && titleLength <= 15 && descriptionLength >= 50 && descriptionLength <= 500
       case 3: return true // Barter options are always valid
       case 4: return !formData.allow_buying || (formData.allow_buying && formData.price && formData.price > 0)
       case 5: return true
@@ -451,7 +392,7 @@ const AddProduct: React.FC = () => {
       case 1:
         return (
           <VStack spacing={6} align="stretch">
-            <Text fontSize="lg" color="gray.600" display={{ base: 'none', md: 'block' }}>
+            <Text fontSize="lg" color="gray.600">
               Upload at least 3 photos of your product. First image will be the cover.
             </Text>
             
@@ -460,22 +401,21 @@ const AddProduct: React.FC = () => {
               border="2px dashed"
               borderColor={borderColor}
               borderRadius="lg"
-              p={4}
+              p={8}
               textAlign="center"
               cursor="pointer"
               _hover={{ borderColor: 'brand.500' }}
               onClick={() => document.getElementById('image-upload')?.click()}
+              
             >
-              <VStack spacing={2}>
-                <AddIcon boxSize={6} color="gray.400" />
-                <VStack spacing={0}>
-                  <Text fontSize="sm" color="gray.600" fontWeight="medium">
-                    Click to upload or drag and drop
-                  </Text>
-                  <Text fontSize="xs" color="gray.500">
-                    PNG, JPG up to 5MB (min. 3 images)
-                  </Text>
-                </VStack>
+              <VStack spacing={4}>
+                <AddIcon boxSize={8} color="gray.400" />
+                <Text fontSize="lg" color="gray.600">
+                  Click to upload images or drag and drop
+                </Text>
+                <Text fontSize="sm" color="gray.500">
+                  PNG, JPG up to 5MB each (minimum 3 images required)
+                </Text>
               </VStack>
             </Box>
             
@@ -487,26 +427,6 @@ const AddProduct: React.FC = () => {
               onChange={(e) => handleImageUpload(e.target.files)}
               style={{ display: 'none' }}
             />
-            
-            {/* Image Conversion Messages */}
-            {imageConversionMessages.length > 0 && (
-              <VStack spacing={2} align="stretch" mb={4}>
-                {imageConversionMessages.map((msg, idx) => (
-                  <Alert
-                    key={idx}
-                    status={msg.type === 'error' ? 'error' : msg.type === 'warning' ? 'warning' : 'info'}
-                    borderRadius="lg"
-                    fontSize="sm"
-                  >
-                    <AlertIcon />
-                    <VStack align="start" spacing={0}>
-                      <Text fontWeight="600">{msg.file}</Text>
-                      <Text fontSize="xs">{msg.message}</Text>
-                    </VStack>
-                  </Alert>
-                ))}
-              </VStack>
-            )}
             
             {/* Image Count Status */}
             <Box>
@@ -529,7 +449,7 @@ const AddProduct: React.FC = () => {
             
             {/* Image Previews */}
             {uploadedImages.length > 0 && (
-              <SimpleGrid columns={{ base: 4, md: 4 }} spacing={2}>
+              <SimpleGrid columns={{ base: 3, md: 4 }} spacing={2}>
                 {uploadedImages.map((_, index) => (
                   <Box key={index} position="relative" aspectRatio="1">
                     <Image
@@ -562,61 +482,18 @@ const AddProduct: React.FC = () => {
           <VStack spacing={6} align="stretch">
             <FormControl isRequired>
               <HStack justify="space-between" align="center">
-                <FormLabel mb={0}>Product Name</FormLabel>
+                <FormLabel mb={0}>Product Title</FormLabel>
                 <Button
                   size="xs"
                   variant="outline"
                   colorScheme="purple"
                   mb="2"
-                  title="Generate product details from images using AI"
-                  isLoading={isGenerating}
-                  loadingText="Analyzing..."
-                  isDisabled={uploadedImages.length < 3 || isGenerating}
-                  onClick={async () => {
-                    if (uploadedImages.length < 3) {
-                      toast({
-                        title: 'Insufficient images',
-                        description: 'Please upload at least 3 images to use AI generation',
-                        status: 'warning',
-                        duration: 3000,
-                        isClosable: true,
-                      })
-                      return
-                    }
-                    setIsGenerating(true)
-                    try {
-                      const formData = new FormData()
-                      uploadedImages.slice(0, 3).forEach((file) => {
-                        formData.append('images', file)
-                      })
-                      const { api } = await import('../services/api')
-                      const response = await api.post('/api/products/generate-details', formData)
-                      const data = response.data
-                      if (data.success && data.data) {
-                        handleInputChange('title', data.data.title || '')
-                        handleInputChange('description', data.data.description || '')
-                        handleInputChange('condition', data.data.condition || 'Used')
-                        handleInputChange('category', data.data.category || 'General')
-                        toast({
-                          title: 'AI generation complete!',
-                          description: 'Product details have been auto-filled',
-                          status: 'success',
-                          duration: 3000,
-                          isClosable: true,
-                        })
-                      } else {
-                        throw new Error(data.error || 'AI generation failed')
-                      }
-                    } catch (error: any) {
-                      toast({
-                        title: 'Generation failed',
-                        description: error.message || 'Failed to generate product details',
-                        status: 'error',
-                        duration: 3000,
-                        isClosable: true,
-                      })
-                    } finally {
-                      setIsGenerating(false)
+                  title="Generate title from description"
+                  onClick={() => {
+                    if (!user?.is_premium) {
+                      onOpenPremiumModal()
+                    } else {
+                      // TODO: Add auto-generate logic here for premium users
                     }
                   }}
                 >
@@ -628,15 +505,15 @@ const AddProduct: React.FC = () => {
                 value={formData.title}
                 onChange={(e) => handleInputChange('title', e.target.value)}
                 size="lg"
-                maxLength={25}
+                maxLength={15}
               />
               <HStack justify="space-between" mt={1}>
-                <FormHelperText>Be specific (max 25 chars)</FormHelperText>
+                <FormHelperText>Be specific (max 15 chars)</FormHelperText>
                 <Badge
-                  colorScheme={titleLength === 0 ? 'gray' : titleLength <= 25 ? 'green' : 'orange'}
+                  colorScheme={titleLength === 0 ? 'gray' : titleLength <= 15 ? 'green' : 'orange'}
                   fontSize="xs"
                 >
-                  {titleLength}/25
+                  {titleLength}/15
                 </Badge>
               </HStack>
             </FormControl>
@@ -1355,8 +1232,6 @@ const AddProduct: React.FC = () => {
           </ModalBody>
         </ModalContent>
       </Modal>
-
-      <FloatingTab />
     </Box>
   )
 }

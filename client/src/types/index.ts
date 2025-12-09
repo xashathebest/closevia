@@ -30,7 +30,6 @@ export interface Product {
   image_urls: string[]
   seller_id: number
   seller_name?: string
-  seller_profile_picture?: string
   premium: boolean
   status: 'available' | 'sold' | 'traded' | 'locked'
   allow_buying: boolean
@@ -39,6 +38,8 @@ export interface Product {
   condition?: string
   suggested_value?: number
   category?: string
+  latitude?: number
+  longitude?: number
   distance?: string // Calculated distance from user (e.g., "1.2km nearby")
   created_at: string
   updated_at: string

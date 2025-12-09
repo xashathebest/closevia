@@ -20,9 +20,15 @@ import {
   Progress,
   Tag,
   TagLabel,
+  Alert,
+  AlertIcon,
+  AlertDescription,
 } from '@chakra-ui/react'
 import { FaMapMarkerAlt, FaClock, FaBox, FaMoneyBillWave, FaStar, FaWifi } from 'react-icons/fa'
 import { InfoIcon, WarningIcon } from '@chakra-ui/icons'
+import { api } from '../services/api'
+import { Delivery } from '../types'
+import { useAuth } from '../contexts/AuthContext'
 
 interface BatchCluster {
   id: string
@@ -44,58 +50,145 @@ interface BatchCluster {
 const RiderQueue: React.FC = () => {
   const navigate = useNavigate()
   const toast = useToast()
+  const { user } = useAuth()
   const [isOnline, setIsOnline] = useState(true)
   const [selectedBatch, setSelectedBatch] = useState<string | null>(null)
-  const [batches, setBatches] = useState<BatchCluster[]>([
-    {
-      id: 'batch-001',
-      taskCount: 4,
-      sizePoints: 7,
-      maxCapacity: 12,
-      estimatedEarnings: 450,
-      requiredPass: 'Standard',
-      passValidity: '25 days left',
-      distance: '2.3 km',
-      estimatedTime: '28 min',
-      zone: 'BGC',
-      isHighDemand: true,
-      pickupCount: 2,
-      deliveryCount: 2,
-      systemFee: 45,
-    },
-    {
-      id: 'batch-002',
-      taskCount: 3,
-      sizePoints: 5,
-      maxCapacity: 12,
-      estimatedEarnings: 320,
-      requiredPass: 'Standard',
-      passValidity: '15 days left',
-      distance: '1.8 km',
-      estimatedTime: '22 min',
-      zone: 'Makati',
-      isHighDemand: false,
-      pickupCount: 1,
-      deliveryCount: 2,
-      systemFee: 32,
-    },
-    {
-      id: 'batch-003',
-      taskCount: 5,
-      sizePoints: 9,
-      maxCapacity: 12,
-      estimatedEarnings: 600,
-      requiredPass: 'Premium',
-      passValidity: '40 days left',
-      distance: '3.1 km',
-      estimatedTime: '35 min',
-      zone: 'Ortigas',
-      isHighDemand: true,
-      pickupCount: 2,
-      deliveryCount: 3,
-      systemFee: 60,
-    },
-  ])
+  const [batches, setBatches] = useState<BatchCluster[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  // Fetch rider's claimed deliveries and group them into batches
+  const fetchBatches = async () => {
+    if (!user) return
+
+    try {
+      setLoading(true)
+      setError(null)
+      // Use correct endpoint with status filter
+      const response = await api.get('/api/deliveries', {
+        params: { status: 'claimed,picked_up,in_transit' }
+      })
+      const deliveries: Delivery[] = response.data?.data || []
+
+      // Group standard deliveries into batches (max 5 items per batch)
+      const standardDeliveries = deliveries.filter(d => 
+        d.delivery_type === 'standard' && 
+        d.status !== 'delivered' && 
+        d.status !== 'cancelled'
+      )
+
+      // Create batches from standard deliveries
+      const batchClusters: BatchCluster[] = []
+      let currentBatch: Delivery[] = []
+      let currentItems = 0
+
+      for (const delivery of standardDeliveries) {
+        if (currentItems + delivery.item_count <= 5) {
+          currentBatch.push(delivery)
+          currentItems += delivery.item_count
+        } else {
+          // Create batch from current deliveries
+          if (currentBatch.length > 0) {
+            const totalEarnings = currentBatch.reduce((sum, d) => sum + d.total_cost, 0)
+            batchClusters.push({
+              id: `batch-${currentBatch[0].id}`,
+              taskCount: currentBatch.length,
+              sizePoints: currentItems,
+              maxCapacity: 12,
+              estimatedEarnings: totalEarnings,
+              requiredPass: 'Standard',
+              passValidity: 'Active',
+              distance: 'Multiple',
+              estimatedTime: 'Varies',
+              zone: 'Multiple',
+              isHighDemand: false,
+              pickupCount: currentBatch.length,
+              deliveryCount: currentBatch.length,
+              systemFee: totalEarnings * 0.1, // 10% system fee
+            })
+          }
+          // Start new batch
+          currentBatch = [delivery]
+          currentItems = delivery.item_count
+        }
+      }
+
+      // Add remaining batch
+      if (currentBatch.length > 0) {
+        const totalEarnings = currentBatch.reduce((sum, d) => sum + d.total_cost, 0)
+        batchClusters.push({
+          id: `batch-${currentBatch[0].id}`,
+          taskCount: currentBatch.length,
+          sizePoints: currentItems,
+          maxCapacity: 12,
+          estimatedEarnings: totalEarnings,
+          requiredPass: 'Standard',
+          passValidity: 'Active',
+          distance: 'Multiple',
+          estimatedTime: 'Varies',
+          zone: 'Multiple',
+          isHighDemand: false,
+          pickupCount: currentBatch.length,
+          deliveryCount: currentBatch.length,
+          systemFee: totalEarnings * 0.1,
+        })
+      }
+
+      // Add express deliveries as individual batches
+      const expressDeliveries = deliveries.filter(d => 
+        d.delivery_type === 'express' && 
+        d.status !== 'delivered' && 
+        d.status !== 'cancelled'
+      )
+
+      expressDeliveries.forEach(delivery => {
+        batchClusters.push({
+          id: `express-${delivery.id}`,
+          taskCount: 1,
+          sizePoints: delivery.item_count,
+          maxCapacity: 12,
+          estimatedEarnings: delivery.total_cost,
+          requiredPass: 'Express',
+          passValidity: 'Active',
+          distance: 'N/A',
+          estimatedTime: '~1 hour',
+          zone: 'Express',
+          isHighDemand: true,
+          pickupCount: 1,
+          deliveryCount: 1,
+          systemFee: delivery.total_cost * 0.1,
+        })
+      })
+
+      setBatches(batchClusters)
+    } catch (err: any) {
+      console.error('Failed to fetch batches:', err.response?.status, err.response?.data)
+      const errorMsg = err?.response?.data?.error || 'Failed to load batches'
+      setError(errorMsg)
+      toast({
+        title: 'Error Loading Batches',
+        description: errorMsg,
+        status: 'error',
+        duration: 3000,
+      })
+      setBatches([])
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (user) {
+      fetchBatches()
+      
+      // Auto-refresh every 15 seconds
+      const interval = setInterval(() => {
+        fetchBatches()
+      }, 15000)
+
+      return () => clearInterval(interval)
+    }
+  }, [user])
 
   useEffect(() => {
     const handleOnline = () => setIsOnline(true)
@@ -135,7 +228,7 @@ const RiderQueue: React.FC = () => {
             </Text>
           </VStack>
           <HStack spacing={1} px={3} py={2} bg={isOnline ? 'green.50' : 'red.50'} borderRadius="lg">
-            <Icon as={isOnline ? FaWifi : WarningIcon} color={isOnline ? 'green.600' : 'red.600'} />
+            <Icon as={FaWifi} color={isOnline ? 'green.600' : 'red.600'} />
             <Text fontSize="xs" fontWeight="bold" color={isOnline ? 'green.700' : 'red.700'}>
               {isOnline ? 'Online' : 'Offline'}
             </Text>
@@ -154,6 +247,28 @@ const RiderQueue: React.FC = () => {
 
         {/* Batches List */}
         <VStack spacing={4} align="stretch">
+          {loading ? (
+            <Center py={12}>
+              <VStack spacing={3} textAlign="center">
+                <Spinner size="lg" color="brand.500" />
+                <Text color="gray.600">Loading your batches...</Text>
+              </VStack>
+            </Center>
+          ) : error ? (
+            <Alert status="error" borderRadius="md">
+              <AlertIcon />
+              <AlertDescription>
+                {error}. Try refreshing or check your connection.
+              </AlertDescription>
+            </Alert>
+          ) : batches.length === 0 ? (
+            <Alert status="info" borderRadius="md">
+              <AlertIcon />
+              <AlertDescription>
+                No active batches. Claim deliveries from the Available Deliveries screen to see batches here.
+              </AlertDescription>
+            </Alert>
+          )}
           {batches.map((batch) => (
             <Card
               key={batch.id}
@@ -166,22 +281,13 @@ const RiderQueue: React.FC = () => {
               onClick={() => setSelectedBatch(batch.id)}
             >
               <CardBody>
-                <VStack spacing={4} align="stretch">
-                  {/* Top Row: Zone + High Demand Badge */}
-                  <HStack justify="space-between" align="start">
-                    <VStack align="start" spacing={1}>
-                      <HStack spacing={2}>
-                        <Text fontWeight="bold" fontSize="md" color="gray.800">
-                          {batch.taskCount} tasks
-                        </Text>
-                        {batch.isHighDemand && (
-                          <Badge colorScheme="orange" fontSize="xs">
-                            🔥 High Demand
-                          </Badge>
-                        )}
-                      </HStack>
-                      <Text fontSize="sm" color="gray.600">
-                        {batch.zone} zone
+                <VStack spacing={4}>
+                {/* Top Row: Zone + High Demand Badge */}
+                <HStack justify="space-between" align="start">
+                  <VStack align="start" spacing={1}>
+                    <HStack spacing={2}>
+                      <Text fontWeight="bold" fontSize="md" color="gray.800">
+                        {batch.taskCount} tasks
                       </Text>
                     </VStack>
                     <VStack align="end" spacing={0}>
@@ -258,21 +364,11 @@ const RiderQueue: React.FC = () => {
                   >
                     {isOnline ? 'Claim batch (15m lock)' : 'Offline - Reconnect to claim'}
                   </Button>
-                </VStack>
-              </CardBody>
-            </Card>
-          ))}
+                </CardBody>
+              </Card>
+            ))
+          )}
         </VStack>
-
-        {/* Empty State */}
-        {batches.length === 0 && (
-          <Center py={12}>
-            <VStack spacing={3} textAlign="center">
-              <Spinner size="lg" color="brand.500" />
-              <Text color="gray.600">Looking for batches near you...</Text>
-            </VStack>
-          </Center>
-        )}
 
         {/* Navigation Buttons */}
         <HStack spacing={2} w="full">

@@ -54,7 +54,6 @@ import {
 import { useNavigate } from 'react-router-dom'
 import { api } from '../services/api'
 import { useAuth } from '../contexts/AuthContext'
-import FloatingTab from '../components/FloatingTab'
 import { 
   FaUserCircle, 
   FaBell, 
@@ -118,12 +117,54 @@ const SettingsPage: React.FC = () => {
     return 'medium'
   }
 
+  // Helper function to load initial language from localStorage
+  const initializeLanguage = () => {
+    try {
+      const saved = localStorage.getItem('user_settings')
+      if (saved) {
+        const parsed = JSON.parse(saved)
+        if (parsed.language) {
+          return parsed.language
+        }
+      }
+    } catch (e) {
+      // ignore
+    }
+    return 'en'
+  }
+
+  // Helper function to load initial notification preferences from localStorage
+  const initializeNotificationPreferences = () => {
+    try {
+      const saved = localStorage.getItem('user_settings')
+      if (saved) {
+        const parsed = JSON.parse(saved)
+        return {
+          emailNotifications: parsed.emailNotifications !== undefined ? parsed.emailNotifications : true,
+          pushNotifications: parsed.pushNotifications !== undefined ? parsed.pushNotifications : true,
+        }
+      }
+    } catch (e) {
+      // ignore
+    }
+    return {
+      emailNotifications: true,
+      pushNotifications: true,
+    }
+  }
+
   // Preferences State
   const [darkMode, setDarkMode] = useState(colorMode === 'dark')
-  const [language, setLanguage] = useState('en')
+  const [language, setLanguage] = useState(initializeLanguage)
+  const [timezone, setTimezone] = useState(Intl.DateTimeFormat().resolvedOptions().timeZone)
   const [dashboardLayout, setDashboardLayout] = useState('default')
   const [fontSize, setFontSize] = useState(initializeFontSize)
   const [highContrast, setHighContrast] = useState(false)
+
+  // Notifications State - Initialize from localStorage
+  const initialNotifications = initializeNotificationPreferences()
+  const [emailNotifications, setEmailNotifications] = useState(initialNotifications.emailNotifications)
+  const [pushNotifications, setPushNotifications] = useState(initialNotifications.pushNotifications)
 
   // Apply font size to document for live preview
   useEffect(() => {
@@ -176,10 +217,38 @@ const SettingsPage: React.FC = () => {
     }
   }, [colorMode, toggleColorMode])
 
-  // Notifications State
-  const [emailNotifications, setEmailNotifications] = useState(true)
-  const [pushNotifications, setPushNotifications] = useState(true)
-  
+  // Load saved language setting on mount
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('user_settings')
+      if (saved) {
+        const parsed = JSON.parse(saved)
+        if (parsed.language) {
+          setLanguage(parsed.language)
+        }
+      }
+    } catch (e) {
+      // ignore
+    }
+  }, [])
+
+  // Load saved notification preferences on mount
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('user_settings')
+      if (saved) {
+        const parsed = JSON.parse(saved)
+        if (parsed.emailNotifications !== undefined) {
+          setEmailNotifications(parsed.emailNotifications)
+        }
+        if (parsed.pushNotifications !== undefined) {
+          setPushNotifications(parsed.pushNotifications)
+        }
+      }
+    } catch (e) {
+      // ignore
+    }
+  }, [])
 
   // UI State
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
@@ -229,7 +298,8 @@ const SettingsPage: React.FC = () => {
       email !== (user?.email || '') ||
       profileImage !== ((user as any)?.profile_picture || null) ||
       darkMode !== (colorMode === 'dark') ||
-      language !== 'en' ||
+      language !== initializeLanguage() ||
+      timezone !== Intl.DateTimeFormat().resolvedOptions().timeZone ||
       dashboardLayout !== 'default' ||
       fontSize !== initializeFontSize() ||
       highContrast !== false ||
@@ -244,6 +314,7 @@ const SettingsPage: React.FC = () => {
     darkMode,
     colorMode,
     language,
+    timezone,
     dashboardLayout,
     fontSize,
     highContrast,
@@ -477,6 +548,7 @@ const SettingsPage: React.FC = () => {
         profileImage: profileUrlToSave ?? profileImage,
         darkMode,
         language,
+        timezone,
         dashboardLayout,
         fontSize,
         highContrast,
@@ -552,9 +624,12 @@ const SettingsPage: React.FC = () => {
       // ignore
     }
 
-    // Server-side logout endpoint not implemented in all backends.
-    // Skip calling `/api/logout` to avoid 404 noise in the browser console.
-    // If you have a server-side logout endpoint, re-enable this call.
+    // Attempt server-side logout (best-effort)
+    try {
+      await api.post('/api/logout')
+    } catch (e) {
+      // not fatal — continue clearing client state
+    }
 
     // Call context logout if available to clear auth state
     try {
@@ -590,6 +665,41 @@ const SettingsPage: React.FC = () => {
     navigate('/login')
     onDeleteModalClose()
   }
+
+  // Get timezones - fallback to common timezones if API not supported
+  const timezones = (() => {
+    try {
+      if (typeof Intl !== 'undefined' && 'supportedValuesOf' in Intl) {
+        return (Intl as any).supportedValuesOf('timeZone')
+      }
+    } catch (e) {
+      // Fallback if not supported
+    }
+    return [
+      'America/New_York',
+      'America/Chicago',
+      'America/Denver',
+      'America/Los_Angeles',
+      'America/Phoenix',
+      'America/Anchorage',
+      'America/Honolulu',
+      'Europe/London',
+      'Europe/Paris',
+      'Europe/Berlin',
+      'Europe/Madrid',
+      'Europe/Rome',
+      'Europe/Athens',
+      'Asia/Tokyo',
+      'Asia/Shanghai',
+      'Asia/Hong_Kong',
+      'Asia/Singapore',
+      'Asia/Dubai',
+      'Asia/Kolkata',
+      'Australia/Sydney',
+      'Australia/Melbourne',
+      'Pacific/Auckland',
+    ]
+  })()
 
   return (
     <Box minH="100vh" bg={pageBg} py={6} position="relative" pb={{ base: '100px', md: '80px' }}>
@@ -791,6 +901,13 @@ const SettingsPage: React.FC = () => {
                     onChange={(e) => {
                       setLanguage(e.target.value)
                       setHasUnsavedChanges(true)
+                      toast({
+                        title: 'Language preference updated',
+                        description: `Language changed to ${e.target.options[e.target.selectedIndex].text}`,
+                        status: 'info',
+                        duration: 2000,
+                        isClosable: true,
+                      })
                     }}
                     maxW="300px"
                     title="Select language"
@@ -803,6 +920,34 @@ const SettingsPage: React.FC = () => {
                     <option value="pt">Português</option>
                     <option value="zh">中文</option>
                     <option value="ja">日本語</option>
+                  </Select>
+                  <Text fontSize="xs" color={useColorModeValue('gray.500', 'gray.400')} mt={2}>
+                    Select your preferred language. Changes will be saved when you click Save Changes.
+                  </Text>
+                </FormControl>
+
+                {/* Timezone */}
+                <FormControl>
+                  <FormLabel>
+                    <HStack spacing={2}>
+                      <Icon as={FaClock} />
+                      <Text>Timezone</Text>
+                    </HStack>
+                  </FormLabel>
+                  <Select
+                    value={timezone}
+                    onChange={(e) => {
+                      setTimezone(e.target.value)
+                      setHasUnsavedChanges(true)
+                    }}
+                    maxW="400px"
+                    title="Select timezone"
+                  >
+                    {timezones.map((tz: string) => (
+                      <option key={tz} value={tz}>
+                        {tz.replace(/_/g, ' ')}
+                      </option>
+                    ))}
                   </Select>
                 </FormControl>
 
@@ -912,8 +1057,19 @@ const SettingsPage: React.FC = () => {
                   <Switch
                     isChecked={emailNotifications}
                     onChange={(e) => {
-                      setEmailNotifications(e.target.checked)
+                      const newValue = e.target.checked
+                      setEmailNotifications(newValue)
                       setHasUnsavedChanges(true)
+                      
+                      // Persist immediately to localStorage
+                      try {
+                        const saved = localStorage.getItem('user_settings')
+                        const settings = saved ? JSON.parse(saved) : {}
+                        settings.emailNotifications = newValue
+                        localStorage.setItem('user_settings', JSON.stringify(settings))
+                      } catch (e) {
+                        // ignore
+                      }
                     }}
                     colorScheme="brand"
                     size="lg"
@@ -936,8 +1092,19 @@ const SettingsPage: React.FC = () => {
                   <Switch
                     isChecked={pushNotifications}
                     onChange={(e) => {
-                      setPushNotifications(e.target.checked)
+                      const newValue = e.target.checked
+                      setPushNotifications(newValue)
                       setHasUnsavedChanges(true)
+                      
+                      // Persist immediately to localStorage
+                      try {
+                        const saved = localStorage.getItem('user_settings')
+                        const settings = saved ? JSON.parse(saved) : {}
+                        settings.pushNotifications = newValue
+                        localStorage.setItem('user_settings', JSON.stringify(settings))
+                      } catch (e) {
+                        // ignore
+                      }
                     }}
                     colorScheme="brand"
                     size="lg"
@@ -1229,8 +1396,6 @@ const SettingsPage: React.FC = () => {
           </AlertDialogContent>
         </AlertDialogOverlay>
       </AlertDialog>
-
-      <FloatingTab />
     </Box>
   )
 }

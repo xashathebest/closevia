@@ -48,7 +48,7 @@ import {
 import { FaHandshake } from 'react-icons/fa'
 import { useAuth } from '../contexts/AuthContext'
 import { useProducts } from '../contexts/ProductContext'
-import { Product, User } from '../types'
+import { Product } from '../types'
 import { api } from '../services/api'
 import { getFirstImage, getImageUrl } from '../utils/imageUtils';
 import { getProductUrl } from '../utils/productUtils'
@@ -56,7 +56,6 @@ import TradeModal from '../components/TradeModal'
 import CounterfeitWarning from '../components/CounterfeitWarning'
 import ProximityBadge from '../components/ProximityBadge'
 import ResponseMetricsBadge from '../components/ResponseMetricsBadge'
-import FloatingTab from '../components/FloatingTab'
 import axios from 'axios';
 import { ChevronUpIcon, ChevronDownIcon, CloseIcon, StarIcon } from '@chakra-ui/icons'
 
@@ -66,8 +65,6 @@ const ProductDetail: React.FC = () => {
   const { getProduct, getUserProducts } = useProducts()
   const [product, setProduct] = useState<Product | null>(null)
   const [sellerProducts, setSellerProducts] = useState<Product[]>([])
-  const [sellerStats, setSellerStats] = useState<any | null>(null)
-  const [sellerProfile, setSellerProfile] = useState<User | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [purchasing, setPurchasing] = useState(false)
@@ -109,87 +106,6 @@ const ProductDetail: React.FC = () => {
     }
     loadSellerProducts()
   }, [product, getUserProducts])
-
-  // Fetch seller's statistics
-  useEffect(() => {
-    const loadSellerStats = async () => {
-      if (!product) return
-      try {
-        // Use the axios `api` client so requests go to the configured backend
-        // The backend API in this project is prefixed with /api
-        const resp = await api.get(`/api/users/${product.seller_id}/stats`)
-        if (resp && resp.data) {
-          setSellerStats(resp.data.data)
-        }
-      } catch (err) {
-        // Treat 404 (endpoint missing) as non-fatal and use safe defaults
-        if (axios.isAxiosError(err)) {
-          const status = err.response?.status
-          // eslint-disable-next-line no-console
-          console.debug('Seller stats request failed', { status, url: err.config?.url })
-          if (status === 404) {
-            // Provide sensible defaults so UI shows N/A instead of failing
-            setSellerStats({ avg_rating: null, positive_percent: null, total_trades: 0, avg_response_time: null })
-            return
-          }
-          // For other statuses, log details for debugging
-          // eslint-disable-next-line no-console
-          console.error('Failed to fetch seller stats:', JSON.stringify({
-            message: err.message,
-            status: err.response?.status,
-            url: err.config?.url,
-            data: err.response?.data,
-          }))
-        } else {
-          // eslint-disable-next-line no-console
-          console.error('Failed to fetch seller stats (non-Axios error):', err)
-        }
-        // Fallback defaults to keep UI stable
-        setSellerStats({ avg_rating: null, positive_percent: null, total_trades: 0, avg_response_time: null })
-      }
-    }
-    loadSellerStats()
-  }, [product])
-
-  // Load seller profile (to display uploaded profile picture)
-  useEffect(() => {
-    const loadSellerProfile = async () => {
-      if (!product) return
-      try {
-        const resp = await api.get(`/api/users/${product.seller_id}`)
-        // Debug: log the raw response for troubleshooting missing profile_picture
-        console.log('🔍 Seller profile response:', resp?.data)
-        const userData = resp.data?.data as User | undefined
-        console.log('🔍 User data extracted:', userData)
-        console.log('🔍 Profile picture value:', userData?.profile_picture)
-        console.log('🔍 Profile picture type:', typeof userData?.profile_picture)
-        
-        if (userData) {
-          // Normalize profile picture URL if it exists and is not empty
-          const profilePic = userData.profile_picture
-          if (profilePic && typeof profilePic === 'string' && profilePic.trim() !== '' && profilePic !== 'undefined') {
-            try {
-              const normalizedUrl = getImageUrl(profilePic)
-              console.log('✅ Profile picture URL:', profilePic, '-> Normalized:', normalizedUrl)
-              userData.profile_picture = normalizedUrl
-            } catch (e) {
-              console.error('❌ Failed to normalize profile picture URL:', e)
-              userData.profile_picture = undefined
-            }
-          } else {
-            console.log('⚠️ No valid profile picture found for user:', product.seller_id, '- Value:', profilePic, '- Type:', typeof profilePic)
-            userData.profile_picture = undefined
-          }
-        }
-        console.log('🔍 Final seller profile state:', userData)
-        setSellerProfile(userData || null)
-      } catch (err) {
-        console.error('❌ Failed to load seller profile', err)
-        setSellerProfile(null)
-      }
-    }
-    loadSellerProfile()
-  }, [product])
 
   useEffect(() => {
     if (product && user) {
@@ -682,7 +598,7 @@ const ProductDetail: React.FC = () => {
   const canTradeOrPurchase = !isOwner && product.status === 'available'
 
   return (
-    <Box bg="#FFFDF1" minH="100vh" w="100%" pb={{ base: 20, lg: 6 }}>
+    <Box bg="#FFFDF1" minH="100vh" w="100%">
       <Container maxW="container.xl" py={8}>
         <VStack spacing={8} align="stretch"> 
          <Box bg="white" rounded="lg" shadow="sm" overflow="hidden">
@@ -1040,52 +956,21 @@ const ProductDetail: React.FC = () => {
             About the Seller
           </Heading>
           <Flex justify="space-between" align="stretch" gap={6}>
-              <HStack spacing={4} flex={1}>
-              {sellerProfile?.profile_picture ? (
-                <Image
-                  src={sellerProfile.profile_picture}
-                  alt={sellerProfile.name || 'Seller'}
-                  w="60px"
-                  h="60px"
-                  borderRadius="full"
-                  objectFit="cover"
-                  flexShrink={0}
-                  fallback={
-                    <Box
-                      w="60px"
-                      h="60px"
-                      rounded="full"
-                      bg="brand.500"
-                      display="flex"
-                      alignItems="center"
-                      justifyContent="center"
-                      flexShrink={0}
-                    >
-                      <Text fontSize="24px" fontWeight="bold" color="white">
-                        {(product.seller_name ?? '?').charAt(0).toUpperCase()}
-                      </Text>
-                    </Box>
-                  }
-                  onError={(e) => {
-                    console.error('Failed to load seller profile image:', sellerProfile.profile_picture)
-                  }}
-                />
-              ) : (
-                <Box
-                  w="60px"
-                  h="60px"
-                  rounded="full"
-                  bg="brand.500"
-                  display="flex"
-                  alignItems="center"
-                  justifyContent="center"
-                  flexShrink={0}
-                >
-                  <Text fontSize="24px" fontWeight="bold" color="white">
-                    {(product.seller_name ?? '?').charAt(0).toUpperCase()}
-                  </Text>
-                </Box>
-              )}
+            <HStack spacing={4} flex={1}>
+              <Box
+                w="60px"
+                h="60px"
+                rounded="full"
+                bg="red.500"
+                display="flex"
+                alignItems="center"
+                justifyContent="center"
+                flexShrink={0}
+              >
+                <Text fontSize="24px" fontWeight="bold" color="white">
+                  {(product.seller_name ?? '?').charAt(0).toUpperCase()}
+                </Text>
+              </Box>
               <Box>
                 <Text
                   as={RouterLink}
@@ -1097,7 +982,7 @@ const ProductDetail: React.FC = () => {
                   {product.seller_name}
                 </Text>
                 <Text color="gray.600" fontSize="sm">
-                  Member since {sellerStats?.member_since_year ?? new Date().getFullYear()}
+                  Member since {new Date().getFullYear()}
                 </Text>
                 <HStack spacing={2} mt={2}>
                   {product.seller_id && <ResponseMetricsBadge userId={product.seller_id} />}
@@ -1110,7 +995,7 @@ const ProductDetail: React.FC = () => {
             <SimpleGrid columns={{ base: 2, md: 4 }} spacing={{ base: 3, md: 4 }} flex={1} alignItems="start" mt={-6}>
               <VStack spacing={1} align="center">
                 <Text fontSize={{ base: 'lg', md: 'xl', lg: '2xl' }} fontWeight="bold" color="brand.500">
-                  {sellerStats?.avg_rating?.toFixed(1) ?? 'N/A'}
+                  4.8
                 </Text>
                 <Text fontSize={{ base: '2xs', md: 'xs', lg: 'sm' }} color="gray.600" textAlign="center">
                   Rating
@@ -1118,7 +1003,7 @@ const ProductDetail: React.FC = () => {
               </VStack>
               <VStack spacing={1} align="center">
                 <Text fontSize={{ base: 'lg', md: 'xl', lg: '2xl' }} fontWeight="bold" color="green.500">
-                  {sellerStats?.positive_percent?.toFixed(0) ?? 'N/A'}%
+                  98%
                 </Text>
                 <Text fontSize={{ base: '2xs', md: 'xs', lg: 'sm' }} color="gray.600" textAlign="center">
                   Positive
@@ -1126,7 +1011,7 @@ const ProductDetail: React.FC = () => {
               </VStack>
               <VStack spacing={1} align="center">
                 <Text fontSize={{ base: 'lg', md: 'xl', lg: '2xl' }} fontWeight="bold" color="blue.500">
-                  {sellerStats?.total_trades ?? 0}
+                  247
                 </Text>
                 <Text fontSize={{ base: '2xs', md: 'xs', lg: 'sm' }} color="gray.600" textAlign="center">
                   Trades
@@ -1134,7 +1019,7 @@ const ProductDetail: React.FC = () => {
               </VStack>
               <VStack spacing={1} align="center">
                 <Text fontSize={{ base: 'lg', md: 'xl', lg: '2xl' }} fontWeight="bold" color="purple.500">
-                  {sellerStats?.avg_response_time ?? 'N/A'}
+                  2hr
                 </Text>
                 <Text fontSize={{ base: '2xs', md: 'xs', lg: 'sm' }} color="gray.600" textAlign="center">
                   Avg Response
@@ -1169,7 +1054,7 @@ const ProductDetail: React.FC = () => {
                       w="full"
                       h="full"
                       objectFit="cover"
-                      fallbackSrc="/barter.jpg"
+                      fallbackSrc="/images/placeholder.jpg"
                     />
                     <Badge position="absolute" top={2} right={2} colorScheme={p.status === 'available' ? 'teal' : p.status === 'sold' ? 'red' : 'orange'} fontSize="xs">
                       {p.status}
@@ -1383,8 +1268,6 @@ const ProductDetail: React.FC = () => {
         </ModalContent>
       </Modal>
       </Container>
-
-      <FloatingTab />
     </Box>
    )
 }

@@ -18,6 +18,6 @@ UPDATE products SET slug = CONCAT(
         '*', ''), 
         '(', ''), 
         ')', '')
-    ), '-', id
+    ), '-', id)
 ) WHERE slug IS NULL;
 

@@ -19,26 +19,14 @@ const ProximityBadge: React.FC<ProximityBadgeProps> = ({ type, targetId, showIco
     const fetchDistance = async () => {
       try {
         setLoading(true)
-        // Allow disabling AI proximity calls via environment variable
-        if (import.meta.env.VITE_DISABLE_AI === 'true') {
-          setError('Proximity disabled')
-          setLoading(false)
-          return
-        }
-
         const response = await api.get('/api/ai/proximity', {
           params: { type, target_id: targetId }
         })
-        if (response.data && response.data.success) {
+        if (response.data.success) {
           setDistance(response.data.data)
-        } else {
-          setError('Location not available')
         }
       } catch (err: any) {
-        // Don't throw; set a friendly error and stop showing the badge
         setError(err?.response?.data?.error || 'Location not available')
-        // eslint-disable-next-line no-console
-        console.debug('Proximity API error', err?.response?.status, err?.response?.data)
       } finally {
         setLoading(false)
       }

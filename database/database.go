@@ -1,78 +1,35 @@
 package database
 
 import (
-	"crypto/tls"
-	"crypto/x509"
 	"database/sql"
 	"fmt"
 	"log"
 	"os"
 	"time"
 
-	"github.com/go-sql-driver/mysql"
+	_ "github.com/go-sql-driver/mysql"
 )
 
 var DB *sql.DB
 
 // InitDatabase initializes the database connection
 func InitDatabase() error {
-	// Get database configuration from environment variables ONLY
-	dbHost := os.Getenv("DB_HOST")
-	dbPort := os.Getenv("DB_PORT")
-	dbUser := os.Getenv("DB_USER")
-	dbPassword := os.Getenv("DB_PASSWORD")
-	dbName := os.Getenv("DB_NAME")
-	caCertPath := os.Getenv("DB_CA_CERT")
+	// Get database configuration from environment variables or use defaults
+	dbHost := getEnv("DB_HOST", "127.0.0.1")
+	dbPort := getEnv("DB_PORT", "3306")
+	dbUser := getEnv("DB_USER", "root")
+	dbPassword := getEnv("DB_PASSWORD", "")
+	dbName := getEnv("DB_NAME", "closevia")
 
-	// Validate all required environment variables are set
-	if dbHost == "" {
-		return fmt.Errorf("DB_HOST environment variable is not set")
-	}
-	if dbPort == "" {
-		return fmt.Errorf("DB_PORT environment variable is not set")
-	}
-	if dbUser == "" {
-		return fmt.Errorf("DB_USER environment variable is not set")
-	}
-	// DB_PASSWORD may be empty for local MySQL instances; do not require it.
-	if dbName == "" {
-		return fmt.Errorf("DB_NAME environment variable is not set")
-	}
-	// Create TLS config only if a CA certificate path is provided.
-	// For local development, DB_CA_CERT may be omitted to allow non-TLS connections.
-	var useCustomTLS bool
-	var dsn string
-	var err error
-	if caCertPath != "" {
-		tlsConfig, err := createTLSConfig(dbHost, caCertPath)
-		if err != nil {
-			return fmt.Errorf("failed to create TLS config: %v", err)
-		}
-
-		if err = mysql.RegisterTLSConfig("custom", tlsConfig); err != nil {
-			return fmt.Errorf("failed to register TLS config: %v", err)
-		}
-
-		useCustomTLS = true
-	} else {
-		// No CA cert provided — skip TLS setup (useful for local development)
-		useCustomTLS = false
-	}
-
-	// Create DSN; include TLS parameter only when a custom TLS config was registered
-	if useCustomTLS {
-		dsn = fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?parseTime=true&loc=Local&tls=custom",
-			dbUser, dbPassword, dbHost, dbPort, dbName)
-	} else {
-		dsn = fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?parseTime=true&loc=Local",
-			dbUser, dbPassword, dbHost, dbPort, dbName)
-	}
+	// Create DSN (Data Source Name)
+	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?parseTime=true&loc=Local",
+		dbUser, dbPassword, dbHost, dbPort, dbName)
 
 	// Open database connection
-	var openErr error
-	DB, openErr = sql.Open("mysql", dsn)
-	if openErr != nil {
-		return fmt.Errorf("failed to open database: %v", openErr)
+	var err error
+	DB, err = sql.Open("mysql", dsn)
+	if err != nil {
+		return fmt.Errorf("failed to open database: %v", err)
 	}
 
 	// Configure connection pool
@@ -87,37 +44,13 @@ func InitDatabase() error {
 
 	// Test a simple query to verify we're connected to the right database
 	var currentDbName string
-	if err = DB.QueryRow("SELECT DATABASE()").Scan(&currentDbName); err != nil {
+	err = DB.QueryRow("SELECT DATABASE()").Scan(&currentDbName)
+	if err != nil {
 		return fmt.Errorf("failed to get database name: %v", err)
 	}
 
-	log.Printf("Successfully connected to MySQL database: %s (Host: %s:%s)", currentDbName, dbHost, dbPort)
+	log.Printf("Successfully connected to MySQL database: %s", currentDbName)
 	return nil
-}
-
-// createTLSConfig creates a TLS configuration using the CA certificate
-func createTLSConfig(serverName, caCertPath string) (*tls.Config, error) {
-	// Read CA certificate
-	caCert, err := os.ReadFile(caCertPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read CA certificate: %v", err)
-	}
-
-	// Create certificate pool
-	caCertPool := x509.NewCertPool()
-	if !caCertPool.AppendCertsFromPEM(caCert) {
-		return nil, fmt.Errorf("failed to parse CA certificate")
-	}
-
-	// Create TLS configuration
-	tlsConfig := &tls.Config{
-		ServerName:         serverName,
-		RootCAs:            caCertPool,
-		MinVersion:         tls.VersionTLS12,
-		InsecureSkipVerify: false,
-	}
-
-	return tlsConfig, nil
 }
 
 // CloseDatabase closes the database connection
@@ -126,6 +59,14 @@ func CloseDatabase() {
 		DB.Close()
 		log.Println("Database connection closed")
 	}
+}
+
+// getEnv gets an environment variable or returns a default value
+func getEnv(key, defaultValue string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return defaultValue
 }
 
 // CreateTables creates all necessary tables if they don't exist
@@ -141,9 +82,6 @@ func CreateTables() error {
 			org_verified TINYINT(1) NOT NULL DEFAULT 0,
 			org_name VARCHAR(255) NULL,
 			org_logo_url VARCHAR(512) NULL,
-			profile_picture VARCHAR(255) NULL,
-			background_image VARCHAR(512) NULL,
-			background_position VARCHAR(64) NULL,
 			department VARCHAR(255) NULL,
 			bio TEXT NULL,
 			badges JSON NULL,
@@ -239,19 +177,25 @@ func CreateTables() error {
 			buyer_completed BOOLEAN DEFAULT FALSE,
 			seller_completed BOOLEAN DEFAULT FALSE,
 			completed_at TIMESTAMP NULL,
-			buyer_rating INT NULL,
-			seller_rating INT NULL,
-			buyer_feedback TEXT NULL,
-			seller_feedback TEXT NULL,
-			meetup_location VARCHAR(500) NULL,
-			buyer_meetup_confirmed BOOLEAN DEFAULT FALSE,
-			seller_meetup_confirmed BOOLEAN DEFAULT FALSE,
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 			FOREIGN KEY (buyer_id) REFERENCES users(id) ON DELETE CASCADE,
 			FOREIGN KEY (seller_id) REFERENCES users(id) ON DELETE CASCADE,
 			FOREIGN KEY (target_product_id) REFERENCES products(id) ON DELETE CASCADE
 		)`,
+		// Backfill/alter for existing deployments (ignore errors if already applied)
+		`ALTER TABLE trades MODIFY status ENUM('pending','accepted','declined','countered','active','completed','cancelled') DEFAULT 'pending'`,
+		`ALTER TABLE trades ADD COLUMN IF NOT EXISTS buyer_completed BOOLEAN DEFAULT FALSE`,
+		`ALTER TABLE trades ADD COLUMN IF NOT EXISTS seller_completed BOOLEAN DEFAULT FALSE`,
+		`ALTER TABLE trades ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP NULL`,
+		`ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(10) NOT NULL DEFAULT 'user'`,
+		`ALTER TABLE trades ADD COLUMN IF NOT EXISTS offered_cash_amount DECIMAL(10,2) NULL`,
+		`ALTER TABLE trades ADD COLUMN IF NOT EXISTS buyer_rating INT NULL`,
+		`ALTER TABLE trades ADD COLUMN IF NOT EXISTS seller_rating INT NULL`,
+		`ALTER TABLE trades ADD COLUMN IF NOT EXISTS buyer_feedback TEXT NULL`,
+		`ALTER TABLE trades ADD COLUMN IF NOT EXISTS seller_feedback TEXT NULL`,
+		`ALTER TABLE products ADD COLUMN IF NOT EXISTS image_url VARCHAR(500)`,
+		`ALTER TABLE products ADD COLUMN IF NOT EXISTS slug VARCHAR(255) NULL AFTER id`,
 		`CREATE TABLE IF NOT EXISTS trade_items (
 			id INT AUTO_INCREMENT PRIMARY KEY,
 			trade_id INT NOT NULL,
@@ -270,6 +214,7 @@ func CreateTables() error {
 			FOREIGN KEY (trade_id) REFERENCES trades(id) ON DELETE CASCADE,
 			FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE
 		)`,
+		// Trade events history log
 		`CREATE TABLE IF NOT EXISTS trade_events (
 			id INT AUTO_INCREMENT PRIMARY KEY,
 			trade_id INT NOT NULL,
@@ -334,6 +279,7 @@ func CreateTables() error {
 			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
 			UNIQUE KEY uniq_product_user_vote (product_id, user_id)
 		)`,
+
 		`CREATE TABLE IF NOT EXISTS riders (
 			id INT AUTO_INCREMENT PRIMARY KEY,
 			user_id INT NOT NULL,
@@ -350,6 +296,7 @@ func CreateTables() error {
 			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
 			UNIQUE KEY unique_rider_user (user_id)
 		)`,
+
 		`CREATE TABLE IF NOT EXISTS deliveries (
 			id INT AUTO_INCREMENT PRIMARY KEY,
 			user_id INT NOT NULL,
@@ -383,6 +330,7 @@ func CreateTables() error {
 			INDEX idx_delivery_status (status),
 			INDEX idx_delivery_type (delivery_type)
 		)`,
+
 		`CREATE TABLE IF NOT EXISTS delivery_items (
 			id INT AUTO_INCREMENT PRIMARY KEY,
 			delivery_id INT NOT NULL,
@@ -391,21 +339,62 @@ func CreateTables() error {
 			is_fragile BOOLEAN DEFAULT FALSE,
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY (delivery_id) REFERENCES deliveries(id) ON DELETE CASCADE,
-			FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
+			FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE,
+			INDEX idx_delivery_items_delivery (delivery_id),
+			INDEX idx_delivery_items_product (product_id)
 		)`,
 	}
 
-	// Execute table creation queries
 	for _, query := range queries {
 		if _, err := DB.Exec(query); err != nil {
-			return fmt.Errorf("failed to create tables: %v", err)
+			return fmt.Errorf("failed to create table: %v", err)
 		}
 	}
 
-	ensureIndexes()
+	// Create indexes
+	indexQueries := []string{
+		"CREATE INDEX IF NOT EXISTS idx_products_seller ON products(seller_id)",
+		"CREATE INDEX IF NOT EXISTS idx_products_status ON products(status)",
+		"CREATE INDEX IF NOT EXISTS idx_products_premium ON products(premium)",
+		"CREATE INDEX IF NOT EXISTS idx_orders_buyer ON orders(buyer_id)",
+		"CREATE INDEX IF NOT EXISTS idx_orders_product ON orders(product_id)",
+		"CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status)",
+		"CREATE INDEX IF NOT EXISTS idx_transactions_order ON transactions(order_id)",
+		"CREATE INDEX IF NOT EXISTS idx_premium_listings_product ON premium_listings(product_id)",
+		"CREATE INDEX IF NOT EXISTS idx_premium_listings_dates ON premium_listings(start_date, end_date)",
+		"CREATE INDEX IF NOT EXISTS idx_conversations_participants ON conversations(buyer_id, seller_id)",
+		"CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id)",
+		"CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender_id)",
+		"CREATE INDEX IF NOT EXISTS idx_trades_participants ON trades(buyer_id, seller_id)",
+		"CREATE INDEX IF NOT EXISTS idx_trades_target ON trades(target_product_id)",
+		"CREATE INDEX IF NOT EXISTS idx_trades_status ON trades(status)",
+		"CREATE INDEX IF NOT EXISTS idx_trade_items_trade ON trade_items(trade_id)",
+		"CREATE INDEX IF NOT EXISTS idx_trade_items_product ON trade_items(product_id)",
+		"CREATE INDEX IF NOT EXISTS idx_trade_messages_trade ON trade_messages(trade_id)",
+		"CREATE INDEX IF NOT EXISTS idx_trade_messages_sender ON trade_messages(sender_id)",
+		"CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id)",
+		"CREATE INDEX IF NOT EXISTS idx_notifications_read ON notifications(is_read)",
+		"CREATE INDEX IF NOT EXISTS idx_notifications_type ON notifications(type)",
+		"CREATE INDEX IF NOT EXISTS idx_comments_product ON comments(product_id)",
+		"CREATE INDEX IF NOT EXISTS idx_comments_user ON comments(user_id)",
+		"CREATE INDEX IF NOT EXISTS idx_wishlists_user ON wishlists(user_id)",
+		"CREATE INDEX IF NOT EXISTS idx_wishlists_product ON wishlists(product_id)",
+		"CREATE INDEX IF NOT EXISTS idx_riders_user ON riders(user_id)",
+		"CREATE INDEX IF NOT EXISTS idx_riders_active ON riders(is_active)",
+		"CREATE INDEX IF NOT EXISTS idx_deliveries_user ON deliveries(user_id)",
+		"CREATE INDEX IF NOT EXISTS idx_deliveries_status ON deliveries(status)",
+		"CREATE INDEX IF NOT EXISTS idx_delivery_items_delivery ON delivery_items(delivery_id)",
+	}
 
+	for _, query := range indexQueries {
+		if _, err := DB.Exec(query); err != nil {
+			// Index creation might fail if they already exist, which is fine
+			log.Printf("Warning: failed to create index: %v", err)
+		}
+	}
+
+	// Ensure users table has all required columns (for existing databases)
 	ensureUserColumns()
-	ensureProductColumns()
 
 	log.Println("Database tables and indexes created successfully")
 	return nil
@@ -421,9 +410,6 @@ func ensureUserColumns() {
 		{"org_verified", "TINYINT(1) NOT NULL DEFAULT 0"},
 		{"org_name", "VARCHAR(255) NULL"},
 		{"org_logo_url", "VARCHAR(512) NULL"},
-		{"profile_picture", "VARCHAR(255) NULL"},
-		{"background_image", "VARCHAR(512) NULL"},
-		{"background_position", "VARCHAR(64) NULL"},
 		{"department", "VARCHAR(255) NULL"},
 		{"bio", "TEXT NULL"},
 		{"badges", "JSON NULL"},
@@ -458,157 +444,4 @@ func ensureUserColumns() {
 
 	// Ensure badges column is initialized for existing users
 	DB.Exec("UPDATE users SET badges = JSON_ARRAY() WHERE badges IS NULL")
-}
-
-// ensureProductColumns adds missing columns to the products table if they don't exist
-func ensureProductColumns() {
-	columns := []struct {
-		name       string
-		definition string
-	}{
-		{"latitude", "FLOAT NULL"},
-		{"longitude", "FLOAT NULL"},
-		{"slug", "VARCHAR(255) NULL"},
-		{"image_url", "VARCHAR(500) NULL"},
-		{"condition", "VARCHAR(50) NULL"},
-		{"suggested_value", "INT NULL"},
-		{"category", "VARCHAR(255) DEFAULT 'General'"},
-		{"authenticity_verified", "TINYINT(1) DEFAULT 0"},
-	}
-
-	for _, col := range columns {
-		// Check if column exists
-		var count int
-		err := DB.QueryRow(`
-			SELECT COUNT(*) 
-			FROM information_schema.COLUMNS 
-			WHERE TABLE_SCHEMA = DATABASE() 
-			AND TABLE_NAME = 'products' 
-			AND COLUMN_NAME = ?
-		`, col.name).Scan(&count)
-
-		if err != nil {
-			log.Printf("Warning: failed to check column %s: %v", col.name, err)
-			continue
-		}
-
-		// Add column if it doesn't exist
-		if count == 0 {
-			query := fmt.Sprintf("ALTER TABLE products ADD COLUMN %s %s", col.name, col.definition)
-			if _, err := DB.Exec(query); err != nil {
-				log.Printf("Warning: failed to add column %s: %v", col.name, err)
-			} else {
-				log.Printf("Added missing column to products: %s", col.name)
-			}
-		}
-	}
-
-	// Update status enum to include all required statuses
-	updateProductStatusEnum()
-}
-
-// updateProductStatusEnum ensures the status column has all required enum values
-func updateProductStatusEnum() {
-	// Check current status enum
-	var columnType string
-	err := DB.QueryRow(`
-		SELECT COLUMN_TYPE 
-		FROM information_schema.COLUMNS 
-		WHERE TABLE_SCHEMA = DATABASE() 
-		AND TABLE_NAME = 'products' 
-		AND COLUMN_NAME = 'status'
-	`).Scan(&columnType)
-
-	if err != nil {
-		log.Printf("Warning: failed to check status column type: %v", err)
-		return
-	}
-
-	// If status doesn't include all required values, update it
-	if !contains(columnType, "'traded'") || !contains(columnType, "'locked'") {
-		query := `ALTER TABLE products MODIFY COLUMN status ENUM('available','sold','traded','locked') DEFAULT 'available'`
-		if _, err := DB.Exec(query); err != nil {
-			log.Printf("Warning: failed to update status enum: %v", err)
-		} else {
-			log.Println("Updated products status enum to include 'traded' and 'locked'")
-		}
-	}
-}
-
-// contains checks if a string contains a substring
-func contains(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
-}
-
-// ensureIndexes creates indexes if they do not exist (MySQL < 8.0.21 lacks CREATE INDEX IF NOT EXISTS)
-func ensureIndexes() {
-	indexes := []struct {
-		table   string
-		name    string
-		columns string
-	}{
-		{"products", "idx_products_seller", "seller_id"},
-		{"products", "idx_products_status", "status"},
-		{"products", "idx_products_premium", "premium"},
-		{"orders", "idx_orders_buyer", "buyer_id"},
-		{"orders", "idx_orders_product", "product_id"},
-		{"orders", "idx_orders_status", "status"},
-		{"transactions", "idx_transactions_order", "order_id"},
-		{"premium_listings", "idx_premium_listings_product", "product_id"},
-		{"premium_listings", "idx_premium_listings_dates", "start_date, end_date"},
-		{"conversations", "idx_conversations_participants", "buyer_id, seller_id"},
-		{"messages", "idx_messages_conversation", "conversation_id"},
-		{"messages", "idx_messages_sender", "sender_id"},
-		{"trades", "idx_trades_participants", "buyer_id, seller_id"},
-		{"trades", "idx_trades_target", "target_product_id"},
-		{"trades", "idx_trades_status", "status"},
-		{"trade_items", "idx_trade_items_trade", "trade_id"},
-		{"trade_items", "idx_trade_items_product", "product_id"},
-		{"trade_messages", "idx_trade_messages_trade", "trade_id"},
-		{"trade_messages", "idx_trade_messages_sender", "sender_id"},
-		{"notifications", "idx_notifications_user", "user_id"},
-		{"notifications", "idx_notifications_read", "is_read"},
-		{"notifications", "idx_notifications_type", "type"},
-		{"comments", "idx_comments_product", "product_id"},
-		{"comments", "idx_comments_user", "user_id"},
-		{"wishlists", "idx_wishlists_user", "user_id"},
-		{"wishlists", "idx_wishlists_product", "product_id"},
-		{"riders", "idx_riders_user", "user_id"},
-		{"riders", "idx_riders_active", "is_active"},
-		{"deliveries", "idx_deliveries_user", "user_id"},
-		{"deliveries", "idx_deliveries_status", "status"},
-		{"delivery_items", "idx_delivery_items_delivery", "delivery_id"},
-		{"trade_events", "idx_trade_events_trade", "trade_id"},
-		{"trade_events", "idx_trade_events_actor", "actor_id"},
-	}
-
-	for _, idx := range indexes {
-		var count int
-		err := DB.QueryRow(`
-			SELECT COUNT(*)
-			FROM information_schema.STATISTICS
-			WHERE TABLE_SCHEMA = DATABASE()
-			  AND TABLE_NAME = ?
-			  AND INDEX_NAME = ?
-		`, idx.table, idx.name).Scan(&count)
-		if err != nil {
-			log.Printf("Warning: failed to check index %s on %s: %v", idx.name, idx.table, err)
-			continue
-		}
-		if count > 0 {
-			continue
-		}
-
-		query := fmt.Sprintf("CREATE INDEX %s ON %s(%s)", idx.name, idx.table, idx.columns)
-		if _, err := DB.Exec(query); err != nil {
-			log.Printf("Warning: failed to create index %s on %s: %v", idx.name, idx.table, err)
-		} else {
-			log.Printf("Created missing index %s on %s", idx.name, idx.table)
-		}
-	}
 }
