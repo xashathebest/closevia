@@ -5,12 +5,10 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-<<<<<<< HEAD
 	"time"
-=======
->>>>>>> db8e7cb05b8ee4b731cf9d77e6beecbbffd78187
 
 	"github.com/gofiber/fiber/v2"
+
 	"github.com/xashathebest/clovia/database"
 	"github.com/xashathebest/clovia/middleware"
 	"github.com/xashathebest/clovia/models"
@@ -91,9 +89,18 @@ func (h *UserHandler) Register(c *fiber.Ctx) error {
 
 	// Insert new user
 	result, err := h.db.Exec(
-		"INSERT INTO users (name, email, password_hash, role, is_organization, org_verified, org_name, org_logo_url, department, bio, badges) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, JSON_ARRAY())",
-		user.Name, user.Email, hashedPassword, user.Role,
-		user.IsOrganization, false, user.OrgName, user.OrgLogoURL, nullableString(user.Department), user.Bio,
+		"INSERT INTO users (name, email, password_hash, role, is_organization, org_verified, org_name, org_logo_url, department, bio, badges, profile_picture) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, JSON_ARRAY(), ?)",
+		user.Name,
+		user.Email,
+		hashedPassword,
+		user.Role,
+		user.IsOrganization,
+		false,
+		user.OrgName,
+		user.OrgLogoURL,
+		nullableString(user.Department),
+		user.Bio,
+		"",
 	)
 	if err != nil {
 		// Log the actual error for debugging
@@ -130,6 +137,7 @@ func (h *UserHandler) Register(c *fiber.Ctx) error {
 				OrgLogoURL:     user.OrgLogoURL,
 				Department:     derefString(user.Department),
 				Bio:            user.Bio,
+				ProfilePicture: "",
 			},
 			"token": token,
 		},
@@ -198,10 +206,27 @@ func (h *UserHandler) GetProfile(c *fiber.Ctx) error {
 	}
 
 	var user models.User
+	// Fixed: scan background fields into local variables (models.User may not have those fields)
+	var backgroundImage string
+	var backgroundPosition string
+
 	err := h.db.QueryRow(
-		"SELECT id, name, email, role, verified, org_logo_url, COALESCE(profile_picture, '') as profile_picture, created_at, updated_at FROM users WHERE id = ?",
+		"SELECT id, name, email, role, verified, org_logo_url, COALESCE(profile_picture, '') as profile_picture, COALESCE(bio, '') as bio, COALESCE(background_image, '') as background_image, COALESCE(background_position, '') as background_position, created_at, updated_at FROM users WHERE id = ?",
 		userID,
-	).Scan(&user.ID, &user.Name, &user.Email, &user.Role, &user.Verified, &user.OrgLogoURL, &user.ProfilePicture, &user.CreatedAt, &user.UpdatedAt)
+	).Scan(
+		&user.ID,
+		&user.Name,
+		&user.Email,
+		&user.Role,
+		&user.Verified,
+		&user.OrgLogoURL,
+		&user.ProfilePicture,
+		&user.Bio,
+		&backgroundImage,
+		&backgroundPosition,
+		&user.CreatedAt,
+		&user.UpdatedAt,
+	)
 
 	if err != nil {
 		// Return a friendly fallback (200) so frontend does not produce a network 404.
@@ -220,9 +245,14 @@ func (h *UserHandler) GetProfile(c *fiber.Ctx) error {
 		})
 	}
 
+	// Return user plus background fields so clients can access them even if models.User lacks those fields
 	return c.JSON(models.APIResponse{
 		Success: true,
-		Data:    user,
+		Data: fiber.Map{
+			"user":                user,
+			"background_image":    backgroundImage,
+			"background_position": backgroundPosition,
+		},
 	})
 }
 
@@ -237,9 +267,12 @@ func (h *UserHandler) UpdateProfile(c *fiber.Ctx) error {
 	}
 
 	var updateData struct {
-		Name           *string `json:"name"`
-		Email          *string `json:"email"`
-		ProfilePicture *string `json:"profile_picture"`
+		Name               *string `json:"name"`
+		Email              *string `json:"email"`
+		ProfilePicture     *string `json:"profile_picture"`
+		Bio                *string `json:"bio"`
+		BackgroundImage    *string `json:"background_image"`
+		BackgroundPosition *string `json:"background_position"`
 	}
 
 	if err := c.BodyParser(&updateData); err != nil {
@@ -257,10 +290,13 @@ func (h *UserHandler) UpdateProfile(c *fiber.Ctx) error {
 		query += ", name = ?"
 		args = append(args, *updateData.Name)
 	}
-
 	if updateData.Email != nil {
 		query += ", email = ?"
 		args = append(args, *updateData.Email)
+	}
+	if updateData.ProfilePicture != nil {
+		query += ", profile_picture = ?"
+		args = append(args, *updateData.ProfilePicture)
 	}
 
 	if updateData.ProfilePicture != nil {
@@ -268,23 +304,44 @@ func (h *UserHandler) UpdateProfile(c *fiber.Ctx) error {
 		args = append(args, *updateData.ProfilePicture)
 	}
 
+	if updateData.Bio != nil {
+		query += ", bio = ?"
+		args = append(args, *updateData.Bio)
+	}
+
+	if updateData.BackgroundImage != nil {
+		// allow column name background_image or cover_photo depending on schema; try background_image first
+		query += ", background_image = ?"
+		args = append(args, *updateData.BackgroundImage)
+	}
+
+	if updateData.BackgroundPosition != nil {
+		query += ", background_position = ?"
+		args = append(args, *updateData.BackgroundPosition)
+	}
+
 	query += " WHERE id = ?"
 	args = append(args, userID)
 
 	_, err := h.db.Exec(query, args...)
 	if err != nil {
-		// If profile_picture column doesn't exist, try to add it and retry once
+		// Handle missing columns: try to add any known columns then retry once
 		if strings.Contains(err.Error(), "Unknown column") || strings.Contains(err.Error(), "1054") {
-			_, alterErr := h.db.Exec("ALTER TABLE users ADD COLUMN profile_picture VARCHAR(255) NULL")
-			if alterErr == nil {
-				// retry update
-				_, err = h.db.Exec(query, args...)
-			}
+			// Try adding profile_picture, background_image, background_position, bio as needed
+			// Note: guard each ALTER with best-effort; ignore errors to let retry attempt proceed
+			h.db.Exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_picture VARCHAR(255) NULL")
+			h.db.Exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS background_image VARCHAR(255) NULL")
+			h.db.Exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS background_position VARCHAR(50) NULL")
+			h.db.Exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS bio TEXT NULL")
+			// retry update
+			_, err = h.db.Exec(query, args...)
 		}
-		return c.Status(500).JSON(models.APIResponse{
-			Success: false,
-			Error:   "Failed to update profile",
-		})
+		if err != nil {
+			return c.Status(500).JSON(models.APIResponse{
+				Success: false,
+				Error:   "Failed to update profile",
+			})
+		}
 	}
 
 	return c.JSON(models.APIResponse{
@@ -334,6 +391,66 @@ func (h *UserHandler) UploadProfilePicture(c *fiber.Ctx) error {
 	}
 
 	return c.JSON(models.APIResponse{Success: true, Data: url, Message: "Uploaded"})
+}
+
+// ChangePassword allows an authenticated user to change their password.
+// Expects JSON: { current_password, new_password, confirm_password }
+func (h *UserHandler) ChangePassword(c *fiber.Ctx) error {
+	userID, ok := middleware.GetUserIDFromContext(c)
+	if !ok {
+		return c.Status(401).JSON(models.APIResponse{Success: false, Error: "User not authenticated"})
+	}
+
+	var req struct {
+		CurrentPassword string `json:"current_password"`
+		NewPassword     string `json:"new_password"`
+		ConfirmPassword string `json:"confirm_password"`
+	}
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "Invalid request body"})
+	}
+
+	// Basic validation
+	if len(req.NewPassword) < 8 {
+		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "New password must be at least 8 characters"})
+	}
+	if req.NewPassword != req.ConfirmPassword {
+		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "New password and confirmation do not match"})
+	}
+
+	// Fetch current password hash
+	var currentHash string
+	err := h.db.QueryRow("SELECT password_hash FROM users WHERE id = ?", userID).Scan(&currentHash)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return c.Status(404).JSON(models.APIResponse{Success: false, Error: "User not found"})
+		}
+		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to retrieve user"})
+	}
+
+	// Verify current password
+	if !utils.CheckPasswordHash(req.CurrentPassword, currentHash) {
+		return c.Status(401).JSON(models.APIResponse{Success: false, Error: "Current password is incorrect"})
+	}
+
+	// Prevent reusing the same password
+	if utils.CheckPasswordHash(req.NewPassword, currentHash) {
+		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "New password must be different from the current password"})
+	}
+
+	// Hash new password
+	hashed, err := utils.HashPassword(req.NewPassword)
+	if err != nil {
+		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to process password"})
+	}
+
+	// Update DB
+	_, err = h.db.Exec("UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", hashed, userID)
+	if err != nil {
+		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to update password"})
+	}
+
+	return c.JSON(models.APIResponse{Success: true, Message: "Password changed successfully"})
 }
 
 // GetUserByID gets a user by ID (public info only)
@@ -565,6 +682,7 @@ func (h *UserHandler) CheckSavedProduct(c *fiber.Ctx) error {
 			Error:   "User not authenticated",
 		})
 	}
+
 	productID, err := strconv.Atoi(c.Params("id"))
 	if err != nil {
 		return c.Status(400).JSON(models.APIResponse{
@@ -572,13 +690,12 @@ func (h *UserHandler) CheckSavedProduct(c *fiber.Ctx) error {
 			Error:   "Invalid product ID",
 		})
 	}
-
 	var isSaved bool
-	err = h.db.QueryRow("SELECT EXISTS(SELECT 1 FROM saved_products WHERE user_id = ? AND product_id = ? AND (deleted_at IS NULL OR deleted_at = '0000-00-00 00:00:00'))", userID, productID).Scan(&isSaved)
-	if err != nil {
-		fmt.Printf("❌ CheckSavedProduct query failed!\n")
-		fmt.Printf("UserID: %d, ProductID: %d\n", userID, productID)
-		fmt.Printf("Error: %v\n", err)
+	// Keep check that excludes soft-deleted saved_products
+	query := "SELECT EXISTS(SELECT 1 FROM saved_products WHERE user_id = ? AND product_id = ? AND (deleted_at IS NULL OR deleted_at = '0000-00-00 00:00:00'))"
+	if err := h.db.QueryRow(query, userID, productID).Scan(&isSaved); err != nil {
+		// Log for debugging
+		fmt.Printf("❌ Failed to check saved status (user=%d, product=%d): %v\n", userID, productID, err)
 		return c.Status(500).JSON(models.APIResponse{
 			Success: false,
 			Error:   "Failed to check saved status: " + err.Error(),

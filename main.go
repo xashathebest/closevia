@@ -106,6 +106,7 @@ func main() {
 	commentHandler := handlers.NewCommentHandler()
 	wishlistHandler := handlers.NewWishlistHandler()
 	aiFeaturesHandler := handlers.NewAIFeaturesHandler()
+	deliveryHandler := handlers.NewDeliveryHandler()
 
 	// Auth routes (no authentication required)
 	auth := api.Group("/auth")
@@ -117,6 +118,10 @@ func main() {
 	users.Get("/profile", middleware.AuthMiddleware(), userHandler.GetProfile)
 	users.Put("/profile", middleware.AuthMiddleware(), userHandler.UpdateProfile)
 	users.Post("/profile-picture", middleware.AuthMiddleware(), userHandler.UploadProfilePicture)
+	// Change password (accept POST, PUT and PATCH to be resilient to client method differences)
+	users.Post("/change-password", middleware.AuthMiddleware(), userHandler.ChangePassword)
+	users.Put("/change-password", middleware.AuthMiddleware(), userHandler.ChangePassword)
+	users.Patch("/change-password", middleware.AuthMiddleware(), userHandler.ChangePassword)
 
 	// Saved products routes (must be BEFORE dynamic ":id" route)
 	users.Post("/saved-products", middleware.AuthMiddleware(), userHandler.SaveProduct)
@@ -140,6 +145,17 @@ func main() {
 	products.Post("/:id/comments", middleware.AuthMiddleware(), commentHandler.CreateComment)
 	products.Get("/:id", productHandler.GetProduct) // Public route (must be last)
 	products.Post("/", middleware.AuthMiddleware(), productHandler.CreateProduct)
+	products.Get("/", productHandler.GetProducts) // Public route
+	products.Get("", productHandler.GetProducts)  // Support no trailing slash
+	products.Post("/", middleware.AuthMiddleware(), productHandler.CreateProduct)
+	products.Get("/user/:id", productHandler.GetUserProducts)          // Public route
+	products.Get("/user/:id/listings", productHandler.GetUserProducts) // alias for listings
+	products.Post("/:id/vote", middleware.AuthMiddleware(), productHandler.VoteProduct)
+	products.Get("/:id/comments", commentHandler.GetComments)
+	products.Post("/:id/comments", middleware.AuthMiddleware(), commentHandler.CreateComment)
+	// User-specific wishlist status for a product
+	products.Get("/:id/wishlist/status", middleware.AuthMiddleware(), productHandler.GetUserWishlistStatus)
+	products.Get("/:id", productHandler.GetProduct) // Public route - must be last
 	products.Put("/:id", middleware.AuthMiddleware(), productHandler.UpdateProduct)
 	products.Delete("/:id", middleware.AuthMiddleware(), productHandler.DeleteProduct)
 
@@ -189,6 +205,19 @@ func main() {
 	wishlist.Get("/", middleware.AuthMiddleware(), wishlistHandler.GetWishlist)
 	wishlist.Post("/", middleware.AuthMiddleware(), wishlistHandler.AddToWishlist)
 	wishlist.Delete("/:productId", middleware.AuthMiddleware(), wishlistHandler.RemoveFromWishlist)
+
+	// Delivery routes
+	deliveries := api.Group("/deliveries")
+	deliveries.Post("/", middleware.AuthMiddleware(), deliveryHandler.CreateDelivery)
+	deliveries.Get("/", middleware.AuthMiddleware(), deliveryHandler.GetDeliveries)
+	deliveries.Get("/:id", middleware.AuthMiddleware(), deliveryHandler.GetDelivery)
+	deliveries.Put("/:id/status", middleware.AuthMiddleware(), deliveryHandler.UpdateDeliveryStatus)
+	deliveries.Post("/:id/assign", middleware.AuthMiddleware(), deliveryHandler.AssignRider)
+	// Rider-specific routes
+	deliveries.Get("/available", middleware.AuthMiddleware(), deliveryHandler.GetAvailableDeliveries)
+	deliveries.Get("/rider/my-deliveries", middleware.AuthMiddleware(), deliveryHandler.GetRiderDeliveries)
+	deliveries.Post("/:id/claim", middleware.AuthMiddleware(), deliveryHandler.ClaimDelivery)
+	deliveries.Get("/rider/earnings", middleware.AuthMiddleware(), deliveryHandler.GetRiderEarnings)
 
 	// AI Features routes
 	ai := api.Group("/ai")

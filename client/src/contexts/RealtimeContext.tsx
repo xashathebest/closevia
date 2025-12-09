@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useEffect, useRef, useState, useCallback } from 'react'
+import { createStandaloneToast } from '@chakra-ui/react'
 import { useAuth } from './AuthContext'
 import { api } from '../services/api'
 
@@ -15,6 +16,7 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const esRef = useRef<EventSource | null>(null)
   const [offerCount, setOfferCount] = useState(0)
   const [notificationCount, setNotificationCount] = useState(0)
+  const lastToastAtRef = useRef<number>(0)
 
   const refreshCounts = useCallback(async () => {
     try {
@@ -51,6 +53,22 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         switch (payload.type) {
           case 'trade_created':
             refreshCounts()
+            // Notify user about new offer
+            try {
+              const now = Date.now()
+              // Simple rate-limit: avoid duplicate toasts within 2s
+              if (now - lastToastAtRef.current < 2000) break
+              lastToastAtRef.current = now
+              const { toast } = createStandaloneToast()
+              toast({
+                title: 'New offer received',
+                description: 'You have a new incoming offer.',
+                status: 'info',
+                duration: 4000,
+                isClosable: true,
+                position: 'top-right',
+              })
+            } catch {}
             break
           case 'trade_updated':
             refreshCounts()

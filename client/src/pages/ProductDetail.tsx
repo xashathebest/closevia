@@ -51,6 +51,7 @@ import { useProducts } from '../contexts/ProductContext'
 import { Product } from '../types'
 import { api } from '../services/api'
 import { getFirstImage, getImageUrl } from '../utils/imageUtils';
+import { getProductUrl } from '../utils/productUtils'
 import TradeModal from '../components/TradeModal'
 import CounterfeitWarning from '../components/CounterfeitWarning'
 import ProximityBadge from '../components/ProximityBadge'
@@ -61,8 +62,9 @@ import { ChevronUpIcon, ChevronDownIcon, CloseIcon, StarIcon } from '@chakra-ui/
 const ProductDetail: React.FC = () => {
   const { id } = useParams<{ id: string }>()
   const { user } = useAuth()
-  const { getProduct } = useProducts()
+  const { getProduct, getUserProducts } = useProducts()
   const [product, setProduct] = useState<Product | null>(null)
+  const [sellerProducts, setSellerProducts] = useState<Product[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [purchasing, setPurchasing] = useState(false)
@@ -73,6 +75,8 @@ const ProductDetail: React.FC = () => {
   const [isSaving, setIsSaving] = useState(false)
   const [wishlistCount, setWishlistCount] = useState<number>(0)
   const [isWishlisted, setIsWishlisted] = useState<boolean>(false)
+  const [votes, setVotes] = useState<{ under: number; over: number }>({ under: 0, over: 0 })
+  const [userVote, setUserVote] = useState<string>('')
   const [offersForProduct, setOffersForProduct] = useState<any[]>([])
   const [loadingOffers, setLoadingOffers] = useState(false)
   const [offersModalOpen, setOffersModalOpen] = useState(false)
@@ -87,6 +91,21 @@ const ProductDetail: React.FC = () => {
       fetchProduct()
     }
   }, [id])
+
+  // Fetch seller's other products (for Seller Products section)
+  useEffect(() => {
+    const loadSellerProducts = async () => {
+      if (!product) return
+      try {
+        const resp = await getUserProducts(product.seller_id, 1)
+        setSellerProducts(resp?.data || [])
+      } catch (err) {
+        // ignore errors for this non-critical UX enhancement
+        setSellerProducts([])
+      }
+    }
+    loadSellerProducts()
+  }, [product, getUserProducts])
 
   useEffect(() => {
     if (product && user) {
@@ -163,30 +182,49 @@ const ProductDetail: React.FC = () => {
       setError('')
       
       const identifier = id!
-      let productData: Product | null = null
-      
-      // Try to parse as integer (old ID URL) - redirect to slug if found
+      // Direct API call so we can read vote counts and user_vote in the response
       const productId = parseInt(identifier)
       if (!isNaN(productId) && identifier === productId.toString()) {
-        // It's a numeric ID - fetch and redirect to slug for SEO/backward compatibility
-        productData = await getProduct(productId)
-        if (productData && productData.slug) {
-          // Redirect to slug-based URL
-          navigate(`/products/${productData.slug}`, { replace: true })
-          return
+        // numeric ID - fetch and possibly redirect
+        const response = await api.get(`/api/products/${productId}`)
+        const data = response.data?.data
+        if (data?.product) {
+          const p = data.product as Product
+          setProduct(p)
+          setVotes(data.votes || { under: 0, over: 0 })
+          setUserVote(data.user_vote || '')
+          if (p.slug) {
+            navigate(`/products/${p.slug}`, { replace: true })
+            return
+          }
+          if (p.image_urls && p.image_urls.length > 0) setSelectedImage(getImageUrl(p.image_urls[0]))
+        } else if (data) {
+          const p = data as Product
+          setProduct(p)
+          setVotes({ under: 0, over: 0 })
+          setUserVote('')
+          if (p.image_urls && p.image_urls.length > 0) setSelectedImage(getImageUrl(p.image_urls[0]))
+        } else {
+          setError('Product not found')
         }
       } else {
-        // It's a slug - fetch directly
-        productData = await getProduct(identifier)
-      }
-      
-      if (productData) {
-        setProduct(productData)
-        if (productData.image_urls && productData.image_urls.length > 0) {
-          setSelectedImage(getImageUrl(productData.image_urls[0]))
+        const response = await api.get(`/api/products/${identifier}`)
+        const data = response.data?.data
+        if (data?.product) {
+          const p = data.product as Product
+          setProduct(p)
+          setVotes(data.votes || { under: 0, over: 0 })
+          setUserVote(data.user_vote || '')
+          if (p.image_urls && p.image_urls.length > 0) setSelectedImage(getImageUrl(p.image_urls[0]))
+        } else if (data) {
+          const p = data as Product
+          setProduct(p)
+          setVotes({ under: 0, over: 0 })
+          setUserVote('')
+          if (p.image_urls && p.image_urls.length > 0) setSelectedImage(getImageUrl(p.image_urls[0]))
+        } else {
+          setError('Product not found')
         }
-      } else {
-        setError('Product not found')
       }
     } catch (err: unknown) {
       if (axios.isAxiosError(err)) {
@@ -385,6 +423,47 @@ const ProductDetail: React.FC = () => {
 
   const handleShare = () => {
     onShareOpen()
+  }
+
+  const handleVote = async (voteType: 'under' | 'over') => {
+    if (!user) {
+      toast({
+        title: 'Authentication required',
+        description: 'Please log in to vote on price',
+        status: 'warning',
+        duration: 3000,
+        isClosable: true,
+      })
+      navigate('/login')
+      return
+    }
+    if (!product) return
+    try {
+      const response = await api.post(`/api/products/${product.id}/vote`, { vote: voteType })
+      const data = response.data?.data
+      setVotes(data?.votes || { under: 0, over: 0 })
+      setUserVote(data?.user_vote || voteType)
+      toast({
+        title: 'Vote recorded',
+        status: 'success',
+        duration: 2000,
+        isClosable: true,
+      })
+    } catch (err: unknown) {
+      let description = 'Failed to submit vote'
+      if (axios.isAxiosError(err)) {
+        description = err.response?.data?.error || description
+      } else if (err instanceof Error) {
+        description = err.message
+      }
+      toast({
+        title: 'Error',
+        description,
+        status: 'error',
+        duration: 3000,
+        isClosable: true,
+      })
+    }
   }
 
   const copyToClipboard = async () => {
@@ -617,6 +696,33 @@ const ProductDetail: React.FC = () => {
                       ₱{product.price ? product.price.toFixed(2) : '0.00'}
                     </Text>
                   </Flex>
+
+                  {/* Price voting */}
+                  <Box mt={3} mb={2}>
+                    <Text fontSize="sm" color="gray.600" mb={2}>Price feedback</Text>
+                    <HStack spacing={3}>
+                      <Button
+                        size="md"
+                        colorScheme={userVote === 'under' ? 'green' : 'gray'}
+                        variant={userVote === 'under' ? 'solid' : 'outline'}
+                        leftIcon={<ChevronDownIcon />}
+                        onClick={() => handleVote('under')}
+                        isDisabled={Boolean(product.price === null || product.price === undefined || isOwner)}
+                      >
+                        Underpriced ({votes.under})
+                      </Button>
+                      <Button
+                        size="md"
+                        colorScheme={userVote === 'over' ? 'orange' : 'gray'}
+                        variant={userVote === 'over' ? 'solid' : 'outline'}
+                        leftIcon={<ChevronUpIcon />}
+                        onClick={() => handleVote('over')}
+                        isDisabled={Boolean(product.price === null || product.price === undefined || isOwner)}
+                      >
+                        Overpriced ({votes.over})
+                      </Button>
+                    </HStack>
+                  </Box>
 
                   {/* Save/Watch and Share buttons */}
                   <Flex justify="space-between" align="center" gap={6} mt={4}>
@@ -862,7 +968,7 @@ const ProductDetail: React.FC = () => {
                 flexShrink={0}
               >
                 <Text fontSize="24px" fontWeight="bold" color="white">
-                  {product.seller_name ? product.seller_name.charAt(0).toUpperCase() : '?'}
+                  {(product.seller_name ?? '?').charAt(0).toUpperCase()}
                 </Text>
               </Box>
               <Box>
@@ -929,169 +1035,55 @@ const ProductDetail: React.FC = () => {
             Seller Products
           </Heading>
           <SimpleGrid columns={{ base: 1, sm: 2, md: 3, lg: 4 }} spacing={4}>
-            {/* Product Card 1 */}
-            <Box
-              borderWidth="1px"
-              borderRadius="lg"
-              overflow="hidden"
-              bg="white"
-              _hover={{ shadow: 'md', cursor: 'pointer' }}
-              transition="all 0.3s"
-            >
-              <Box h="200px" bg="gray.200" position="relative" overflow="hidden">
-                <Image
-                  src={getImageUrl('/uploads/1755585883998559300_Pink_Birkin_bag')}
-                  alt="Product 1"
-                  w="full"
-                  h="full"
-                  objectFit="cover"
-                  fallbackSrc="https://via.placeholder.com/400x300?text=No+Image"
-                />
-                <Badge position="absolute" top={2} right={2} colorScheme="teal" fontSize="xs">
-                  available
-                </Badge>
+            {sellerProducts && sellerProducts.length > 0 ? (
+              sellerProducts.map((p) => (
+                <Box
+                  key={p.id}
+                  borderWidth="1px"
+                  borderRadius="lg"
+                  overflow="hidden"
+                  bg="white"
+                  _hover={{ shadow: 'md', cursor: 'pointer' }}
+                  transition="all 0.3s"
+                  onClick={() => navigate(getProductUrl(p))}
+                >
+                  <Box h="200px" bg="gray.200" position="relative" overflow="hidden">
+                    <Image
+                      src={getFirstImage(p.image_urls)}
+                      alt={p.title}
+                      w="full"
+                      h="full"
+                      objectFit="cover"
+                      fallbackSrc="/images/placeholder.jpg"
+                    />
+                    <Badge position="absolute" top={2} right={2} colorScheme={p.status === 'available' ? 'teal' : p.status === 'sold' ? 'red' : 'orange'} fontSize="xs">
+                      {p.status}
+                    </Badge>
+                  </Box>
+                  <Box p={3}>
+                    <HStack justify="space-between" mb={2}>
+                      <Heading size="sm" noOfLines={1}>{p.title}</Heading>
+                      {p.premium && (
+                        <Badge colorScheme="orange" fontSize="xs">Premium</Badge>
+                      )}
+                    </HStack>
+                    <Text fontSize="xs" color="gray.600" mb={2} noOfLines={2}>
+                      {p.description}
+                    </Text>
+                    <Text fontSize="sm" fontWeight="bold" color="brand.500">
+                      ₱{p.price ? p.price.toFixed(2) : '0.00'}
+                    </Text>
+                    {p.barter_only && (
+                      <Badge colorScheme="cyan" mt={2} fontSize="xs">Barter Only</Badge>
+                    )}
+                  </Box>
+                </Box>
+              ))
+            ) : (
+              <Box p={4} w="full">
+                <Text color="gray.600">No other products from this seller.</Text>
               </Box>
-              <Box p={3}>
-                <HStack justify="space-between" mb={2}>
-                  <Heading size="sm" noOfLines={1}>SAYGEXX</Heading>
-                  <Badge colorScheme="orange" fontSize="xs">
-                    Premium
-                  </Badge>
-                </HStack>
-                <Text fontSize="xs" color="gray.600" mb={2} noOfLines={2}>
-                  asd
-                </Text>
-                <Text fontSize="sm" fontWeight="bold" color="brand.500">
-                  ₱150
-                </Text>
-                <Badge colorScheme="cyan" mt={2} fontSize="xs">
-                  Barter Only
-                </Badge>
-              </Box>
-            </Box>
-
-            {/* Product Card 2 */}
-            <Box
-              borderWidth="1px"
-              borderRadius="lg"
-              overflow="hidden"
-              bg="white"
-              _hover={{ shadow: 'md', cursor: 'pointer' }}
-              transition="all 0.3s"
-            >
-              <Box h="200px" bg="gray.200" position="relative" overflow="hidden">
-                <Image
-                  src={getImageUrl('/uploads/1755585326243827700_image_')}
-                  alt="Unli water baso"
-                  w="full"
-                  h="full"
-                  objectFit="cover"
-                  fallbackSrc="https://via.placeholder.com/400x300?text=No+Image"
-                />
-                <Badge position="absolute" top={2} right={2} colorScheme="teal" fontSize="xs">
-                  available
-                </Badge>
-              </Box>
-              <Box p={3}>
-                <HStack justify="space-between" mb={2}>
-                  <Heading size="sm" noOfLines={1}>Unli water baso</Heading>
-                  <Badge colorScheme="orange" fontSize="xs">
-                    Premium
-                  </Badge>
-                </HStack>
-                <Text fontSize="xs" color="gray.600" mb={2} noOfLines={2}>
-                  it has endless water inside the baso
-                </Text>
-                <Text fontSize="sm" fontWeight="bold" color="brand.500" mb={2}>
-                  ₱0
-                </Text>
-                <Badge colorScheme="cyan" mt={2} fontSize="xs">
-                  Barter Only
-                </Badge>
-              </Box>
-            </Box>
-
-            {/* Product Card 3 */}
-            <Box
-              borderWidth="1px"
-              borderRadius="lg"
-              overflow="hidden"
-              bg="white"
-              _hover={{ shadow: 'md', cursor: 'pointer' }}
-              transition="all 0.3s"
-            >
-              <Box h="200px" bg="gray.200" position="relative" overflow="hidden">
-                <Image
-                  src={getImageUrl('/uploads/1755590839905072000_ssdd.z')}
-                  alt="Endless bag"
-                  w="full"
-                  h="full"
-                  objectFit="cover"
-                  fallbackSrc="https://via.placeholder.com/400x300?text=No+Image"
-                />
-                <Badge position="absolute" top={2} right={2} colorScheme="red" fontSize="xs">
-                  sold
-                </Badge>
-              </Box>
-              <Box p={3}>
-                <HStack justify="space-between" mb={2}>
-                  <Heading size="sm" noOfLines={1}>Endless bag</Heading>
-                  <Badge colorScheme="orange" fontSize="xs">
-                    Premium
-                  </Badge>
-                </HStack>
-                <Text fontSize="xs" color="gray.600" mb={2} noOfLines={2}>
-                  you can put anything inside this bag
-                </Text>
-                <Text fontSize="sm" fontWeight="bold" color="brand.500" mb={2}>
-                  ₱0
-                </Text>
-                <Badge colorScheme="cyan" mt={2} fontSize="xs">
-                  Barter Only
-                </Badge>
-              </Box>
-            </Box>
-
-            {/* Product Card 4 */}
-            <Box
-              borderWidth="1px"
-              borderRadius="lg"
-              overflow="hidden"
-              bg="white"
-              _hover={{ shadow: 'md', cursor: 'pointer' }}
-              transition="all 0.3s"
-            >
-              <Box h="200px" bg="gray.200" position="relative" overflow="hidden">
-                <Image
-                  src={getImageUrl('/uploads/1755600258252118900_images')}
-                  alt="headphone made in ph"
-                  w="full"
-                  h="full"
-                  objectFit="cover"
-                  fallbackSrc="https://via.placeholder.com/400x300?text=No+Image"
-                />
-                <Badge position="absolute" top={2} right={2} colorScheme="red" fontSize="xs">
-                  sold
-                </Badge>
-              </Box>
-              <Box p={3}>
-                <HStack justify="space-between" mb={2}>
-                  <Heading size="sm" noOfLines={1}>headphone made in ph</Heading>
-                  <Badge colorScheme="orange" fontSize="xs">
-                    Premium
-                  </Badge>
-                </HStack>
-                <Text fontSize="xs" color="gray.600" mb={2} noOfLines={2}>
-                  you can hear something you should not hear
-                </Text>
-                <Text fontSize="sm" fontWeight="bold" color="brand.500" mb={2}>
-                  ₱0
-                </Text>
-                <Badge colorScheme="cyan" mt={2} fontSize="xs">
-                  Barter Only
-                </Badge>
-              </Box>
-            </Box>
+            )}
           </SimpleGrid>
         </Box>
       </VStack>

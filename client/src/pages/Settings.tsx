@@ -42,6 +42,14 @@ import {
   Flex,
   Icon,
   Spinner,
+  Popover,
+  PopoverTrigger,
+  PopoverContent,
+  PopoverArrow,
+  PopoverHeader,
+  PopoverBody,
+  PopoverFooter,
+  PopoverCloseButton,
 } from '@chakra-ui/react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../services/api'
@@ -71,7 +79,7 @@ import { FiSettings, FiSave } from 'react-icons/fi'
 const SettingsPage: React.FC = () => {
   const toast = useToast()
   const navigate = useNavigate()
-  const { user, logout, updateProfile } = useAuth()
+  const { user, logout, updateProfile, refreshUser } = useAuth()
   const { colorMode, toggleColorMode } = useColorMode()
   const pageBg = useColorModeValue('#FFFDF1', 'gray.900')
   const cardBg = useColorModeValue('white', 'gray.800')
@@ -93,28 +101,96 @@ const SettingsPage: React.FC = () => {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false)
   const [passwordErrors, setPasswordErrors] = useState<string[]>([])
 
+  // Helper function to load initial font size from localStorage
+  const initializeFontSize = () => {
+    try {
+      const saved = localStorage.getItem('user_settings')
+      if (saved) {
+        const parsed = JSON.parse(saved)
+        if (parsed.fontSize) {
+          return parsed.fontSize
+        }
+      }
+    } catch (e) {
+      // ignore
+    }
+    return 'medium'
+  }
+
   // Preferences State
   const [darkMode, setDarkMode] = useState(colorMode === 'dark')
   const [language, setLanguage] = useState('en')
   const [timezone, setTimezone] = useState(Intl.DateTimeFormat().resolvedOptions().timeZone)
   const [dashboardLayout, setDashboardLayout] = useState('default')
-  const [fontSize, setFontSize] = useState('medium')
+  const [fontSize, setFontSize] = useState(initializeFontSize)
   const [highContrast, setHighContrast] = useState(false)
+
+  // Apply font size to document for live preview
+  useEffect(() => {
+    const applyFontSize = (size: string) => {
+      const root = document.documentElement
+      switch (size) {
+        case 'small':
+          root.style.fontSize = '14px'
+          break
+        case 'large':
+          root.style.fontSize = '18px'
+          break
+        case 'extra-large':
+          root.style.fontSize = '20px'
+          break
+        default:
+          root.style.fontSize = '16px' // medium
+      }
+    }
+
+    applyFontSize(fontSize)
+    // Also persist to localStorage whenever font size changes
+    try {
+      const saved = localStorage.getItem('user_settings')
+      const settings = saved ? JSON.parse(saved) : {}
+      settings.fontSize = fontSize
+      localStorage.setItem('user_settings', JSON.stringify(settings))
+    } catch (e) {
+      // ignore
+    }
+  }, [fontSize])
+
+  // Load saved dark mode setting on mount
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('user_settings')
+      if (saved) {
+        const parsed = JSON.parse(saved)
+        if (parsed.darkMode !== undefined) {
+          const isDark = parsed.darkMode
+          setDarkMode(isDark)
+          // Apply to Chakra if not already in that mode
+          if ((colorMode === 'dark') !== isDark) {
+            toggleColorMode()
+          }
+        }
+      }
+    } catch (e) {
+      // ignore
+    }
+  }, [colorMode, toggleColorMode])
 
   // Notifications State
   const [emailNotifications, setEmailNotifications] = useState(true)
   const [pushNotifications, setPushNotifications] = useState(true)
-  const [newOfferReceived, setNewOfferReceived] = useState(true)
-  const [tradeCompleted, setTradeCompleted] = useState(true)
-  const [tradeAccepted, setTradeAccepted] = useState(true)
-  const [tradeDeclined, setTradeDeclined] = useState(true)
-  const [notificationFrequency, setNotificationFrequency] = useState('instant')
+  
 
   // UI State
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
+  const [changingPassword, setChangingPassword] = useState(false)
 
+  // Danger Zone UI state (confirmation input)
+  const [deleteConfirmInput, setDeleteConfirmInput] = useState('')
+  const isDeleteValidated = deleteConfirmInput.trim() !== '' && deleteConfirmInput === (user?.name || '')
+  
   // Modals
   const { isOpen: isPasswordModalOpen, onOpen: onPasswordModalOpen, onClose: onPasswordModalClose } = useDisclosure()
   const { isOpen: isLogoutModalOpen, onOpen: onLogoutModalOpen, onClose: onLogoutModalClose } = useDisclosure()
@@ -132,35 +208,50 @@ const SettingsPage: React.FC = () => {
     }
   }, [user])
 
-  // Sync dark mode with Chakra
+  // Sync dark mode to Chakra colorMode when user toggles switch
   useEffect(() => {
     if (darkMode !== (colorMode === 'dark')) {
       toggleColorMode()
     }
   }, [darkMode, colorMode, toggleColorMode])
 
+  // Ensure high contrast remains disabled (defensive)
+  useEffect(() => {
+    if (highContrast) {
+      setHighContrast(false)
+    }
+  }, []) // run once on mount
+
   // Track changes
   useEffect(() => {
-    const hasChanges = 
+    const hasChanges =
       username !== (user?.name || '') ||
       email !== (user?.email || '') ||
       profileImage !== ((user as any)?.profile_picture || null) ||
       darkMode !== (colorMode === 'dark') ||
       language !== 'en' ||
+      timezone !== Intl.DateTimeFormat().resolvedOptions().timeZone ||
+      dashboardLayout !== 'default' ||
+      fontSize !== initializeFontSize() ||
+      highContrast !== false ||
       emailNotifications !== true ||
-      pushNotifications !== true ||
-      newOfferReceived !== true ||
-      tradeCompleted !== true ||
-      tradeAccepted !== true ||
-      tradeDeclined !== true ||
-      notificationFrequency !== 'instant'
+      pushNotifications !== true
 
     setHasUnsavedChanges(hasChanges)
   }, [
-    username, email, profileImage, darkMode, colorMode,
-    language, emailNotifications, pushNotifications,
-    newOfferReceived, tradeCompleted, tradeAccepted,
-    tradeDeclined, notificationFrequency, user
+    username,
+    email,
+    profileImage,
+    darkMode,
+    colorMode,
+    language,
+    timezone,
+    dashboardLayout,
+    fontSize,
+    highContrast,
+    emailNotifications,
+    pushNotifications,
+    user
   ])
 
   // Auto-save indicator
@@ -241,7 +332,7 @@ const SettingsPage: React.FC = () => {
   }
 
   // Handle password change
-  const handlePasswordChange = () => {
+  const handlePasswordChange = async () => {
     setPasswordErrors([])
 
     // Validate new password
@@ -263,21 +354,55 @@ const SettingsPage: React.FC = () => {
       return
     }
 
-    // Simulate password change (frontend only)
-    toast({
-      title: 'Password changed',
-      description: 'Your password has been updated successfully.',
-      status: 'success',
-      duration: 3000,
-      isClosable: true,
-    })
-
-    // Reset form
-    setCurrentPassword('')
-    setNewPassword('')
-    setConfirmPassword('')
-    setPasswordErrors([])
-    onPasswordModalClose()
+    setChangingPassword(true)
+    try {
+      const resp = await api.post('/api/users/change-password', {
+        current_password: currentPassword,
+        new_password: newPassword,
+        confirm_password: confirmPassword,
+      })
+      if (resp.data && resp.data.success) {
+        // Refresh context user so changes persist across pages
+        try {
+          await refreshUser()
+        } catch (e) {
+          // non-fatal: we already updated backend; silently continue
+          console.warn('Failed to refresh user after profile update', e)
+        }
+        toast({
+          title: 'Password changed',
+          description: 'Your password has been updated successfully.',
+          status: 'success',
+          duration: 3000,
+          isClosable: true,
+        })
+        // Reset form
+        setCurrentPassword('')
+        setNewPassword('')
+        setConfirmPassword('')
+        setPasswordErrors([])
+        onPasswordModalClose()
+      } else {
+        toast({
+          title: 'Error',
+          description: resp.data?.error || 'Failed to change password',
+          status: 'error',
+          duration: 3000,
+          isClosable: true,
+        })
+      }
+    } catch (err: any) {
+      const message = err?.response?.data?.error || err.message || 'Failed to change password'
+      toast({
+        title: 'Error',
+        description: message,
+        status: 'error',
+        duration: 3000,
+        isClosable: true,
+      })
+    } finally {
+      setChangingPassword(false)
+    }
   }
 
   // Validate email
@@ -347,11 +472,11 @@ const SettingsPage: React.FC = () => {
         }
       }
 
-      // Persist preferences locally as before
+      // Persist preferences locally
       const settings = {
         username,
         email,
-        profileImage,
+        profileImage: profileUrlToSave ?? profileImage,
         darkMode,
         language,
         timezone,
@@ -360,30 +485,54 @@ const SettingsPage: React.FC = () => {
         highContrast,
         emailNotifications,
         pushNotifications,
-        newOfferReceived,
-        tradeCompleted,
-        tradeAccepted,
-        tradeDeclined,
-        notificationFrequency,
       }
       localStorage.setItem('user_settings', JSON.stringify(settings))
 
-      setIsSaving(false)
-      setSaveStatus('saved')
-      setHasUnsavedChanges(false)
-
-      toast({
-        title: 'Settings saved',
-        description: 'Your preferences have been updated successfully.',
-        status: 'success',
-        duration: 3000,
-        isClosable: true,
+      // Update user profile in backend
+      const resp = await api.put('/api/users/profile', {
+        name: username,
+        email: email,
+        profile_picture: profileUrlToSave ?? profileImage,
       })
+
+      if (resp.data && resp.data.success) {
+        // Ensure persisted settings reflect final profile URL
+        localStorage.setItem('user_settings', JSON.stringify(settings))
+        
+        // Refresh context user so changes persist across pages
+        try {
+          await refreshUser()
+        } catch (e) {
+          console.warn('Failed to refresh user after profile update', e)
+        }
+
+        setIsSaving(false)
+        setSaveStatus('saved')
+        setHasUnsavedChanges(false)
+
+        toast({
+          title: 'Settings saved',
+          description: 'Your preferences have been updated successfully.',
+          status: 'success',
+          duration: 3000,
+          isClosable: true,
+        })
+      } else {
+        setIsSaving(false)
+        setSaveStatus('error')
+        toast({
+          title: 'Error',
+          description: resp.data?.error || 'Failed to update profile',
+          status: 'error',
+          duration: 3000,
+          isClosable: true,
+        })
+      }
     } catch (err: any) {
       setIsSaving(false)
       setSaveStatus('error')
       toast({
-        title: 'Save failed',
+        title: 'Error',
         description: err?.response?.data?.error || err?.message || 'Failed to save settings',
         status: 'error',
         duration: 4000,
@@ -392,20 +541,47 @@ const SettingsPage: React.FC = () => {
     }
   }
 
-  // Handle logout
-  const handleLogout = () => {
-    logout()
+  // Handle logout — clear tokens/cookies and notify backend if possible
+  const handleLogout = async () => {
+    // Clear common client-side storage keys
+    try {
+      const keys = ['token', 'auth_token', 'access_token', 'refresh_token', 'session']
+      keys.forEach((k) => {
+        try { localStorage.removeItem(k) } catch {}
+        try { sessionStorage.removeItem(k) } catch {}
+        try { document.cookie = `${k}=; Max-Age=0; path=/;` } catch {}
+      })
+    } catch (e) {
+      // ignore
+    }
+
+    // Attempt server-side logout (best-effort)
+    try {
+      await api.post('/api/logout')
+    } catch (e) {
+      // not fatal — continue clearing client state
+    }
+
+    // Call context logout if available to clear auth state
+    try {
+      logout && logout()
+    } catch (e) {
+      // ignore
+    }
+
     toast({
       title: 'Logged out',
       description: 'You have been successfully logged out.',
       status: 'success',
-      duration: 3000,
+      duration: 2000,
       isClosable: true,
     })
-    navigate('/login')
-    onLogoutModalClose()
-  }
 
+    // Navigate to login page and close any open logout dialog
+    navigate('/login')
+    try { onLogoutModalClose() } catch {}
+  }
+ 
   // Handle delete account
   const handleDeleteAccount = () => {
     // Simulate account deletion (frontend only)
@@ -470,14 +646,26 @@ const SettingsPage: React.FC = () => {
                 Manage your account, preferences, and notification settings.
               </Text>
             </Box>
-            {saveStatus === 'saved' && (
-              <Badge colorScheme="green" px={3} py={1} borderRadius="full" fontSize="sm">
-                <HStack spacing={1}>
-                  <Icon as={FaCheckCircle} />
-                  <Text>Saved</Text>
-                </HStack>
-              </Badge>
-            )}
+            <HStack spacing={3}>
+              {saveStatus === 'saved' && (
+                <Badge colorScheme="green" px={3} py={1} borderRadius="full" fontSize="sm">
+                  <HStack spacing={1}>
+                    <Icon as={FaCheckCircle} />
+                    <Text>Saved</Text>
+                  </HStack>
+                </Badge>
+              )}
+              {/* Moved logout to header: small logout icon button */}
+              <IconButton
+                aria-label="Logout"
+                icon={<FaSignOutAlt />}
+                size="sm"
+                variant="outline"
+                colorScheme="orange"
+                onClick={onLogoutModalOpen}
+                title="Logout"
+              />
+            </HStack>
           </Flex>
 
           {/* Account Section */}
@@ -624,6 +812,8 @@ const SettingsPage: React.FC = () => {
                     }}
                     colorScheme="brand"
                     size="lg"
+                    isDisabled
+                    title="Dark mode is locked"
                   />
                 </Flex>
 
@@ -742,12 +932,10 @@ const SettingsPage: React.FC = () => {
                         </Text>
                       </Box>
                       <Switch
-                        isChecked={highContrast}
-                        onChange={(e) => {
-                          setHighContrast(e.target.checked)
-                          setHasUnsavedChanges(true)
-                        }}
+                        isChecked={false}
+                        isDisabled
                         colorScheme="brand"
+                        title="High contrast mode is disabled"
                       />
                     </Flex>
                   </VStack>
@@ -824,126 +1012,14 @@ const SettingsPage: React.FC = () => {
 
                 <Divider />
 
-                {/* Trade-specific Notifications */}
-                <Box>
-                  <FormLabel mb={3}>Trade & Offer Notifications</FormLabel>
-                  <VStack spacing={4} align="stretch" pl={4}>
-                    <Flex justify="space-between" align="center">
-                      <Box>
-                        <FormLabel mb={1} fontSize="sm">
-                          <HStack spacing={2}>
-                            <Icon as={FaHandshake} />
-                            <Text>New Offer Received</Text>
-                          </HStack>
-                        </FormLabel>
-                        <Text fontSize="xs" color={useColorModeValue('gray.500', 'gray.400')}>
-                          Get notified when someone makes an offer
-                        </Text>
-                      </Box>
-                      <Switch
-                        isChecked={newOfferReceived}
-                        onChange={(e) => {
-                          setNewOfferReceived(e.target.checked)
-                          setHasUnsavedChanges(true)
-                        }}
-                        colorScheme="brand"
-                      />
-                    </Flex>
+                {/* Trade & offer notifications removed per request */}
 
-                    <Flex justify="space-between" align="center">
-                      <Box>
-                        <FormLabel mb={1} fontSize="sm">
-                          <HStack spacing={2}>
-                            <Icon as={FaExchangeAlt} />
-                            <Text>Trade Accepted</Text>
-                          </HStack>
-                        </FormLabel>
-                        <Text fontSize="xs" color={useColorModeValue('gray.500', 'gray.400')}>
-                          Notify when your offer is accepted
-                        </Text>
-                      </Box>
-                      <Switch
-                        isChecked={tradeAccepted}
-                        onChange={(e) => {
-                          setTradeAccepted(e.target.checked)
-                          setHasUnsavedChanges(true)
-                        }}
-                        colorScheme="brand"
-                      />
-                    </Flex>
-
-                    <Flex justify="space-between" align="center">
-                      <Box>
-                        <FormLabel mb={1} fontSize="sm">
-                          <HStack spacing={2}>
-                            <Icon as={FaExchangeAlt} />
-                            <Text>Trade Declined</Text>
-                          </HStack>
-                        </FormLabel>
-                        <Text fontSize="xs" color={useColorModeValue('gray.500', 'gray.400')}>
-                          Notify when your offer is declined
-                        </Text>
-                      </Box>
-                      <Switch
-                        isChecked={tradeDeclined}
-                        onChange={(e) => {
-                          setTradeDeclined(e.target.checked)
-                          setHasUnsavedChanges(true)
-                        }}
-                        colorScheme="brand"
-                      />
-                    </Flex>
-
-                    <Flex justify="space-between" align="center">
-                      <Box>
-                        <FormLabel mb={1} fontSize="sm">
-                          <HStack spacing={2}>
-                            <Icon as={FaCheckCircle} />
-                            <Text>Trade Completed</Text>
-                          </HStack>
-                        </FormLabel>
-                        <Text fontSize="xs" color={useColorModeValue('gray.500', 'gray.400')}>
-                          Get notified when a trade is completed
-                        </Text>
-                      </Box>
-                      <Switch
-                        isChecked={tradeCompleted}
-                        onChange={(e) => {
-                          setTradeCompleted(e.target.checked)
-                          setHasUnsavedChanges(true)
-                        }}
-                        colorScheme="brand"
-                      />
-                    </Flex>
-                  </VStack>
-                </Box>
-
-                <Divider />
-
-                {/* Notification Frequency */}
-                <FormControl>
-                  <FormLabel>Notification Frequency</FormLabel>
-                  <Select
-                    value={notificationFrequency}
-                    onChange={(e) => {
-                      setNotificationFrequency(e.target.value)
-                      setHasUnsavedChanges(true)
-                    }}
-                    maxW="300px"
-                  >
-                    <option value="instant">Instant</option>
-                    <option value="daily">Daily Digest</option>
-                    <option value="weekly">Weekly Summary</option>
-                  </Select>
-                  <Text fontSize="xs" color={useColorModeValue('gray.500', 'gray.400')} mt={2}>
-                    Choose how often you want to receive notifications
-                  </Text>
-                </FormControl>
+                
               </VStack>
             </CardBody>
           </Card>
 
-          {/* Danger Zone Section - Logout & Delete Account */}
+          {/* Danger Zone — enhanced UI */}
           <Card
             bg={cardBg}
             borderRadius="lg"
@@ -953,55 +1029,86 @@ const SettingsPage: React.FC = () => {
             _hover={{ boxShadow: 'md' }}
             transition="all 0.2s"
           >
-            <CardHeader pb={3} bg="red.50">
-              <HStack spacing={3}>
-                <Icon as={FaTrash} color="red.500" boxSize={5} />
-                <Heading size="md" color="red.600">Danger Zone</Heading>
+            <CardHeader
+              pb={3}
+              bgGradient="linear(to-r, red.50, rgba(255,240,240,0))"
+            >
+              <HStack spacing={3} justify="space-between" w="full">
+                <HStack spacing={3}>
+                  <Icon as={FaTrash} color="red.500" boxSize={5} />
+                  <Heading size="md" color="red.600">Danger Zone</Heading>
+                  <Badge colorScheme="red">Danger</Badge>
+                </HStack>
+                <Text fontSize="sm" color="red.600" fontWeight="semibold">
+                  Irreversible actions below
+                </Text>
               </HStack>
             </CardHeader>
             <CardBody pt={4}>
-              <VStack spacing={6} align="stretch">
-                {/* Logout */}
-                <Box>
-                  <Heading size="sm" mb={2}>Logout</Heading>
-                  <Text fontSize="sm" color={useColorModeValue('gray.600', 'gray.400')} mb={4}>
-                    Sign out of your account on this device. You can log back in anytime.
-                  </Text>
-                  <Button
-                    leftIcon={<FaSignOutAlt />}
-                    colorScheme="orange"
-                    variant="outline"
-                    onClick={onLogoutModalOpen}
-                    w="full"
-                  >
-                    Logout
-                  </Button>
-                </Box>
-
-                <Divider />
-
-                {/* Delete Account */}
-                <Box>
-                  <Heading size="sm" mb={2} color="red.600">Delete Account</Heading>
-                  <Text fontSize="sm" color={useColorModeValue('gray.600', 'gray.400')} mb={4}>
-                    Permanently delete your account and all associated data. This action cannot be undone.
-                  </Text>
-                  <Button
-                    leftIcon={<FaTrash />}
-                    colorScheme="red"
-                    variant="outline"
-                    onClick={onDeleteModalOpen}
-                    w="full"
-                  >
-                    Delete Account
-                  </Button>
-                </Box>
-              </VStack>
+             <VStack spacing={6} align="stretch">
+ 
+                 {/* Delete Account with explicit confirmation */}
+                 <Box>
+                   <Heading size="sm" mb={2} color="red.600">Delete Account</Heading>
+                   <Text fontSize="sm" color={useColorModeValue('gray.600', 'gray.400')} mb={3}>
+                     Permanently delete your account and all associated data. This action cannot be undone.
+                   </Text>
+                   <Text fontSize="xs" color="red.500" mb={2}>
+                     Click Delete to open a confirmation popout. You will need to type your username to enable deletion.
+                   </Text>
+                   <Popover placement="right" isLazy>
+                     <PopoverTrigger>
+                       <Button leftIcon={<FaTrash />} colorScheme="red" variant="outline" size="sm">
+                         Delete Account
+                       </Button>
+                     </PopoverTrigger>
+                     <PopoverContent>
+                       <PopoverArrow />
+                       <PopoverHeader fontWeight="bold" color="red.600">Confirm Deletion</PopoverHeader>
+                       <PopoverCloseButton />
+                       <PopoverBody>
+                         <VStack align="stretch" spacing={3}>
+                           <Text fontSize="sm" color={useColorModeValue('gray.700', 'gray.200')}>
+                             This action is irreversible. To confirm, type your exact username below:
+                           </Text>
+                           <Input
+                             placeholder={user?.name ? `Type "${user?.name}"` : 'Type your username'}
+                             value={deleteConfirmInput}
+                             onChange={(e) => setDeleteConfirmInput(e.target.value)}
+                           />
+                         </VStack>
+                       </PopoverBody>
+                       <PopoverFooter display="flex" justifyContent="flex-end">
+                         <Button
+                           variant="outline"
+                           mr={2}
+                           size="sm"
+                           onClick={() => {
+                             setDeleteConfirmInput('')
+                           }}
+                         >
+                           Clear
+                         </Button>
+                         <Button
+                           colorScheme="red"
+                           size="sm"
+                           isDisabled={!isDeleteValidated}
+                           onClick={() => {
+                             handleDeleteAccount()
+                           }}
+                         >
+                           Confirm Delete
+                         </Button>
+                       </PopoverFooter>
+                     </PopoverContent>
+                   </Popover>
+                 </Box>
+               </VStack>
             </CardBody>
           </Card>
         </VStack>
       </Container>
-
+ 
       {/* Sticky Save Button */}
       {hasUnsavedChanges && (
         <Box
@@ -1036,11 +1143,6 @@ const SettingsPage: React.FC = () => {
                     setLanguage('en')
                     setEmailNotifications(true)
                     setPushNotifications(true)
-                    setNewOfferReceived(true)
-                    setTradeCompleted(true)
-                    setTradeAccepted(true)
-                    setTradeDeclined(true)
-                    setNotificationFrequency('instant')
                     setHasUnsavedChanges(false)
                     toast({
                       title: 'Changes discarded',
@@ -1161,7 +1263,7 @@ const SettingsPage: React.FC = () => {
             <Button variant="ghost" mr={3} onClick={onPasswordModalClose}>
               Cancel
             </Button>
-            <Button colorScheme="brand" onClick={handlePasswordChange}>
+            <Button colorScheme="brand" onClick={handlePasswordChange} isLoading={changingPassword} loadingText="Changing...">
               Change Password
             </Button>
           </ModalFooter>
@@ -1188,48 +1290,6 @@ const SettingsPage: React.FC = () => {
               </Button>
               <Button colorScheme="orange" onClick={handleLogout} ml={3}>
                 Logout
-              </Button>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialogOverlay>
-      </AlertDialog>
-
-      {/* Delete Account Confirmation Modal */}
-      <AlertDialog
-        isOpen={isDeleteModalOpen}
-        leastDestructiveRef={deleteCancelRef}
-        onClose={onDeleteModalClose}
-      >
-        <AlertDialogOverlay>
-          <AlertDialogContent>
-            <AlertDialogHeader fontSize="lg" fontWeight="bold">
-              Delete Account
-            </AlertDialogHeader>
-            <AlertDialogBody>
-              <VStack align="start" spacing={3}>
-                <Text>
-                  Are you sure you want to delete your account? This action cannot be undone.
-                </Text>
-                <Text fontSize="sm" color="red.500" fontWeight="semibold">
-                  Warning: This will permanently delete all your data, including:
-                </Text>
-                <VStack align="start" spacing={1} pl={4}>
-                  <Text fontSize="sm">• All your products</Text>
-                  <Text fontSize="sm">• All your trades and offers</Text>
-                  <Text fontSize="sm">• Your profile and settings</Text>
-                  <Text fontSize="sm">• All associated data</Text>
-                </VStack>
-                <Text fontSize="sm" color="gray.600">
-                  This is a frontend simulation only. In a real application, this would permanently delete your account.
-                </Text>
-              </VStack>
-            </AlertDialogBody>
-            <AlertDialogFooter>
-              <Button ref={deleteCancelRef} onClick={onDeleteModalClose}>
-                Cancel
-              </Button>
-              <Button colorScheme="red" onClick={handleDeleteAccount} ml={3}>
-                Delete Account
               </Button>
             </AlertDialogFooter>
           </AlertDialogContent>

@@ -248,13 +248,6 @@ const SavedProducts: React.FC = () => {
           {/* Header */}
           <Flex justify="space-between" align="center">
             <HStack spacing={4}>
-              <IconButton
-                aria-label="Go back"
-                icon={<FiArrowLeft />}
-                onClick={() => navigate(-1)}
-                variant="ghost"
-                size="sm"
-              />
               <VStack align="start" spacing={1}>
                 <Heading size="lg" color="brand.500">
                   Saved Products
@@ -299,14 +292,14 @@ const SavedProducts: React.FC = () => {
               </CardBody>
             </Card>
           ) : (
-            <SimpleGrid columns={{ base: 1, md: 2, lg: 3 }} spacing={6}>
+            <SimpleGrid columns={{ base: 2, md: 2, lg: 4 }} spacing={3}>
               {savedProducts.map((product) => (
-                <Card key={product.id} bg="white" shadow="sm" overflow="hidden">
+                <Card key={product.id} bg="white" shadow="sm" overflow="hidden" h="full">
                   <Box position="relative">
                     <Image
                       src={getFirstImage(product.image_urls)}
                       alt={product.title}
-                      h="200px"
+                      h="120px"
                       w="full"
                       objectFit="cover"
                       fallbackSrc="https://via.placeholder.com/300x200?text=No+Image"
@@ -315,9 +308,9 @@ const SavedProducts: React.FC = () => {
                       aria-label="Remove from saved"
                       icon={<FiTrash2 />}
                       position="absolute"
-                      top={2}
-                      right={2}
-                      size="sm"
+                      top={1}
+                      right={1}
+                      size="xs"
                       colorScheme="red"
                       variant="solid"
                       isLoading={removing === product.id}
@@ -325,65 +318,57 @@ const SavedProducts: React.FC = () => {
                     />
                   </Box>
                   
-                  <CardBody>
-                    <VStack spacing={3} align="stretch">
+                  <CardBody py={2} px={2}>
+                    <VStack spacing={1.5} align="stretch">
                       <Box>
-                        <Heading size="sm" color="brand.500" noOfLines={2}>
+                        <Heading size="xs" color="brand.500" noOfLines={1}>
                           {product.title}
                         </Heading>
-                        <Text color="gray.600" fontSize="sm" noOfLines={2} mt={1}>
+                        <Text color="gray.600" fontSize="xs" noOfLines={1} mt={0.5}>
                           {product.description}
                         </Text>
                       </Box>
 
-                      <HStack spacing={2} wrap="wrap">
+                      <HStack spacing={1} wrap="wrap" fontSize="xs">
                         {product.premium && (
-                          <Badge colorScheme="yellow" size="sm">Premium</Badge>
+                          <Badge colorScheme="yellow" size="xs">Premium</Badge>
                         )}
                         <Badge 
                           colorScheme={
                             product.status === 'available' ? 'green' : 
                             product.status === 'locked' ? 'orange' : 'red'
                           }
-                          size="sm"
+                          size="xs"
                         >
                           {product.status}
                         </Badge>
-                        {product.condition && (
-                          <Badge colorScheme="blue" size="sm">{product.condition}</Badge>
-                        )}
-                        {product.category && (
-                          <Badge colorScheme="purple" size="sm">{product.category}</Badge>
-                        )}
                       </HStack>
 
-                      <Flex justify="space-between" align="center">
-                        <Text fontSize="lg" fontWeight="bold" color="brand.500">
+                      <Box>
+                        <Text fontSize="sm" fontWeight="bold" color="brand.500">
                           {product.price ? formatCurrency(product.price) : 'Barter Only'}
                         </Text>
-                        <Text fontSize="sm" color="gray.500">
+                        <Text fontSize="xs" color="gray.500" noOfLines={1}>
                           by {product.seller_name}
                         </Text>
-                      </Flex>
+                      </Box>
 
-                      <Divider />
-
-                      <HStack spacing={2}>
+                      <HStack spacing={1} pt={0.5}>
                         <Button
                           leftIcon={<FiEye />}
                           colorScheme="blue"
                           variant="outline"
-                          size="sm"
+                          size="xs"
                           flex={1}
                           onClick={() => handleViewProduct(product)}
                         >
-                          View Details
+                          View
                         </Button>
                         {product.status === 'available' && (
                           <Button
                             leftIcon={<FiShoppingCart />}
                             colorScheme="brand"
-                            size="sm"
+                            size="xs"
                             flex={1}
                             onClick={() => handleViewProduct(product)}
                           >
@@ -391,10 +376,6 @@ const SavedProducts: React.FC = () => {
                           </Button>
                         )}
                       </HStack>
-
-                      <Text fontSize="xs" color="gray.500" textAlign="center">
-                        Saved on {formatDate(product.created_at)}
-                      </Text>
                     </VStack>
                   </CardBody>
                 </Card>

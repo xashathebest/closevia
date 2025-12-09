@@ -932,22 +932,29 @@ func (h *TradeHandler) SendTradeMessage(c *fiber.Ctx) error {
 // CountTrades returns count of trades for current user by direction and status
 func (h *TradeHandler) CountTrades(c *fiber.Ctx) error {
 	userID, ok := middleware.GetUserIDFromContext(c)
+	// If user is not authenticated, return a zero count instead of 401 so UI components
+	// that poll this endpoint can render without failing.
 	if !ok {
-		// If user is not authenticated, return a zero count instead of 401 so UI components
-		// that poll this endpoint can render without failing. This is a safe default for
-		// client-side badges and does not expose private data.
 		return c.JSON(models.APIResponse{Success: true, Data: fiber.Map{"count": 0}})
 	}
+
 	direction := c.Query("direction", "incoming")
-	status := c.Query("status", "pending")
-	// Debug: log incoming query params for troubleshooting client 400 reports
-	fmt.Printf("CountTrades called - userID=%v, direction=%s, status=%s\n", func() interface{} {
-		if ok {
-			return userID
-		} else {
-			return "<anon>"
-		}
-	}(), direction, status)
+	status := c.Query("status", "")
+
+	// Validate direction to avoid unexpected SQL construction
+	if direction != "incoming" && direction != "outgoing" {
+		// Treat unknown direction as incoming (safe default) and log for debugging
+		fmt.Printf("CountTrades: invalid direction='%s' from user=%d, defaulting to 'incoming'\n", direction, userID)
+		direction = "incoming"
+	}
+
+	// Validate status against a known whitelist. An empty status means no filter.
+	allowedStatuses := map[string]bool{"pending": true, "active": true, "completed": true, "declined": true, "cancelled": true, "countered": true}
+	if status != "" && !allowedStatuses[status] {
+		fmt.Printf("CountTrades: unknown status='%s' from user=%d - ignoring status filter\n", status, userID)
+		status = ""
+	}
+
 	where := "WHERE t.seller_id = ?"
 	args := []interface{}{userID}
 	if direction == "outgoing" {
@@ -957,12 +964,16 @@ func (h *TradeHandler) CountTrades(c *fiber.Ctx) error {
 		where += " AND t.status = ?"
 		args = append(args, status)
 	}
+
 	var count int
-	if err := h.db.QueryRow("SELECT COUNT(*) FROM trades t "+where, args...).Scan(&count); err != nil {
+	// Use a prepared-like query with args to avoid injection and driver issues
+	query := "SELECT COUNT(*) FROM trades t " + where
+	if err := h.db.QueryRow(query, args...).Scan(&count); err != nil {
 		// Log and return zero as a safe fallback to avoid 400 responses for UI polling
-		fmt.Printf("CountTrades: db query error: %v - returning count=0\n", err)
+		fmt.Printf("CountTrades: db query error for user=%d query='%s' args=%v: %v - returning count=0\n", userID, query, args, err)
 		return c.JSON(models.APIResponse{Success: true, Data: fiber.Map{"count": 0}})
 	}
+
 	return c.JSON(models.APIResponse{Success: true, Data: fiber.Map{"count": count}})
 }
 

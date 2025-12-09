@@ -269,6 +269,80 @@ func CreateTables() error {
 			INDEX idx_created_at (created_at),
 			INDEX idx_deleted_at (deleted_at)
 		)`,
+		`CREATE TABLE IF NOT EXISTS product_votes (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			product_id INT NOT NULL,
+			user_id INT NOT NULL,
+			vote ENUM('under','over') NOT NULL,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE,
+			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+			UNIQUE KEY uniq_product_user_vote (product_id, user_id)
+		)`,
+
+		`CREATE TABLE IF NOT EXISTS riders (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			user_id INT NOT NULL,
+			name VARCHAR(255) NOT NULL,
+			vehicle_type ENUM('motorcycle', 'bicycle', 'car') NOT NULL DEFAULT 'motorcycle',
+			vehicle_plate VARCHAR(20) NULL,
+			phone VARCHAR(20) NOT NULL,
+			rating DECIMAL(3,2) DEFAULT 0.00,
+			is_active BOOLEAN DEFAULT TRUE,
+			latitude DECIMAL(10,8) NULL,
+			longitude DECIMAL(11,8) NULL,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+			UNIQUE KEY unique_rider_user (user_id)
+		)`,
+
+		`CREATE TABLE IF NOT EXISTS deliveries (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			user_id INT NOT NULL,
+			trade_id INT NULL,
+			delivery_type ENUM('standard', 'express') NOT NULL DEFAULT 'standard',
+			status ENUM('pending', 'claimed', 'picked_up', 'in_transit', 'delivered', 'cancelled') NOT NULL DEFAULT 'pending',
+			rider_id INT NULL,
+			pickup_latitude DECIMAL(10,8) NULL,
+			pickup_longitude DECIMAL(11,8) NULL,
+			pickup_address TEXT NOT NULL,
+			delivery_latitude DECIMAL(10,8) NULL,
+			delivery_longitude DECIMAL(11,8) NULL,
+			delivery_address TEXT NOT NULL,
+			special_instructions TEXT NULL,
+			total_cost DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+			estimated_eta TIMESTAMP NULL,
+			item_count INT NOT NULL DEFAULT 1,
+			is_fragile BOOLEAN DEFAULT FALSE,
+			claimed_at TIMESTAMP NULL,
+			picked_up_at TIMESTAMP NULL,
+			in_transit_at TIMESTAMP NULL,
+			delivered_at TIMESTAMP NULL,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+			FOREIGN KEY (trade_id) REFERENCES trades(id) ON DELETE SET NULL,
+			FOREIGN KEY (rider_id) REFERENCES riders(id) ON DELETE SET NULL,
+			INDEX idx_delivery_user (user_id),
+			INDEX idx_delivery_trade (trade_id),
+			INDEX idx_delivery_rider (rider_id),
+			INDEX idx_delivery_status (status),
+			INDEX idx_delivery_type (delivery_type)
+		)`,
+
+		`CREATE TABLE IF NOT EXISTS delivery_items (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			delivery_id INT NOT NULL,
+			product_id INT NOT NULL,
+			product_name VARCHAR(255) NULL,
+			is_fragile BOOLEAN DEFAULT FALSE,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (delivery_id) REFERENCES deliveries(id) ON DELETE CASCADE,
+			FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE,
+			INDEX idx_delivery_items_delivery (delivery_id),
+			INDEX idx_delivery_items_product (product_id)
+		)`,
 	}
 
 	for _, query := range queries {
@@ -305,6 +379,11 @@ func CreateTables() error {
 		"CREATE INDEX IF NOT EXISTS idx_comments_user ON comments(user_id)",
 		"CREATE INDEX IF NOT EXISTS idx_wishlists_user ON wishlists(user_id)",
 		"CREATE INDEX IF NOT EXISTS idx_wishlists_product ON wishlists(product_id)",
+		"CREATE INDEX IF NOT EXISTS idx_riders_user ON riders(user_id)",
+		"CREATE INDEX IF NOT EXISTS idx_riders_active ON riders(is_active)",
+		"CREATE INDEX IF NOT EXISTS idx_deliveries_user ON deliveries(user_id)",
+		"CREATE INDEX IF NOT EXISTS idx_deliveries_status ON deliveries(status)",
+		"CREATE INDEX IF NOT EXISTS idx_delivery_items_delivery ON delivery_items(delivery_id)",
 	}
 
 	for _, query := range indexQueries {
@@ -324,7 +403,7 @@ func CreateTables() error {
 // ensureUserColumns adds missing columns to the users table if they don't exist
 func ensureUserColumns() {
 	columns := []struct {
-		name    string
+		name       string
 		definition string
 	}{
 		{"is_organization", "TINYINT(1) NOT NULL DEFAULT 0"},
@@ -346,7 +425,7 @@ func ensureUserColumns() {
 			AND TABLE_NAME = 'users' 
 			AND COLUMN_NAME = ?
 		`, col.name).Scan(&count)
-		
+
 		if err != nil {
 			log.Printf("Warning: failed to check column %s: %v", col.name, err)
 			continue

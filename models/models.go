@@ -105,10 +105,10 @@ type User struct {
 	OrgVerified    bool      `json:"org_verified"`
 	OrgName        string    `json:"org_name,omitempty"`
 	OrgLogoURL     string    `json:"org_logo_url,omitempty"`
-	ProfilePicture string    `json:"profile_picture,omitempty"`
 	Department     string    `json:"department,omitempty"`
 	Bio            string    `json:"bio,omitempty"`
 	Badges         IntArray  `json:"badges,omitempty"`
+	ProfilePicture string    `json:"profile_picture,omitempty"`
 	Latitude       *float64  `json:"latitude,omitempty"`
 	Longitude      *float64  `json:"longitude,omitempty"`
 	CreatedAt      time.Time `json:"created_at"`
@@ -189,6 +189,15 @@ type ProductUpdate struct {
 	Condition   *string      `json:"condition,omitempty" validate:"omitempty,oneof=New Like-New Used Fair"`
 	Category    *string      `json:"category,omitempty"`
 	BiddingType *string      `json:"bidding_type,omitempty" validate:"omitempty,oneof=none blind open"`
+}
+
+// ProductVote represents a user's vote on a product price
+type ProductVote struct {
+	ID        int       `json:"id"`
+	ProductID int       `json:"product_id"`
+	UserID    int       `json:"user_id"`
+	Vote      string    `json:"vote"` // "under" or "over"
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // Order represents an order
@@ -393,6 +402,89 @@ func (r APIResponse) MarshalJSON() ([]byte, error) {
 		}
 	}
 	return json.Marshal(a)
+}
+
+// Rider represents a delivery rider
+type Rider struct {
+	ID           int       `json:"id"`
+	UserID       int       `json:"user_id"`
+	Name         string    `json:"name"`
+	VehicleType  string    `json:"vehicle_type" validate:"oneof=motorcycle bicycle car"`
+	VehiclePlate string    `json:"vehicle_plate,omitempty"`
+	Phone        string    `json:"phone"`
+	Rating       float64   `json:"rating"` // Average rating from deliveries
+	IsActive     bool      `json:"is_active"`
+	Latitude     *float64  `json:"latitude,omitempty"`
+	Longitude    *float64  `json:"longitude,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+// Delivery represents a delivery request
+type Delivery struct {
+	ID                 int        `json:"id"`
+	UserID             int        `json:"user_id"`
+	TradeID            *int       `json:"trade_id,omitempty"` // Optional: can be standalone delivery
+	DeliveryType       string     `json:"delivery_type" validate:"oneof=standard express"`
+	Status             string     `json:"status" validate:"oneof=pending claimed picked_up in_transit delivered cancelled"`
+	RiderID            *int       `json:"rider_id,omitempty"`
+	PickupLatitude     *float64   `json:"pickup_latitude,omitempty"`
+	PickupLongitude    *float64   `json:"pickup_longitude,omitempty"`
+	PickupAddress      string     `json:"pickup_address"`
+	DeliveryLatitude   *float64   `json:"delivery_latitude,omitempty"`
+	DeliveryLongitude  *float64   `json:"delivery_longitude,omitempty"`
+	DeliveryAddress    string     `json:"delivery_address"`
+	SpecialInstructions string    `json:"special_instructions,omitempty"`
+	TotalCost          float64    `json:"total_cost"`
+	EstimatedETA       *time.Time `json:"estimated_eta,omitempty"`
+	ItemCount          int        `json:"item_count"` // Number of items in delivery
+	IsFragile          bool       `json:"is_fragile"`  // Flag for fragile items
+	ClaimedAt          *time.Time `json:"claimed_at,omitempty"`
+	PickedUpAt         *time.Time `json:"picked_up_at,omitempty"`
+	InTransitAt        *time.Time `json:"in_transit_at,omitempty"`
+	DeliveredAt        *time.Time `json:"delivered_at,omitempty"`
+	CreatedAt          time.Time  `json:"created_at"`
+	UpdatedAt          time.Time  `json:"updated_at"`
+	// Denormalized fields for display
+	UserName           string    `json:"user_name,omitempty"`
+	RiderName          string    `json:"rider_name,omitempty"`
+	RiderVehicle       string    `json:"rider_vehicle,omitempty"`
+	RiderRating        *float64  `json:"rider_rating,omitempty"`
+	RiderLatitude      *float64  `json:"rider_latitude,omitempty"`
+	RiderLongitude     *float64  `json:"rider_longitude,omitempty"`
+}
+
+// DeliveryItem represents an item in a delivery
+type DeliveryItem struct {
+	ID          int       `json:"id"`
+	DeliveryID  int       `json:"delivery_id"`
+	ProductID   int       `json:"product_id"`
+	ProductName string    `json:"product_name,omitempty"`
+	IsFragile   bool      `json:"is_fragile"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+// DeliveryRequest represents a request to create a delivery
+type DeliveryRequest struct {
+	TradeID            *int     `json:"trade_id,omitempty"`
+	DeliveryType       string   `json:"delivery_type" validate:"required,oneof=standard express"`
+	PickupLatitude     *float64 `json:"pickup_latitude,omitempty"`
+	PickupLongitude    *float64 `json:"pickup_longitude,omitempty"`
+	PickupAddress      string   `json:"pickup_address" validate:"required"`
+	DeliveryLatitude   *float64 `json:"delivery_latitude,omitempty"`
+	DeliveryLongitude  *float64 `json:"delivery_longitude,omitempty"`
+	DeliveryAddress    string   `json:"delivery_address" validate:"required"`
+	SpecialInstructions string  `json:"special_instructions,omitempty"`
+	ProductIDs         []int    `json:"product_ids" validate:"required,min=1"` // Products to deliver
+}
+
+// DeliveryUpdate represents an update to delivery status
+type DeliveryUpdate struct {
+	Status             *string   `json:"status,omitempty" validate:"omitempty,oneof=claimed picked_up in_transit delivered cancelled"`
+	RiderID            *int      `json:"rider_id,omitempty"`
+	Latitude           *float64  `json:"latitude,omitempty"`
+	Longitude          *float64  `json:"longitude,omitempty"`
+	EstimatedETA       *time.Time `json:"estimated_eta,omitempty"`
 }
 
 // JWTClaims represents JWT token claims

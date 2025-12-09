@@ -61,6 +61,7 @@ import { getProductUrl } from '../utils/productUtils'
   avatar_url?: string
   bio?: string
     background_url?: string
+    background_position?: string
   rating?: number
   rank?: string
   is_organization?: boolean
@@ -80,9 +81,16 @@ const UserProfile: React.FC = () => {
   const [user, setUser] = useState<PublicUser | null>(null)
   const [isEditOpen, setIsEditOpen] = useState(false)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const avatarInputRef = useRef<HTMLInputElement | null>(null)
   const [draftBio, setDraftBio] = useState('')
+  const [avatarPreview, setAvatarPreview] = useState<string | null>(null)
+  const [avatarFile, setAvatarFile] = useState<File | null>(null)
   const [backgroundPreview, setBackgroundPreview] = useState<string | null>(null)
   const [backgroundFile, setBackgroundFile] = useState<File | null>(null)
+  const [backgroundPos, setBackgroundPos] = useState<{ x: number; y: number }>({ x: 50, y: 50 })
+  const dragStartRef = useRef<{ clientX: number; clientY: number; startX: number; startY: number } | null>(null)
+  const containerRef = useRef<HTMLDivElement | null>(null)
+  const [isDraggingBg, setIsDraggingBg] = useState(false)
   const [loading, setLoading] = useState(true)
   const [products, setProducts] = useState<Product[]>([])
   const [error, setError] = useState<string>('')
@@ -161,7 +169,8 @@ const UserProfile: React.FC = () => {
           created_at: (apiUser as any).created_at || new Date().toISOString(),
           // Prefer profile_picture if provided, fall back to org logo
           avatar_url: getImageUrl((apiUser as any).profile_picture || (apiUser as any).org_logo_url || null),
-          background_url: getImageUrl((apiUser as any).background_image || (apiUser as any).cover_photo || null),
+            background_url: getImageUrl((apiUser as any).background_image || (apiUser as any).cover_photo || null),
+            background_position: (apiUser as any).background_position || (apiUser as any).background_position || '50% 50%',
           // If the current user and API returned an email/name, prefer those
           is_following: (apiUser as any).is_following ?? false,
           bio: (apiUser as any).bio || 'No bio provided yet.',
@@ -190,14 +199,35 @@ const UserProfile: React.FC = () => {
     if (!user) return
     setDraftBio(user.bio || '')
     setBackgroundPreview(user.background_url || null)
+    setAvatarPreview(user.avatar_url || null)
     setBackgroundFile(null)
+    setAvatarFile(null)
+    // Initialize background position from user if present
+    if (user.background_position) {
+      const parts = user.background_position.split(/\s+/)
+      const px = parts[0]?.replace('%', '')
+      const py = parts[1]?.replace('%', '')
+      const nx = Number(px)
+      const ny = Number(py)
+      if (!isNaN(nx) && !isNaN(ny)) {
+        setBackgroundPos({ x: Math.max(0, Math.min(100, nx)), y: Math.max(0, Math.min(100, ny)) })
+      } else {
+        setBackgroundPos({ x: 50, y: 50 })
+      }
+    } else {
+      setBackgroundPos({ x: 50, y: 50 })
+    }
     setIsEditOpen(true)
   }
 
   const closeEdit = () => {
     setIsEditOpen(false)
     setBackgroundFile(null)
+    if (backgroundPreview && backgroundFile) URL.revokeObjectURL(backgroundPreview)
     setBackgroundPreview(null)
+    if (avatarPreview && avatarFile) URL.revokeObjectURL(avatarPreview)
+    setAvatarPreview(null)
+    setAvatarFile(null)
   }
 
   const handleBackgroundSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -208,10 +238,59 @@ const UserProfile: React.FC = () => {
     setBackgroundPreview(url)
   }
 
+  const handleAvatarSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0]
+    if (!f) return
+    setAvatarFile(f)
+    const url = URL.createObjectURL(f)
+    setAvatarPreview(url)
+  }
+
+  // Drag handlers for background repositioning
+  const onBgPointerDown = (ev: React.MouseEvent | React.TouchEvent) => {
+    ev.preventDefault()
+    const clientX = 'touches' in ev ? ev.touches[0].clientX : (ev as React.MouseEvent).clientX
+    const clientY = 'touches' in ev ? ev.touches[0].clientY : (ev as React.MouseEvent).clientY
+    dragStartRef.current = { clientX, clientY, startX: backgroundPos.x, startY: backgroundPos.y }
+    setIsDraggingBg(true)
+  }
+
+  const onBgPointerMove = (ev: React.MouseEvent | React.TouchEvent) => {
+    if (!isDraggingBg || !dragStartRef.current) return
+    const clientX = 'touches' in ev ? ev.touches[0].clientX : (ev as React.MouseEvent).clientX
+    const clientY = 'touches' in ev ? ev.touches[0].clientY : (ev as React.MouseEvent).clientY
+    const start = dragStartRef.current
+    const container = containerRef.current
+    if (!container) return
+    const rect = container.getBoundingClientRect()
+    const dx = clientX - start.clientX
+    const dy = clientY - start.clientY
+    const dxPercent = (dx / rect.width) * 100
+    const dyPercent = (dy / rect.height) * 100
+    const nx = Math.max(0, Math.min(100, start.startX + dxPercent))
+    const ny = Math.max(0, Math.min(100, start.startY + dyPercent))
+    setBackgroundPos({ x: nx, y: ny })
+  }
+
+  const onBgPointerUp = () => {
+    setIsDraggingBg(false)
+    dragStartRef.current = null
+  }
+
   const handleSaveProfile = async () => {
     try {
       const payload: any = { bio: draftBio }
       // If user picked a new background file, upload it first
+      // If user picked a new avatar file, upload it first
+      if (avatarFile) {
+        const fd = new FormData()
+        fd.append('image', avatarFile)
+        const uploadRes = await api.post('/api/users/profile-picture', fd)
+        const returned = uploadRes.data?.data || uploadRes.data
+        const uploadedUrl = returned?.url || returned?.path || returned
+        if (uploadedUrl) payload.profile_picture = uploadedUrl
+      }
+      // Avatar upload done. Now background upload if present.
       if (backgroundFile) {
         const fd = new FormData()
         fd.append('image', backgroundFile)
@@ -222,13 +301,18 @@ const UserProfile: React.FC = () => {
         if (uploadedUrl) payload.background_image = uploadedUrl
       }
 
+      // Include background position if we have a preview (either existing or newly uploaded)
+      if (backgroundPreview || user?.background_url) {
+        payload.background_position = `${Math.round(backgroundPos.x)}% ${Math.round(backgroundPos.y)}%`
+      }
       await api.put('/api/users/profile', payload)
       // Update local user state optimistically
-      setUser(prev => prev ? { ...prev, bio: draftBio, background_url: payload.background_image || prev.background_url } : prev)
+      setUser(prev => prev ? { ...prev, bio: draftBio, background_url: payload.background_image || prev.background_url, background_position: payload.background_position || prev.background_position, avatar_url: payload.profile_picture || prev.avatar_url } : prev)
       setIsEditOpen(false)
      
       // revoke temporary preview object URL if any
       if (backgroundPreview && backgroundFile) URL.revokeObjectURL(backgroundPreview)
+      if (avatarPreview && avatarFile) URL.revokeObjectURL(avatarPreview)
 
     } catch (err: any) {
       console.error('Failed to save profile', err)
@@ -371,7 +455,7 @@ const UserProfile: React.FC = () => {
               position="relative"
               bgImage={`url(${user.background_url || '/profile-bg-default.jpg'})`}
               bgSize="cover"
-              bgPos="center"
+              bgPos={user.background_position || 'center'}
             >
               {currentUser && Number(id) === currentUser.id && (
                 <Button
@@ -435,22 +519,25 @@ const UserProfile: React.FC = () => {
                   
                   {user.bio && <Text color="gray.700" mb={4}>{user.bio}</Text>}
                   
-                  <HStack spacing={3}>
-                    <Button 
-                      leftIcon={<Icon as={FiMessageSquare} />} 
-                      colorScheme="brand"
-                      onClick={handleSendMessage}
-                    >
-                      Message Seller
-                    </Button>
-                    <Button 
-                      variant="outline" 
-                      colorScheme={user.is_following ? 'gray' : 'brand'}
-                      onClick={toggleFollow}
-                    >
-                      {user.is_following ? 'Following' : 'Follow'}
-                    </Button>
-                  </HStack>
+                  {/* Show action buttons only when viewing someone else's profile */}
+                  {!(currentUser && Number(id) === currentUser.id) && (
+                    <HStack spacing={3}>
+                      <Button 
+                        leftIcon={<Icon as={FiMessageSquare} />} 
+                        colorScheme="brand"
+                        onClick={handleSendMessage}
+                      >
+                        Message Seller
+                      </Button>
+                      <Button 
+                        variant="outline" 
+                        colorScheme={user.is_following ? 'gray' : 'brand'}
+                        onClick={toggleFollow}
+                      >
+                        {user.is_following ? 'Following' : 'Follow'}
+                      </Button>
+                    </HStack>
+                  )}
                 </Box>
                 
                 <Box bg="gray.50" p={4} borderRadius="md" minW="250px">
@@ -766,17 +853,53 @@ const UserProfile: React.FC = () => {
               <ModalBody pb={6}>
                 <VStack spacing={4} align="stretch">
                   <FormControl>
+                    <FormLabel htmlFor="profile-photo-input">Profile Photo</FormLabel>
+                    <HStack spacing={4} align="center">
+                      <Avatar size="lg" name={user.name} src={avatarPreview || user.avatar_url} />
+                      <Box>
+                        <Input
+                          id="profile-photo-input"
+                          ref={avatarInputRef}
+                          type="file"
+                          accept="image/*"
+                          display="none"
+                          onChange={handleAvatarSelect}
+                          aria-label="Choose profile photo"
+                          title="Choose profile photo"
+                        />
+                        <HStack>
+                          <Button size="sm" colorScheme="brand" onClick={() => avatarInputRef.current?.click()}>Choose Photo</Button>
+                        </HStack>
+                      </Box>
+                    </HStack>
+                  </FormControl>
+                  <FormControl>
                     <FormLabel htmlFor="background-photo-input">Background Photo</FormLabel>
                     <Box>
-                      <Image
-                        src={backgroundPreview || user?.background_url || '/profile-bg-default.jpg'}
-                        alt="Background preview"
-                        w="100%"
+                      <Box
+                        ref={containerRef}
                         h="160px"
-                        objectFit="cover"
+                        w="100%"
                         borderRadius="md"
                         mb={2}
-                      />
+                        bgImage={`url(${backgroundPreview || user?.background_url || '/profile-bg-default.jpg'})`}
+                        bgSize="cover"
+                        bgPos={`${backgroundPos.x}% ${backgroundPos.y}%`}
+                        cursor={isDraggingBg ? 'grabbing' : 'grab'}
+                        position="relative"
+                        overflow="hidden"
+                        onMouseDown={onBgPointerDown}
+                        onMouseMove={onBgPointerMove}
+                        onMouseUp={onBgPointerUp}
+                        onMouseLeave={onBgPointerUp}
+                        onTouchStart={onBgPointerDown}
+                        onTouchMove={onBgPointerMove}
+                        onTouchEnd={onBgPointerUp}
+                      >
+                        <Box position="absolute" bottom="2" left="3" bg="blackAlpha.600" color="white" px={2} py={1} borderRadius="md" fontSize="xs">
+                          Drag to reposition
+                        </Box>
+                      </Box>
                       <Input
                         id="background-photo-input"
                         ref={fileInputRef}
@@ -789,7 +912,7 @@ const UserProfile: React.FC = () => {
                       />
                       <HStack>
                         <Button size="sm" onClick={() => fileInputRef.current?.click()}>Choose Photo</Button>
-                        <Button size="sm" variant="ghost" onClick={() => { setBackgroundFile(null); setBackgroundPreview(user?.background_url || null); }}>Reset</Button>
+                        <Button size="sm" variant="ghost" onClick={() => { setBackgroundFile(null); setBackgroundPreview(user?.background_url || null); setBackgroundPos({ x: 50, y: 50 }); }}>Reset</Button>
                       </HStack>
                     </Box>
                   </FormControl>

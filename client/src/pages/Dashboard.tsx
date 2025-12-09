@@ -62,6 +62,8 @@ import { getFirstImage } from '../utils/imageUtils'
 import OfferDetailsModal from '../components/OfferDetailsModal'
 import TradeCompletionModal from '../components/TradeCompletionModal'
 import ViewTradeModal from '../components/ViewTradeModal'
+import DeliveryRequestModal from '../components/DeliveryRequestModal'
+import DeliveryTracking from '../components/DeliveryTracking'
 
 const Dashboard: React.FC = () => {
   const { user } = useAuth()
@@ -120,17 +122,62 @@ const Dashboard: React.FC = () => {
   const [declineFeedback, setDeclineFeedback] = useState('')
   const [productTitles, setProductTitles] = useState<Map<number, string>>(new Map())
   const productImageCache = useRef<Map<number, string | null>>(new Map())
-  const offersPollingInterval = useRef<NodeJS.Timeout | null>(null)
+  const offersPollingInterval = useRef<ReturnType<typeof setTimeout> | null>(null)
   
+  // Delivery modals state
+  const [deliveryRequestModalOpen, setDeliveryRequestModalOpen] = useState(false)
+  const [deliveryTrackingModalOpen, setDeliveryTrackingModalOpen] = useState(false)
+  const [tradeForDelivery, setTradeForDelivery] = useState<Trade | null>(null)
+  const [productsForDelivery, setProductsForDelivery] = useState<Product[]>([])
+  const [currentDeliveryId, setCurrentDeliveryId] = useState<number | null>(null)
+  
+  // New state for layout selection
+  const [layout, setLayout] = useState<'grid' | 'compact' | 'spacious'>('grid') // Updated type
+
   // Color mode values
   const cardBg = useColorModeValue('white', 'gray.800')
   const borderColor = useColorModeValue('gray.200', 'gray.700')
+
+  // Layout configuration
+  const layoutConfig = useMemo(() => {
+    const configs = {
+      grid: {
+        columns: { base: 1, md: 2, lg: 3, xl: 4 },
+        spacing: 4,
+        cardSize: 'md',
+        cardSpacing: 2,
+      },
+      compact: {
+        columns: { base: 1, md: 3, lg: 4, xl: 5 },
+        spacing: 2,
+        cardSize: 'sm',
+        cardSpacing: 1.5,
+      },
+      spacious: {
+        columns: { base: 1, md: 2, lg: 2, xl: 3 },
+        spacing: 6,
+        cardSize: 'lg',
+        cardSpacing: 3,
+      },
+    }
+    return configs[layout]
+  }, [layout])
 
   useEffect(() => {
     if (user) {
       fetchUserData()
     }
   }, [user])
+
+  // Fetch offers when Offers tab is selected (if not already loaded)
+  useEffect(() => {
+    if (user && activeTab === 1) {
+      // Only fetch if we don't have any offers loaded yet
+      if (incoming.length === 0 && outgoing.length === 0 && !offersLoading) {
+        fetchOffers()
+      }
+    }
+  }, [user, activeTab])
 
   const fetchUserData = async () => {
     if (!user) return
@@ -155,6 +202,9 @@ const Dashboard: React.FC = () => {
 
       // Fetch notification counts
       await fetchNotificationCounts()
+      
+      // Fetch offers
+      await fetchOffers()
     } catch (error) {
       console.error('Failed to fetch user data:', error)
     } finally {
@@ -251,13 +301,22 @@ const Dashboard: React.FC = () => {
         api.get('/api/trades', { params: { direction: 'incoming' } }),
         api.get('/api/trades', { params: { direction: 'outgoing' } }),
       ])
-      setIncoming(Array.isArray(incRes.data?.data) ? incRes.data.data : [])
-      setOutgoing(Array.isArray(outRes.data?.data) ? outRes.data.data : [])
+      
+      // Ensure we're accessing the data correctly
+      const incomingData = Array.isArray(incRes.data?.data) ? incRes.data.data : (Array.isArray(incRes.data) ? incRes.data : [])
+      const outgoingData = Array.isArray(outRes.data?.data) ? outRes.data.data : (Array.isArray(outRes.data) ? outRes.data : [])
+      
+      setIncoming(incomingData)
+      setOutgoing(outgoingData)
       
       // Fetch product titles for all trades
-      await fetchProductTitles([...incRes.data?.data || [], ...outRes.data?.data || []])
+      await fetchProductTitles([...incomingData, ...outgoingData])
     } catch (e: any) {
+      console.error('Failed to fetch offers:', e)
       toast({ title: 'Error', description: e?.response?.data?.error || 'Failed to load offers', status: 'error' })
+      // Set empty arrays on error to prevent stale data
+      setIncoming([])
+      setOutgoing([])
     } finally {
       setOffersLoading(false)
     }
@@ -1524,82 +1583,6 @@ const Dashboard: React.FC = () => {
                )}
              </InputGroup>
 
-             {/* Right: Compact Stats Buttons (Row) 
-             <HStack spacing={2} flexShrink={0}>
-               <Tooltip 
-                 label={`${dashboardStats.totalProducts} total • ${dashboardStats.activeProducts} active • ${userProducts.filter(p => p.premium).length} premium`}
-                 placement="bottom"
-                 hasArrow
-               >
-                 <Button
-                   size="sm"
-                   variant="outline"
-                   leftIcon={<Icon as={FiShoppingBag} />}
-                   onClick={() => setActiveTab(0)}
-                   _hover={{ bg: 'brand.50', borderColor: 'brand.400' }}
-                   borderColor={activeTab === 0 ? 'brand.400' : borderColor}
-                   bg={activeTab === 0 ? 'brand.50' : 'white'}
-                   whiteSpace="nowrap"
-                 >
-                   Products
-                   {dashboardStats.totalProducts > 0 && (
-                     <Badge ml={2} colorScheme="brand" borderRadius="full" fontSize="xs">
-                       {dashboardStats.totalProducts}
-                     </Badge>
-                   )}
-                 </Button>
-               </Tooltip>
-
-               <Tooltip 
-                 label={dashboardStats.newOffers > 0 ? `${dashboardStats.newOffers} pending offers` : 'No pending offers'}
-                 placement="bottom"
-                 hasArrow
-               >
-                 <Button
-                   size="sm"
-                   variant="outline"
-                   leftIcon={<Icon as={FiMessageCircle} />}
-                   onClick={() => { setActiveTab(1); setOffersSubTab(1) }}
-                   _hover={{ bg: 'orange.50', borderColor: 'orange.400' }}
-                   borderColor={activeTab === 1 ? 'orange.400' : (dashboardStats.newOffers > 0 ? 'orange.300' : borderColor)}
-                   bg={activeTab === 1 ? 'orange.50' : (dashboardStats.newOffers > 0 ? 'orange.50' : 'white')}
-                   whiteSpace="nowrap"
-                 >
-                   Offers
-                   {dashboardStats.newOffers > 0 && (
-                     <Badge ml={2} colorScheme="orange" borderRadius="full" fontSize="xs">
-                       {dashboardStats.newOffers}
-                     </Badge>
-                   )}
-                 </Button>
-               </Tooltip>
-
-               <Tooltip 
-                 label={`${dashboardStats.activeTrades} active trades • ${completedTradesCount} completed`}
-                 placement="bottom"
-                 hasArrow
-               >
-                 <Button
-                   size="sm"
-                   variant="outline"
-                   leftIcon={<Icon as={FiRefreshCw} />}
-                   onClick={() => setActiveTab(2)}
-                   _hover={{ bg: 'green.50', borderColor: 'green.400' }}
-                   borderColor={activeTab === 2 ? 'green.400' : borderColor}
-                   bg={activeTab === 2 ? 'green.50' : 'white'}
-                   whiteSpace="nowrap"
-                 >
-                   History
-                   {completedTradesCount > 0 && (
-                     <Badge ml={2} colorScheme="green" borderRadius="full" fontSize="xs">
-                       {completedTradesCount}
-                     </Badge>
-                   )}
-                 </Button>
-               </Tooltip>
-             </HStack>
-             */}
-
              {/* Notifications & Profile */}
              <HStack spacing={2} flexShrink={0}>
                <Box position="relative">
@@ -1650,7 +1633,7 @@ const Dashboard: React.FC = () => {
              borderColor="gray.200"
              py={2}
            >
-             <Flex justify="space-between" align="center" px={4} gap={4}>
+             <Flex justify="space-between" align="center" px={4} gap={4} flexWrap={{ base: 'wrap', lg: 'nowrap' }}>
                <Tabs index={activeTab} onChange={setActiveTab} variant="line" colorScheme="brand" flex={1}>
                  <TabList overflowX="auto" sx={{
                    '&::-webkit-scrollbar': { display: 'none' },
@@ -1742,6 +1725,84 @@ const Dashboard: React.FC = () => {
                  </TabList>
                </Tabs>
 
+               {/* Layout Selection Buttons */}
+               <HStack
+                 spacing={1}
+                 flexShrink={0}
+                 borderLeftWidth={{ base: '0', lg: '1px' }}
+                 borderColor={borderColor}
+                 pl={{ base: 0, lg: 4 }}
+                 pt={{ base: 2, lg: 0 }}
+                 w={{ base: 'full', lg: 'auto' }}
+                 order={{ base: 4, lg: 0 }}
+               >
+                 <Text fontSize="xs" fontWeight="semibold" color="gray.600" textTransform="uppercase" mr={1} display={{ base: 'none', md: 'block' }}>
+                   Layout:
+                 </Text>
+                 <Tooltip label="Grid Layout (Default)" placement="bottom" hasArrow>
+                   <IconButton
+                     aria-label="Grid layout"
+                     icon={<Icon as={() => (
+                       <svg width="1em" height="1em" viewBox="0 0 24 24" fill="currentColor">
+                         <rect x="2" y="2" width="8" height="8" fill="none" stroke="currentColor" strokeWidth="2"/>
+                         <rect x="14" y="2" width="8" height="8" fill="none" stroke="currentColor" strokeWidth="2"/>
+                         <rect x="2" y="14" width="8" height="8" fill="none" stroke="currentColor" strokeWidth="2"/>
+                         <rect x="14" y="14" width="8" height="8" fill="none" stroke="currentColor" strokeWidth="2"/>
+                       </svg>
+                     )} />}
+                     size="sm"
+                     variant={layout === 'grid' ? 'solid' : 'outline'}
+                     colorScheme={layout === 'grid' ? 'brand' : 'gray'}
+                     onClick={() => setLayout('grid')}
+                     _hover={{ transform: 'scale(1.05)' }}
+                     transition="all 0.2s"
+                   />
+                 </Tooltip>
+                 <Tooltip label="Compact Layout" placement="bottom" hasArrow>
+                   <IconButton
+                     aria-label="Compact layout"
+                     icon={<Icon as={() => (
+                       <svg width="1em" height="1em" viewBox="0 0 24 24" fill="currentColor">
+                         <rect x="2" y="2" width="5" height="5" fill="none" stroke="currentColor" strokeWidth="2"/>
+                         <rect x="9.5" y="2" width="5" height="5" fill="none" stroke="currentColor" strokeWidth="2"/>
+                         <rect x="17" y="2" width="5" height="5" fill="none" stroke="currentColor" strokeWidth="2"/>
+                         <rect x="2" y="9.5" width="5" height="5" fill="none" stroke="currentColor" strokeWidth="2"/>
+                         <rect x="9.5" y="9.5" width="5" height="5" fill="none" stroke="currentColor" strokeWidth="2"/>
+                         <rect x="17" y="9.5" width="5" height="5" fill="none" stroke="currentColor" strokeWidth="2"/>
+                         <rect x="2" y="17" width="5" height="5" fill="none" stroke="currentColor" strokeWidth="2"/>
+                         <rect x="9.5" y="17" width="5" height="5" fill="none" stroke="currentColor" strokeWidth="2"/>
+                         <rect x="17" y="17" width="5" height="5" fill="none" stroke="currentColor" strokeWidth="2"/>
+                       </svg>
+                     )} />}
+                     size="sm"
+                     variant={layout === 'compact' ? 'solid' : 'outline'}
+                     colorScheme={layout === 'compact' ? 'brand' : 'gray'}
+                     onClick={() => setLayout('compact')}
+                     _hover={{ transform: 'scale(1.05)' }}
+                     transition="all 0.2s"
+                   />
+                 </Tooltip>
+                 <Tooltip label="Spacious Layout" placement="bottom" hasArrow>
+                   <IconButton
+                     aria-label="Spacious layout"
+                     icon={<Icon as={() => (
+                       <svg width="1em" height="1em" viewBox="0 0 24 24" fill="currentColor">
+                         <rect x="2" y="2" width="8" height="8" fill="none" stroke="currentColor" strokeWidth="2"/>
+                         <rect x="14" y="2" width="8" height="8" fill="none" stroke="currentColor" strokeWidth="2"/>
+                         <rect x="2" y="14" width="8" height="8" fill="none" stroke="currentColor" strokeWidth="2"/>
+                         <rect x="14" y="14" width="8" height="8" fill="none" stroke="currentColor" strokeWidth="2"/>
+                       </svg>
+                     )} />}
+                     size="sm"
+                     variant={layout === 'spacious' ? 'solid' : 'outline'}
+                     colorScheme={layout === 'spacious' ? 'brand' : 'gray'}
+                     onClick={() => setLayout('spacious')}
+                     _hover={{ transform: 'scale(1.05)' }}
+                     transition="all 0.2s"
+                   />
+                 </Tooltip>
+               </HStack>
+
                {/* Right: Filter/Sort Controls - Responsive */}
                <HStack
                  spacing={{ base: 2, md: 3 }}
@@ -1787,25 +1848,28 @@ const Dashboard: React.FC = () => {
                  {activeTab === 1 && (
                    <>
                      <Select
-                       value={offersStatusFilter}
+                       value={productFilter}
                        onChange={(e) => {
-                         setOffersStatusFilter(e.target.value)
-                         setOffersPage(1)
+                         setProductFilter(e.target.value as any)
+                         setCurrentPage(1)
                        }}
-                       w={{ base: '120px', md: '140px' }}
+                       w={{ base: '120px', md: '150px' }}
                        bg={cardBg}
                        borderColor={borderColor}
                        size="sm"
                      >
                        <option value="all">All Status</option>
-                       <option value="pending">Pending</option>
-                       <option value="accepted">Accepted</option>
-                       <option value="active">Active</option>
-                       <option value="countered">Countered</option>
+                       <option value="available">Active</option>
+                       <option value="sold">Sold</option>
+                       <option value="traded">Traded</option>
+                       <option value="locked">Hidden</option>
                      </Select>
                      <Select
-                       value={offersSort}
-                       onChange={(e) => setOffersSort(e.target.value as any)}
+                       value={productSort}
+                       onChange={(e) => {
+                         setProductSort(e.target.value as any)
+                         setCurrentPage(1)
+                       }}
                        w={{ base: '120px', md: '140px' }}
                        bg={cardBg}
                        borderColor={borderColor}
@@ -1818,20 +1882,74 @@ const Dashboard: React.FC = () => {
                  )}
 
                  {activeTab === 2 && (
-                   <Select
-                     value={tradeHistorySort}
-                     onChange={(e) => {
-                       setTradeHistorySort(e.target.value as any)
-                       setTradeHistoryPage(1)
-                     }}
-                     w={{ base: '120px', md: '140px' }}
-                     bg={cardBg}
-                     borderColor={borderColor}
-                     size="sm"
-                   >
-                     <option value="newest">Newest First</option>
-                     <option value="oldest">Oldest First</option>
-                   </Select>
+                   <>
+                     <Select
+                       value={productFilter}
+                       onChange={(e) => {
+                         setProductFilter(e.target.value as any)
+                         setCurrentPage(1)
+                       }}
+                       w={{ base: '120px', md: '150px' }}
+                       bg={cardBg}
+                       borderColor={borderColor}
+                       size="sm"
+                     >
+                       <option value="all">All Status</option>
+                       <option value="available">Active</option>
+                       <option value="sold">Sold</option>
+                       <option value="traded">Traded</option>
+                       <option value="locked">Hidden</option>
+                     </Select>
+                     <Select
+                       value={productSort}
+                       onChange={(e) => {
+                         setProductSort(e.target.value as any)
+                         setCurrentPage(1)
+                       }}
+                       w={{ base: '120px', md: '140px' }}
+                       bg={cardBg}
+                       borderColor={borderColor}
+                       size="sm"
+                     >
+                       <option value="newest">Newest First</option>
+                       <option value="oldest">Oldest First</option>
+                     </Select>
+                   </>
+                 )}
+                 {activeTab === 3 && (
+                   <>
+                     <Select
+                       value={productFilter}
+                       onChange={(e) => {
+                         setProductFilter(e.target.value as any)
+                         setCurrentPage(1)
+                       }}
+                       w={{ base: '120px', md: '150px' }}
+                       bg={cardBg}
+                       borderColor={borderColor}
+                       size="sm"
+                     >
+                       <option value="all">All Status</option>
+                       <option value="available">Active</option>
+                       <option value="sold">Sold</option>
+                       <option value="traded">Traded</option>
+                       <option value="locked">Hidden</option>
+                     </Select>
+                     <Select
+                       value={productSort}
+                       onChange={(e) => {
+                         setProductSort(e.target.value as any)
+                         setCurrentPage(1)
+                       }}
+                       w={{ base: '120px', md: '140px' }}
+                       bg={cardBg}
+                       borderColor={borderColor}
+                       size="sm"
+                     >
+                       <option value="newest">Newest First</option>
+                       <option value="oldest">Oldest First</option>
+                     </Select>
+                   </>
                  )}
                </HStack>
              </Flex>
@@ -1845,22 +1963,6 @@ const Dashboard: React.FC = () => {
                   {/* Filters and Actions (Search moved to top bar) */}
                   <HStack spacing={3} flexWrap="wrap" justify="space-between">
                     <HStack spacing={2} flexWrap="wrap">
-                      <Select
-                        value={productFilter}
-                        onChange={(e) => {
-                          setProductFilter(e.target.value as any)
-                          setCurrentPage(1)
-                        }}
-                        w="150px"
-                        bg={cardBg}
-                        borderColor={borderColor}
-                      >
-                        <option value="all">All Status</option>
-                        <option value="available">Active</option>
-                        <option value="sold">Sold</option>
-                        <option value="traded">Traded</option>
-                        <option value="locked">Hidden</option>
-                      </Select>
                       {unifiedSearch && (
                         <Badge colorScheme="blue" variant="subtle" fontSize="sm" px={2} py={1}>
                           Searching: "{unifiedSearch}"
@@ -1869,9 +1971,9 @@ const Dashboard: React.FC = () => {
                     </HStack>
                   </HStack>
 
-                   {/* Products Grid - Apply Sort */}
+                   {/* Products Grid - Apply Layout */}
                    {productsLoading ? (
-                     <SimpleGrid columns={{ base: 1, md: 2, lg: 3, xl: 4 }} spacing={4}>
+                     <SimpleGrid columns={layoutConfig.columns} spacing={layoutConfig.spacing}>
                        {Array.from({ length: 8 }).map((_, i) => (
                          <ProductCardSkeleton key={i} />
                        ))}
@@ -1912,7 +2014,7 @@ const Dashboard: React.FC = () => {
                      </Fade>
                    ) : (
                      <>
-                       <SimpleGrid columns={{ base: 1, md: 2, lg: 3, xl: 4 }} spacing={4}>
+                       <SimpleGrid columns={layoutConfig.columns} spacing={layoutConfig.spacing}>
                          {getPaginatedItems(
                            filteredProducts.sort((a, b) => {
                              const aDate = new Date(a.created_at).getTime()
@@ -1938,41 +2040,6 @@ const Dashboard: React.FC = () => {
               {/* Offers Tab */}
               <TabPanel>
                 <VStack spacing={6} align="stretch">
-                  {/* Filters (Search moved to top bar) */}
-                  <HStack spacing={3} flexWrap="wrap">
-                    {unifiedSearch && (
-                      <Badge colorScheme="blue" variant="subtle" fontSize="sm" px={2} py={1}>
-                        Searching: "{unifiedSearch}"
-                      </Badge>
-                    )}
-                    <Select
-                      value={offersStatusFilter}
-                      onChange={(e) => {
-                        setOffersStatusFilter(e.target.value)
-                        setOffersPage(1)
-                      }}
-                      w="150px"
-                      bg={cardBg}
-                      borderColor={borderColor}
-                    >
-                      <option value="all">All Status</option>
-                      <option value="pending">Pending</option>
-                      <option value="accepted">Accepted</option>
-                      <option value="active">Active</option>
-                      <option value="countered">Countered</option>
-                    </Select>
-                    <Select
-                      value={offersSort}
-                      onChange={(e) => setOffersSort(e.target.value as any)}
-                      w="140px"
-                      bg={cardBg}
-                      borderColor={borderColor}
-                    >
-                      <option value="newest">Newest First</option>
-                      <option value="oldest">Oldest First</option>
-                    </Select>
-                  </HStack>
-
                   {/* Sub-tabs for Offers */}
                   <Tabs 
                     index={offersSubTab} 
@@ -2014,7 +2081,7 @@ const Dashboard: React.FC = () => {
                       {/* Sent Offers */}
                       <TabPanel px={0}>
                         {offersLoading ? (
-                          <SimpleGrid columns={{ base: 1, md: 2, lg: 3, xl: 4 }} spacing={4}>
+                          <SimpleGrid columns={layoutConfig.columns} spacing={layoutConfig.spacing}>
                             {Array.from({ length: 8 }).map((_, i) => (
                               <ProductCardSkeleton key={i} />
                             ))}
@@ -2044,7 +2111,7 @@ const Dashboard: React.FC = () => {
                           </Fade>
                         ) : (
                           <>
-                            <SimpleGrid columns={{ base: 1, md: 2, lg: 3, xl: 4 }} spacing={4} mb={6}>
+                            <SimpleGrid columns={layoutConfig.columns} spacing={layoutConfig.spacing} mb={6}>
                               {paginatedTrades.map((trade) => {
                                 const isIncoming = false
                                 return (
@@ -2089,7 +2156,7 @@ const Dashboard: React.FC = () => {
                       {/* Received Offers */}
                       <TabPanel px={0}>
                         {offersLoading ? (
-                          <SimpleGrid columns={{ base:  1, md: 2, lg: 3, xl: 4 }} spacing={4}>
+                          <SimpleGrid columns={layoutConfig.columns} spacing={layoutConfig.spacing}>
                             {Array.from({ length: 8 }).map((_, i) => (
                               <ProductCardSkeleton key={i} />
                             ))}
@@ -2119,7 +2186,7 @@ const Dashboard: React.FC = () => {
                           </Fade>
                         ) : (
                           <>
-                            <SimpleGrid columns={{ base: 1, md: 2, lg: 3, xl: 4 }} spacing={4} mb={6}>
+                            <SimpleGrid columns={layoutConfig.columns} spacing={layoutConfig.spacing} mb={6}>
                               {paginatedTrades.map((trade) => {
                                 const isIncoming = true
                                 return (
@@ -2131,7 +2198,7 @@ const Dashboard: React.FC = () => {
                                     onAccept={() => updateTrade(trade.id, { action: 'accept' })}
                                     onDecline={() => handleDeclineTradeClick(trade)}
                                   />
-                                                               )
+                                )
                               })}
                             </SimpleGrid>
                             {totalPages > 1 && (
@@ -2164,7 +2231,7 @@ const Dashboard: React.FC = () => {
                       {/* Ongoing Trades */}
                       <TabPanel px={0}>
                         {offersLoading ? (
-                          <SimpleGrid columns={{ base: 1, md: 2, lg: 3, xl: 4 }} spacing={4}>
+                          <SimpleGrid columns={layoutConfig.columns} spacing={layoutConfig.spacing}>
                             {Array.from({ length: 8 }).map((_, i) => (
                               <ProductCardSkeleton key={i} />
                             ))}
@@ -2194,7 +2261,7 @@ const Dashboard: React.FC = () => {
                           </Fade>
                         ) : (
                           <>
-                            <SimpleGrid columns={{ base: 1, md: 2, lg: 3, xl: 4 }} spacing={4} mb={6}>
+                            <SimpleGrid columns={layoutConfig.columns} spacing={layoutConfig.spacing} mb={6}>
                               {paginatedTrades.map((trade) => {
                                 const isIncoming = incoming.some(t => t.id === trade.id)
                                 return (
@@ -2341,23 +2408,9 @@ const Dashboard: React.FC = () => {
                         Searching: "{unifiedSearch}"
                       </Badge>
                     )}
-                    <Select
-                      value={tradeHistorySort}
-                      onChange={(e) => {
-                        setTradeHistorySort(e.target.value as any)
-                        setTradeHistoryPage(1)
-                      }}
-                      w="150px"
-                      bg={cardBg}
-                      borderColor={borderColor}
-                      ml="auto"
-                    >
-                      <option value="newest">Newest First</option>
-                      <option value="oldest">Oldest First</option>
-                    </Select>
                   </HStack>
 
-                  {/* Trade History Grid */}
+                  {/* Trade History Grid - Apply Layout for card view (optional) */}
                   {allCompletedTrades.length === 0 ? (
                     <Fade in={true}>
                       <Box
@@ -2550,7 +2603,43 @@ const Dashboard: React.FC = () => {
           trade={selectedTrade}
           isOpen={detailsOpen}
           onClose={() => setDetailsOpen(false)}
-          onAccepted={() => { fetchOffers(); fetchNotificationCounts() }}
+          onAccepted={async () => {
+            await fetchOffers()
+            fetchNotificationCounts()
+            
+            // If trade option is delivery, show delivery request modal
+            if (selectedTrade?.trade_option === 'delivery') {
+              // Fetch products for delivery
+              try {
+                const productsToDeliver: Product[] = []
+                // Get target product
+                if (selectedTrade.target_product_id) {
+                  const targetRes = await api.get(`/api/products/${selectedTrade.target_product_id}`)
+                  if (targetRes.data?.data) {
+                    productsToDeliver.push(targetRes.data.data)
+                  }
+                }
+                // Get items from trade
+                if (selectedTrade.items && selectedTrade.items.length > 0) {
+                  for (const item of selectedTrade.items) {
+                    try {
+                      const itemRes = await api.get(`/api/products/${item.product_id}`)
+                      if (itemRes.data?.data) {
+                        productsToDeliver.push(itemRes.data.data)
+                      }
+                    } catch (e) {
+                      // Skip if product not found
+                    }
+                  }
+                }
+                setProductsForDelivery(productsToDeliver)
+                setTradeForDelivery(selectedTrade)
+                setDeliveryRequestModalOpen(true)
+              } catch (error) {
+                console.error('Failed to fetch products for delivery:', error)
+              }
+            }
+          }}
           onDeclined={() => { fetchOffers(); fetchNotificationCounts() }}
         />
 
@@ -2568,6 +2657,35 @@ const Dashboard: React.FC = () => {
           onCompleted={() => { fetchOffers(); fetchNotificationCounts() }}
           currentUserId={user?.id}
         />
+
+        {/* Delivery Request Modal */}
+        <DeliveryRequestModal
+          isOpen={deliveryRequestModalOpen}
+          onClose={() => {
+            setDeliveryRequestModalOpen(false)
+            setTradeForDelivery(null)
+            setProductsForDelivery([])
+          }}
+          onSuccess={(deliveryId) => {
+            setCurrentDeliveryId(deliveryId)
+            setDeliveryRequestModalOpen(false)
+            setDeliveryTrackingModalOpen(true)
+          }}
+          tradeId={tradeForDelivery?.id}
+          products={productsForDelivery}
+        />
+
+        {/* Delivery Tracking Modal */}
+        {currentDeliveryId && (
+          <DeliveryTracking
+            isOpen={deliveryTrackingModalOpen}
+            onClose={() => {
+              setDeliveryTrackingModalOpen(false)
+              setCurrentDeliveryId(null)
+            }}
+            deliveryId={currentDeliveryId}
+          />
+        )}
 
         {/* Cancel Confirmation Modal */}
         <Modal isOpen={cancelModalOpen} onClose={() => setCancelModalOpen(false)} size="sm" isCentered>

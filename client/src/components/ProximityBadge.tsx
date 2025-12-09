@@ -82,3 +82,4 @@ const ProximityBadge: React.FC<ProximityBadgeProps> = ({ type, targetId, showIco
 export default ProximityBadge
 
 
+

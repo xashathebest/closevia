@@ -9,6 +9,7 @@ interface AuthContextType {
   register: (payload: { name: string; email: string; password: string; is_organization?: boolean; org_name?: string; department?: string; org_logo_url?: string; bio?: string }) => Promise<void>
   logout: () => void
   updateProfile: (payload: { name?: string; email?: string; profile_picture?: string }) => Promise<void>
+  refreshUser: () => Promise<void>
   loading: boolean
 }
 
@@ -98,6 +99,12 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     }
   }
 
+  // Exposed helper to allow components to refresh user data after updates
+  const refreshUser = async () => {
+    setLoading(true)
+    await fetchUserProfile()
+  }
+
   const login = async (email: string, password: string) => {
     try {
       const response = await api.post('/api/auth/login', { email, password })
@@ -175,6 +182,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     register,
     logout,
     updateProfile,
+    refreshUser,
     loading,
   }
 

@@ -195,15 +195,33 @@ func (h *ProductHandler) CreateProduct(c *fiber.Ctx) error {
 		counter++
 	}
 
-	// Insert new product with slug
-	result, err := h.db.Exec(
-		"INSERT INTO products (slug, title, description, price, image_urls, seller_id, premium, allow_buying, barter_only, location, latitude, longitude, status, `condition`, suggested_value, category) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-		slug, title, finalDescription, insertPrice, string(imageURLsJSONBytes), userID, premium, allowBuying, barterOnly, location, lat, lon, "available", finalCondition, suggestedValue, category,
-	)
+	// Insert new product with slug. Build SQL dynamically so it's tolerant
+	// to missing latitude/longitude columns (some DBs may not have applied migrations).
+	cols := []string{"slug", "title", "description", "price", "image_urls", "seller_id", "premium", "allow_buying", "barter_only", "location", "status", "`condition`", "suggested_value", "category"}
+	placeholders := []string{"?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?"}
+	args := []interface{}{slug, title, finalDescription, insertPrice, string(imageURLsJSONBytes), userID, premium, allowBuying, barterOnly, location, "available", finalCondition, suggestedValue, category}
+
+	// Only include latitude/longitude if geocoding produced values
+	if lat != nil && lon != nil {
+		// insert latitude and longitude after 'location' (which is index 9)
+		insertIdx := 10 // index in cols/placeholders/args where 'status' currently resides
+		cols = append(cols[:insertIdx], append([]string{"latitude"}, cols[insertIdx:]...)...)
+		placeholders = append(placeholders[:insertIdx], append([]string{"?"}, placeholders[insertIdx:]...)...)
+		args = append(args[:insertIdx], append([]interface{}{*lat}, args[insertIdx:]...)...)
+
+		insertIdx2 := insertIdx + 1
+		cols = append(cols[:insertIdx2], append([]string{"longitude"}, cols[insertIdx2:]...)...)
+		placeholders = append(placeholders[:insertIdx2], append([]string{"?"}, placeholders[insertIdx2:]...)...)
+		args = append(args[:insertIdx2], append([]interface{}{*lon}, args[insertIdx2:]...)...)
+	}
+
+	sqlStr := fmt.Sprintf("INSERT INTO products (%s) VALUES (%s)", strings.Join(cols, ", "), strings.Join(placeholders, ", "))
+	result, err := h.db.Exec(sqlStr, args...)
 	if err != nil {
+		fmt.Printf("CreateProduct - insert error: %+v\n", err)
 		return c.Status(500).JSON(models.APIResponse{
 			Success: false,
-			Error:   "Failed to create product",
+			Error:   fmt.Sprintf("Failed to create product: %v", err),
 		})
 	}
 
@@ -841,10 +859,77 @@ func (h *ProductHandler) GetProduct(c *fiber.Ctx) error {
 		product.Price = nil
 	}
 
+	// Compute vote counts for this product
+	var underCount int
+	var overCount int
+	_ = h.db.QueryRow("SELECT COALESCE(SUM(CASE WHEN vote = 'under' THEN 1 ELSE 0 END),0), COALESCE(SUM(CASE WHEN vote = 'over' THEN 1 ELSE 0 END),0) FROM product_votes WHERE product_id = ?", product.ID).Scan(&underCount, &overCount)
+
+	// Find current user's vote, if authenticated
+	var userVote string
+	if userID != 0 {
+		if err := h.db.QueryRow("SELECT vote FROM product_votes WHERE product_id = ? AND user_id = ?", product.ID, userID).Scan(&userVote); err != nil {
+			userVote = ""
+		}
+	}
+
 	return c.JSON(models.APIResponse{
 		Success: true,
-		Data:    product,
+		Data: fiber.Map{
+			"product":   product,
+			"votes":     fiber.Map{"under": underCount, "over": overCount},
+			"user_vote": userVote,
+		},
 	})
+}
+
+// VoteProduct lets an authenticated user mark a product as under- or overpriced
+func (h *ProductHandler) VoteProduct(c *fiber.Ctx) error {
+	userID, ok := middleware.GetUserIDFromContext(c)
+	if !ok {
+		return c.Status(401).JSON(models.APIResponse{Success: false, Error: "User not authenticated"})
+	}
+
+	productID, err := strconv.Atoi(c.Params("id"))
+	if err != nil {
+		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "Invalid product ID"})
+	}
+
+	var body struct {
+		Vote string `json:"vote"`
+	}
+	if err := c.BodyParser(&body); err != nil {
+		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "Invalid request body"})
+	}
+	v := strings.ToLower(body.Vote)
+	if v != "under" && v != "over" {
+		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "vote must be 'under' or 'over'"})
+	}
+
+	// Ensure product exists and has a price (only allow voting for items with price)
+	var price sql.NullFloat64
+	err = h.db.QueryRow("SELECT price FROM products WHERE id = ?", productID).Scan(&price)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return c.Status(404).JSON(models.APIResponse{Success: false, Error: "Product not found"})
+		}
+		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to check product"})
+	}
+	if !price.Valid {
+		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "Voting allowed only for items with a price"})
+	}
+
+	// Insert or update vote (unique constraint on product_id,user_id)
+	_, err = h.db.Exec("INSERT INTO product_votes (product_id, user_id, vote, created_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP) ON DUPLICATE KEY UPDATE vote = VALUES(vote), created_at = VALUES(created_at)", productID, userID, v)
+	if err != nil {
+		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to record vote"})
+	}
+
+	// Return updated counts
+	var underCount int
+	var overCount int
+	_ = h.db.QueryRow("SELECT COALESCE(SUM(CASE WHEN vote = 'under' THEN 1 ELSE 0 END),0), COALESCE(SUM(CASE WHEN vote = 'over' THEN 1 ELSE 0 END),0) FROM product_votes WHERE product_id = ?", productID).Scan(&underCount, &overCount)
+
+	return c.JSON(models.APIResponse{Success: true, Data: fiber.Map{"votes": fiber.Map{"under": underCount, "over": overCount}, "user_vote": v}})
 }
 
 // UpdateProduct updates a product (only by seller)
