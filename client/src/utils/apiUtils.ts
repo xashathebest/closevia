@@ -1,4 +1,5 @@
 import { api, API_BASE_URL } from '../services/api';
+import { getStoredToken } from './authStorage';
 
 const API_BASE = API_BASE_URL.replace(/\/$/, '');
 
@@ -59,7 +60,9 @@ export const apiCallWithRetry = async <T>(
 
       // Wait before retrying
       const delay = calculateDelay(attempt, retryConfig);
-      console.log(`API call failed, retrying in ${delay}ms (attempt ${attempt + 1}/${retryConfig.maxRetries + 1})`);
+      if (import.meta.env.DEV) {
+        console.log(`API call failed, retrying in ${delay}ms (attempt ${attempt + 1}/${retryConfig.maxRetries + 1})`);
+      }
       await new Promise(resolve => setTimeout(resolve, delay));
     }
   }
@@ -69,7 +72,7 @@ export const apiCallWithRetry = async <T>(
 
 // Check if user is authenticated
 export const isAuthenticated = (): boolean => {
-  const token = localStorage.getItem('clovia_token');
+  const token = getStoredToken();
   return !!token;
 };
 
@@ -82,7 +85,7 @@ export const isValidToken = (token: string): boolean => {
 
 // Get authentication headers
 export const getAuthHeaders = (): Record<string, string> => {
-  const token = localStorage.getItem('clovia_token');
+  const token = getStoredToken();
   return token ? { Authorization: `Bearer ${token}` } : {};
 };
 

@@ -57,6 +57,7 @@ func (h *ReviewHandler) CreateReview(c *fiber.Ctx) error {
 			"error": "Invalid request body",
 		})
 	}
+	req.Comment = cleanUserText(req.Comment, 2000)
 
 	// Validate rating
 	if req.Rating < 1 || req.Rating > 5 {
@@ -66,7 +67,7 @@ func (h *ReviewHandler) CreateReview(c *fiber.Ctx) error {
 	}
 
 	// Validate comment
-	if len(req.Comment) == 0 {
+	if req.Comment == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"error": "Comment is required",
 		})
@@ -89,8 +90,7 @@ func (h *ReviewHandler) CreateReview(c *fiber.Ctx) error {
 	if err != nil {
 		log.Printf("❌ Failed to create review: %v", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"error":   "Failed to create review",
-			"details": err.Error(),
+			"error": "Failed to create review",
 		})
 	}
 
@@ -172,8 +172,7 @@ func (h *ReviewHandler) GetUserReviews(c *fiber.Ctx) error {
 	if err != nil {
 		log.Printf("❌ Failed to fetch reviews for user %d: %v", userID, err)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"error":   "Failed to fetch reviews",
-			"details": err.Error(),
+			"error": "Failed to fetch reviews",
 		})
 	}
 	defer rows.Close()

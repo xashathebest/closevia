@@ -248,11 +248,9 @@ const UserProfile: React.FC<UserProfileProps> = ({ userId }) => {
         const isOwnProfile = currentUser && (id === String(currentUser.id) || id === currentUser.slug)
         
         if (isOwnProfile) {
-          console.log('✅ UserProfile: Own profile detected, fetching from /api/users/profile (no cache)')
           res = await api.get('/api/users/profile')
         } else {
           // Fetch public user info with caching
-          console.log('🔍 UserProfile: Public profile, fetching from /api/users/' + id + ' (with cache)')
           res = await cacheService.getOrFetch(
             `/api/users/${id}`,
             () => api.get(`/api/users/${id}`),
@@ -260,24 +258,9 @@ const UserProfile: React.FC<UserProfileProps> = ({ userId }) => {
           )
         }
 
-        console.log('🔍 Full API response:', res.data)
-        console.log('🔍 res.data.data:', res.data?.data)
-        console.log('🔍 res.data.data.user:', res.data?.data?.user)
 
         const payload = res.data?.data || res.data
         const apiUser = (payload?.user || payload) as Partial<PublicUser>
-        console.log('🔍 Extracted apiUser:', apiUser)
-
-
-        // Log the API response to debug profile picture and name
-        console.log('🔍 API User Response:', {
-          id: apiUser.id,
-          name: apiUser.name,
-          profile_picture: (apiUser as any).profile_picture,
-          org_logo_url: (apiUser as any).org_logo_url,
-          bio: (apiUser as any).bio,
-          verified: apiUser.verified,
-        })
 
 
         const finalizedUser: PublicUser = {
@@ -310,7 +293,6 @@ const UserProfile: React.FC<UserProfileProps> = ({ userId }) => {
           const page1 = await getUserProducts(apiUser.id as any, 1)
           setProducts(page1.data || [])
         } else {
-          console.warn('⚠️ UserProfile: apiUser.id is missing, skipping product fetch')
           setProducts([])
         }
       } catch (e: any) {
@@ -687,8 +669,7 @@ const UserProfile: React.FC<UserProfileProps> = ({ userId }) => {
   }
 
   const handleSubmitReview = async () => {
-    const token = localStorage.getItem('clovia_token')
-    if (!currentUser || !token) {
+    if (!currentUser) {
       toast({
         id: "userprofile-login-required",
         title: 'Login required',
@@ -804,8 +785,7 @@ const UserProfile: React.FC<UserProfileProps> = ({ userId }) => {
   }
 
   const handleOpenReviewModal = (tradeId?: number) => {
-    const token = localStorage.getItem('clovia_token')
-    if (!currentUser || !token) {
+    if (!currentUser) {
       toast({
         id: "userprofile-login-required-3",
         title: 'Login required',
@@ -1286,7 +1266,6 @@ const UserProfile: React.FC<UserProfileProps> = ({ userId }) => {
                                       e.preventDefault()
                                       e.stopPropagation()
                                       // Will implement backend call to remove from featured
-                                      console.log('Remove from featured:', product.id)
                                     }}
                                   />
                                 </Tooltip>
@@ -1866,5 +1845,6 @@ const UserProfile: React.FC<UserProfileProps> = ({ userId }) => {
 }
 
 export default UserProfile
+
 
 

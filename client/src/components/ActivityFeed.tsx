@@ -64,8 +64,8 @@ const ActivityFeed = () => {
                     setActivities(nextActivities);
                     sessionStorage.setItem('home_activity_feed_cache', JSON.stringify(nextActivities));
                 }
-            } catch (err) {
-                console.error('Failed to fetch activities', err);
+            } catch {
+                // Activity feed is non-critical; keep cached content or hide silently.
             } finally {
                 if (isMounted) setIsLoading(false);
                 inFlight = false;

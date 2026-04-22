@@ -263,12 +263,6 @@ const TradeCompletionModal: React.FC<TradeCompletionModalProps> = ({
       setSubmitting(true)
       setShowConfirmationModal(false)
 
-      console.log('Submitting trade completion:', {
-        tradeId: trade.id,
-        rating,
-        feedback: feedback.trim(),
-        transactionProof
-      })
       await api.put(`/api/trades/${trade.id}/complete`, {
         rating,
         feedback: feedback.trim(),
@@ -295,9 +289,6 @@ const TradeCompletionModal: React.FC<TradeCompletionModalProps> = ({
         onCompleted()
       }
     } catch (error: any) {
-      console.error('Trade completion error:', error)
-      console.error('Error response:', error?.response?.data)
-      console.error('Error status:', error?.response?.status)
       toast({
         id: "tradecompletionmodal-error",
         title: 'Error',

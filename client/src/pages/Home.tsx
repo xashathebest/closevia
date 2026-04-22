@@ -235,7 +235,6 @@ const Home: React.FC = () => {
     setSelectedCategory('All')
     setSearchTerm('')
     // Trigger a single initial fetch through the filters effect
-    console.log('🔍 Fetching initial products with limit: 20')
     setFilters(prev => ({ ...prev, keyword: '', category: '', page: 1, limit: 20 }))
     setHasSearched(true)
 
@@ -316,7 +315,6 @@ const Home: React.FC = () => {
     const term = searchTerm.trim()
     const termLower = term.toLowerCase()
     
-    console.log('🔍 [Search] Term:', term, 'organizationSuggestions:', organizationSuggestions.length)
     
     // Check if search term matches an organization in current suggestions
     const matchedOrg = organizationSuggestions.find(org => {
@@ -325,11 +323,9 @@ const Home: React.FC = () => {
     })
     
     if (matchedOrg) {
-      console.log('✅ [Search] Found org in suggestions:', matchedOrg)
       // Navigate directly to the organization page
       const orgHandle = matchedOrg.org_handle || matchedOrg.slug
       if (orgHandle) {
-        console.log('🚀 [Search] Navigating to /org/' + orgHandle)
         navigate(`/org/${orgHandle}`)
         return
       }
@@ -338,15 +334,11 @@ const Home: React.FC = () => {
     // Fallback: Check API for organization if not in suggestions
     if (term.length >= 2) {
       try {
-        console.log('📡 [Search] Checking API for organization:', term)
         const response = await api.get(`/api/organizations?q=${encodeURIComponent(term)}&limit=1`)
-        console.log('📡 [Search] API response:', response.data)
         if (response.data?.success && Array.isArray(response.data?.data) && response.data.data.length > 0) {
           const org = response.data.data[0]
           const orgHandle = org.org_handle || org.slug
-          console.log('✅ [Search] Found org from API:', org, 'handle:', orgHandle)
           if (orgHandle) {
-            console.log('🚀 [Search] Navigating to /org/' + orgHandle)
             navigate(`/org/${orgHandle}`)
             return
           }
@@ -358,7 +350,6 @@ const Home: React.FC = () => {
     }
     
     // Otherwise, do a regular product keyword search
-    console.log('🔎 [Search] Falling back to product search for:', term)
     // Detect natural language queries for smart search
     const smartSignals = ['near me', 'nearby', 'cheap', 'budget', 'expensive', 'under ', 'below ', 'above ']
     const isSmartQuery = termLower.split(/\s+/).length >= 2 && smartSignals.some(s => termLower.includes(s))
@@ -631,16 +622,7 @@ const Home: React.FC = () => {
 
   // Component to render product grid with git pull --no-edit injections
   const ProductGridWithAds: React.FC<{ products: any[]; user: any }> = ({ products, user }) => {
-    const filteredProducts = products.filter(
-      (p) => p.status === 'available' && p.seller_id !== user?.id // Hide own products — can't trade with yourself
-    )
-
-    console.log('📦 ProductGridWithAds - Total products from API:', products.length)
-    console.log('📦 ProductGridWithAds - Current user ID:', user?.id)
-    console.log('📦 ProductGridWithAds - Filtered products (available):', filteredProducts.length)
-    if (products.length > 0) {
-      console.log('📦 Sample product data:', products[0])
-    }
+    const filteredProducts = products.filter((p) => p.status === 'available')
 
     // Use the ad injection hook
     const { shouldInsertAdAt, getAdForPosition, getAdIndexAt } = useStudentAdInjection(
@@ -709,7 +691,7 @@ const Home: React.FC = () => {
               })()}
             </Box>
           ) : (
-            <Box key={`ad-${item.data.id}`} w="full" h="full">
+            <Box key={`ad-${item.data.id}-${item.index}-${displayIndex}`} w="full" h="full">
               <StudentAdCard ad={item.data} />
             </Box>
           )

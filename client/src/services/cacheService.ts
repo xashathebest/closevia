@@ -14,6 +14,8 @@ interface CacheConfig {
   maxSize?: number // Default: 50 entries
 }
 
+const DEBUG_CACHE = import.meta.env.DEV && localStorage.getItem('debug_cache') === 'true'
+
 class CacheService {
   private cache: Map<string, CacheEntry<any>> = new Map()
   private pendingRequests: Map<string, Promise<any>> = new Map()
@@ -70,12 +72,12 @@ class CacheService {
     const entry = this.cache.get(key)
 
     if (entry && this.isValid(entry)) {
-      console.debug(`[Cache] HIT: ${key}`)
+      if (DEBUG_CACHE) console.debug(`[Cache] HIT: ${key}`)
       return entry.data as T
     }
 
     if (entry) {
-      console.debug(`[Cache] EXPIRED: ${key}`)
+      if (DEBUG_CACHE) console.debug(`[Cache] EXPIRED: ${key}`)
       this.cache.delete(key)
     }
 
@@ -94,7 +96,7 @@ class CacheService {
     }
 
     this.cache.set(key, entry)
-    console.debug(`[Cache] SET: ${key} (TTL: ${entry.ttl}ms)`)
+    if (DEBUG_CACHE) console.debug(`[Cache] SET: ${key} (TTL: ${entry.ttl}ms)`)
     this.cleanup()
   }
 
@@ -118,7 +120,7 @@ class CacheService {
 
     // If request is already pending, return that promise
     if (this.pendingRequests.has(key)) {
-      console.debug(`[Cache] DEDUP: Reusing pending request for ${key}`)
+      if (DEBUG_CACHE) console.debug(`[Cache] DEDUP: Reusing pending request for ${key}`)
       return this.pendingRequests.get(key)!
     }
 
@@ -140,7 +142,7 @@ class CacheService {
    * Clear all cache
    */
   clear(): void {
-    console.debug(`[Cache] CLEAR: Cleared ${this.cache.size} entries`)
+    if (DEBUG_CACHE) console.debug(`[Cache] CLEAR: Cleared ${this.cache.size} entries`)
     this.cache.clear()
     this.pendingRequests.clear()
   }
@@ -151,7 +153,7 @@ class CacheService {
   delete(url: string, params?: Record<string, any>): void {
     const key = this.generateKey(url, params)
     this.cache.delete(key)
-    console.debug(`[Cache] DELETE: ${key}`)
+    if (DEBUG_CACHE) console.debug(`[Cache] DELETE: ${key}`)
   }
 
   /**
@@ -168,7 +170,7 @@ class CacheService {
       }
     }
 
-    console.debug(`[Cache] CLEAR PATTERN: Cleared ${count} entries matching ${pattern}`)
+    if (DEBUG_CACHE) console.debug(`[Cache] CLEAR PATTERN: Cleared ${count} entries matching ${pattern}`)
   }
 
   /**

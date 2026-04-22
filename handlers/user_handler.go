@@ -332,7 +332,7 @@ func (h *UserHandler) Register(c *fiber.Ctx) error {
 		fmt.Printf("❌ Error creating user: %v\n", err)
 		return c.Status(500).JSON(models.APIResponse{
 			Success: false,
-			Error:   "Failed to create user: " + err.Error(),
+			Error:   "Failed to create user",
 		})
 	}
 
@@ -462,6 +462,7 @@ func (h *UserHandler) VerifyEmail(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to generate token"})
 	}
+	utils.SetAuthCookie(c, token)
 
 	return c.JSON(models.APIResponse{
 		Success: true,
@@ -734,6 +735,7 @@ func (h *UserHandler) Login(c *fiber.Ctx) error {
 			Error:   "Failed to generate token",
 		})
 	}
+	utils.SetAuthCookie(c, token)
 
 	return c.JSON(models.APIResponse{
 		Success: true,
@@ -741,6 +743,46 @@ func (h *UserHandler) Login(c *fiber.Ctx) error {
 		Data: fiber.Map{
 			"user":  user,
 			"token": token,
+		},
+	})
+}
+
+func (h *UserHandler) Logout(c *fiber.Ctx) error {
+	utils.ClearAuthCookie(c)
+	return c.JSON(models.APIResponse{
+		Success: true,
+		Message: "Logged out",
+	})
+}
+
+func (h *UserHandler) RefreshSession(c *fiber.Ctx) error {
+	token := ""
+	authHeader := c.Get("Authorization")
+	if strings.HasPrefix(authHeader, "Bearer ") {
+		token = strings.TrimSpace(strings.TrimPrefix(authHeader, "Bearer "))
+	}
+	if token == "" {
+		token = strings.TrimSpace(c.Cookies(utils.AuthCookieName))
+	}
+	if token == "" {
+		return c.Status(fiber.StatusUnauthorized).JSON(models.APIResponse{
+			Success: false,
+			Error:   "Authentication required",
+		})
+	}
+	if _, err := utils.ValidateJWT(token); err != nil {
+		utils.ClearAuthCookie(c)
+		return c.Status(fiber.StatusUnauthorized).JSON(models.APIResponse{
+			Success: false,
+			Error:   "Invalid or expired token",
+		})
+	}
+	utils.SetAuthCookie(c, token)
+	return c.JSON(models.APIResponse{
+		Success: true,
+		Message: "Session refreshed",
+		Data: fiber.Map{
+			"idle_timeout_seconds": int(utils.SessionIdleTimeout().Seconds()),
 		},
 	})
 }
@@ -871,6 +913,7 @@ func (h *UserHandler) GoogleLogin(c *fiber.Ctx) error {
 			Error:   "Failed to generate token",
 		})
 	}
+	utils.SetAuthCookie(c, token)
 
 	return c.JSON(models.APIResponse{
 		Success: true,
@@ -1006,7 +1049,7 @@ func (h *UserHandler) GetProfile(c *fiber.Ctx) error {
 		}
 		return c.Status(500).JSON(models.APIResponse{
 			Success: false,
-			Error:   "Failed to fetch user profile: " + err.Error(),
+			Error:   "Failed to fetch user profile",
 		})
 	}
 
@@ -1445,7 +1488,7 @@ func (h *UserHandler) UploadProfilePicture(c *fiber.Ctx) error {
 			return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to save file"})
 		}
 
-		finalURL = buildAbsoluteURL(c, publicPath)
+		finalURL = publicPath
 		fmt.Printf("🖼️  [UploadProfilePicture] Local storage URL: %s\n", finalURL)
 	}
 
@@ -1466,30 +1509,6 @@ func (h *UserHandler) UploadProfilePicture(c *fiber.Ctx) error {
 
 	fmt.Printf("🖼️  [UploadProfilePicture] Successfully updated user %d with profile picture: %s\n", userID, finalURL)
 	return c.JSON(models.APIResponse{Success: true, Data: finalURL, Message: "Uploaded"})
-}
-
-func buildAbsoluteURL(c *fiber.Ctx, path string) string {
-	if path == "" {
-		return ""
-	}
-	if strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://") {
-		return path
-	}
-	scheme := c.Protocol()
-	if scheme == "" {
-		scheme = "http"
-	}
-	host := c.Hostname()
-	if host == "" {
-		host = c.Get("Host")
-	}
-	if host == "" {
-		host = "localhost:4000"
-	}
-	if !strings.HasPrefix(path, "/") {
-		path = "/" + path
-	}
-	return fmt.Sprintf("%s://%s%s", scheme, host, path)
 }
 
 // ChangePassword allows an authenticated user to change their password.
@@ -1735,14 +1754,14 @@ func (h *UserHandler) GetUserByID(c *fiber.Ctx) error {
 
 	var user models.User
 	var slugNull, profilePicture, backgroundImage, backgroundPosition, department, bio sql.NullString
-	var verificationStatus, schoolName, schoolEmail, rejectionReason sql.NullString
-	var emailVerifiedAt sql.NullTime
+	var verificationStatus, schoolName sql.NullString
 	var lastLogin sql.NullTime
 	err = h.db.QueryRow(
 		`SELECT id, slug, name, email, role, verified, COALESCE(is_organization, FALSE) AS is_organization, COALESCE(org_verified, FALSE) AS org_verified, COALESCE(org_name, '') as org_name, COALESCE(org_handle, '') as org_handle, COALESCE(org_logo_url, '') as org_logo_url,
 		        COALESCE(org_cover_url, '') as org_cover_url, COALESCE(org_category, '') as org_category, COALESCE(org_website, '') as org_website, COALESCE(org_location, '') as org_location, COALESCE(org_contact_email, '') as org_contact_email,
 		        COALESCE(profile_picture, '') as profile_picture, COALESCE(background_image, '') as background_image, COALESCE(background_position, '') as background_position, COALESCE(department, '') as department, COALESCE(bio, '') as bio, COALESCE(badges, '[]') as badges,
-		        COALESCE(verification_status, 'not_verified') as verification_status, COALESCE(school_name, '') as school_name, COALESCE(school_email, '') as school_email, COALESCE(school_email_verified_at, NULL) as school_email_verified_at, COALESCE(verification_rejection_reason, '') as verification_rejection_reason,
+		        COALESCE(is_premium, FALSE) as is_premium, COALESCE(premium_tier, 'free') as premium_tier,
+		        COALESCE(verification_status, 'not_verified') as verification_status, COALESCE(school_name, '') as school_name,
 		        COALESCE(created_at, NOW()) as created_at, COALESCE(updated_at, NOW()) as updated_at, COALESCE(last_login, NULL) as last_login
 		   FROM users WHERE id = ?`,
 		userID,
@@ -1751,14 +1770,11 @@ func (h *UserHandler) GetUserByID(c *fiber.Ctx) error {
 		&user.IsOrganization, &user.OrgVerified, &user.OrgName, &user.OrgHandle, &user.OrgLogoURL,
 		&user.OrgCoverURL, &user.OrgCategory, &user.OrgWebsite, &user.OrgLocation, &user.OrgContactEmail,
 		&profilePicture, &backgroundImage, &backgroundPosition, &department, &bio, &user.Badges,
-		&verificationStatus, &schoolName, &schoolEmail, &emailVerifiedAt, &rejectionReason,
+		&user.IsPremium, &user.PremiumTier, &verificationStatus, &schoolName,
 		&user.CreatedAt, &user.UpdatedAt, &lastLogin,
 	)
 
-	fmt.Printf("🔍 GetUserByID(%d) query result - error: %v\n", userID, err)
 	if err != nil {
-		fmt.Printf("❌ Database error for user %d: %v\n", userID, err)
-		// Return proper error response so we can debug the actual database issue
 		if err == sql.ErrNoRows {
 			return c.Status(404).JSON(models.APIResponse{
 				Success: false,
@@ -1767,10 +1783,13 @@ func (h *UserHandler) GetUserByID(c *fiber.Ctx) error {
 		}
 		return c.Status(500).JSON(models.APIResponse{
 			Success: false,
-			Error:   "Database error: " + err.Error(),
+			Error:   "Failed to load user",
 		})
 	}
 
+	if slugNull.Valid {
+		user.Slug = slugNull.String
+	}
 	// Log profile view (with timeout to prevent hanging)
 	viewerID, _ := middleware.GetUserIDFromContext(c)
 	if viewerID > 0 && viewerID != userID { // Don't log self-views or anonymous views without ID
@@ -1787,9 +1806,6 @@ func (h *UserHandler) GetUserByID(c *fiber.Ctx) error {
 	// Convert sql.NullString to regular strings AFTER error check
 	if profilePicture.Valid {
 		user.ProfilePicture = profilePicture.String
-		fmt.Printf("✅ Setting profile_picture for user %d: '%s'\n", userID, profilePicture.String)
-	} else {
-		fmt.Printf("⚠️ profile_picture for user %d is NULL/invalid\n", userID)
 	}
 	if backgroundImage.Valid {
 		user.BackgroundImage = backgroundImage.String
@@ -1809,27 +1825,48 @@ func (h *UserHandler) GetUserByID(c *fiber.Ctx) error {
 	if schoolName.Valid {
 		user.SchoolName = schoolName.String
 	}
-	if schoolEmail.Valid {
-		user.SchoolEmail = schoolEmail.String
-	}
-	if emailVerifiedAt.Valid {
-		t := emailVerifiedAt.Time
-		user.SchoolEmailVerifiedAt = &t
-	}
-	if rejectionReason.Valid {
-		user.VerificationRejectionReason = rejectionReason.String
+	if user.IsPremium && (user.PremiumTier == "" || user.PremiumTier == "free") {
+		user.PremiumTier = "plus"
 	}
 	if lastLogin.Valid {
 		user.LastLogin = &lastLogin.Time
 	}
 	user.ActivityStatus = computeActivityStatus(user.LastLogin)
+	h.applyPremiumExpiry(&user)
+	h.ensureWmsuPlus(&user)
 
-	// SECURITY: Strip sensitive fields from public profile payload
-	user.Email = ""
+	publicUser := fiber.Map{
+		"id":                  user.ID,
+		"slug":                user.Slug,
+		"name":                user.Name,
+		"verified":            user.Verified,
+		"is_organization":     user.IsOrganization,
+		"org_verified":        user.OrgVerified,
+		"org_name":            user.OrgName,
+		"org_handle":          user.OrgHandle,
+		"org_logo_url":        user.OrgLogoURL,
+		"org_cover_url":       user.OrgCoverURL,
+		"org_category":        user.OrgCategory,
+		"org_website":         user.OrgWebsite,
+		"org_location":        user.OrgLocation,
+		"profile_picture":     user.ProfilePicture,
+		"background_image":    user.BackgroundImage,
+		"background_position": user.BackgroundPosition,
+		"department":          user.Department,
+		"bio":                 user.Bio,
+		"badges":              user.Badges,
+		"verification_status": user.VerificationStatus,
+		"school_name":         user.SchoolName,
+		"created_at":          user.CreatedAt,
+		"updated_at":          user.UpdatedAt,
+		"activity_status":     user.ActivityStatus,
+		"is_premium":          user.IsPremium,
+		"premium_tier":        user.PremiumTier,
+	}
 
 	return c.JSON(models.APIResponse{
 		Success: true,
-		Data:    user,
+		Data:    publicUser,
 	})
 }
 

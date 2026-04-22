@@ -40,6 +40,7 @@ interface ReviewProduct {
   wanted_categories?: string[]
   estimated_value_min?: number
   estimated_value_max?: number
+  show_estimated_value?: boolean
   isAnalyzing?: boolean
 }
 
@@ -47,6 +48,7 @@ interface ProductUploadStep3Props {
   product: ReviewProduct
   onSubmit: () => void
   onBack: () => void
+  onToggleEstimateVisibility?: (show: boolean) => void
   isLoading?: boolean
 }
 
@@ -54,6 +56,7 @@ const ProductUploadStep3: React.FC<ProductUploadStep3Props> = ({
   product,
   onSubmit,
   onBack,
+  onToggleEstimateVisibility,
   isLoading = false,
 }) => {
   const [agreeTerms, setAgreeTerms] = useState(false)
@@ -155,6 +158,7 @@ const ProductUploadStep3: React.FC<ProductUploadStep3Props> = ({
         {(() => {
           const aiMin = product.estimated_value_min
           const aiMax = product.estimated_value_max
+          const showEstimate = product.show_estimated_value !== false
           // An AI range is "reliable" when max/min <= 3. A 2k–100k swing is
           // meaningless and should trigger the user-price fallback.
           const aiReliable =
@@ -170,17 +174,31 @@ const ProductUploadStep3: React.FC<ProductUploadStep3Props> = ({
           return (
             <Box
               p={4}
-              bg="linear-gradient(135deg, #667eea 0%, #764ba2 100%)"
+              bg={showEstimate ? "linear-gradient(135deg, #667eea 0%, #764ba2 100%)" : "gray.600"}
               borderRadius="xl"
               textAlign="center"
               color="white"
               shadow="md"
             >
-              <Text fontSize="xs" fontWeight="semibold" opacity={0.9} mb={1} textTransform="uppercase" letterSpacing="1px">
-                {showFallback ? 'Your Market Estimate' : 'Estimated Market Value'}
-              </Text>
+              <HStack justify="space-between" align="center" mb={2} gap={3}>
+                <Text fontSize="xs" fontWeight="semibold" opacity={0.9} textTransform="uppercase" letterSpacing="1px">
+                  {showFallback ? 'Your Market Estimate' : 'Estimated Market Value'}
+                </Text>
+                <HStack spacing={0} borderWidth="1px" borderColor="whiteAlpha.500" borderRadius="md" overflow="hidden" flexShrink={0}>
+                  <Button size="xs" borderRadius={0} colorScheme={showEstimate ? 'green' : 'whiteAlpha'} variant={showEstimate ? 'solid' : 'ghost'} onClick={() => onToggleEstimateVisibility?.(true)}>
+                    On
+                  </Button>
+                  <Button size="xs" borderRadius={0} colorScheme={!showEstimate ? 'red' : 'whiteAlpha'} variant={!showEstimate ? 'solid' : 'ghost'} onClick={() => onToggleEstimateVisibility?.(false)}>
+                    Off
+                  </Button>
+                </HStack>
+              </HStack>
               {product.isAnalyzing ? (
                 <Skeleton height="36px" borderRadius="md" speed={0.8} />
+              ) : !showEstimate ? (
+                <Heading fontSize="xl" fontWeight="800">
+                  Hidden from product viewers
+                </Heading>
               ) : aiReliable ? (
                 <Heading fontSize="3xl" fontWeight="800">
                   ₱{(aiMin || 0).toLocaleString()} – ₱{(aiMax || 0).toLocaleString()}
@@ -193,7 +211,9 @@ const ProductUploadStep3: React.FC<ProductUploadStep3Props> = ({
               <Text fontSize="2xs" opacity={0.85} mt={2}>
                 {product.isAnalyzing
                   ? 'AI is analyzing your product...'
-                  : showFallback
+                  : !showEstimate
+                    ? 'The estimate will not appear on the posted product.'
+                    : showFallback
                     ? 'Based on the price you entered (AI estimate was unavailable)'
                     : 'Based on AI analysis of product condition and market data'}
               </Text>

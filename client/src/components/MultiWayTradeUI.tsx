@@ -302,7 +302,7 @@ const MultiWayTradeUI: React.FC<MultiWayTradeUIProps> = ({
             </Button>
 
             {viewMode === 'participant' && loopType === 'detected_loop' && !canCreate && (
-              <Tooltip label={proNudgeText || "Pro members can initiate. Upgrade to unlock."} placement="top" hasArrow>
+              <Tooltip label={proNudgeText || "Start this loop from the detected match."} placement="top" hasArrow>
                 <Button
                   size={{ base: 'sm', md: 'md' }}
                   colorScheme="purple"
@@ -313,9 +313,6 @@ const MultiWayTradeUI: React.FC<MultiWayTradeUIProps> = ({
                 >
                   <HStack spacing={{ base: 1, md: 2 }} justify="center">
                     <span>Start a Loop</span>
-                    <Badge colorScheme="purple" fontSize={{ base: '8px', md: '10px' }}>
-                      Pro
-                    </Badge>
                   </HStack>
                 </Button>
               </Tooltip>

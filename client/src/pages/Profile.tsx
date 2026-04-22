@@ -30,12 +30,8 @@ const Profile: React.FC = () => {
     )
   }
 
-  console.log('Profile: Received user object:', user)
-  console.log('Profile: User ID:', user.id, 'Type:', typeof user.id)
-
   // Guard against undefined user.id
   if (!user.id) {
-    console.error('Profile: user.id is undefined or falsy!', user)
     return (
       <Box bg="#FFFDF1" minH="100vh" w="100%">
         <Center h="50vh">

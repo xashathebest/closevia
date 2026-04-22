@@ -72,7 +72,7 @@ const SavedProducts: React.FC = () => {
     setLoading(true)
     setError('')
 
-    // Guard: must be logged-in and have token
+    // Guard: must be logged in
     if (!user) {
       setLoading(false)
       setError('Please log in to view your saved products.')
@@ -81,20 +81,9 @@ const SavedProducts: React.FC = () => {
       return
     }
 
-    const token = localStorage.getItem('clovia_token') || localStorage.getItem('token') || ''
-    if (!token) {
-      setLoading(false)
-      setError('No authentication token found')
-      console.warn('❌ Saved products fetch failed:\nMessage: No authentication token found')
-      return
-    }
-
     try {
       const response = await api.get<SavedProductsResponse>('/api/users/saved-products', {
         timeout: 30000,
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
       })
 
       const products = response?.data?.data?.data ?? []
@@ -107,23 +96,14 @@ const SavedProducts: React.FC = () => {
       const axErr = (error as AxiosError) || ({} as AxiosError)
       const msg = (axErr?.message as string) || 'Unknown error'
       const status = axErr?.response?.status
-      const statusText = axErr?.response?.statusText
       const resp = axErr?.response?.data
-      const stack = (error as any)?.stack
 
-      // Structured console output
-      console.error(
-        `❌ Saved products fetch failed:\n` +
-        `Message: ${msg}\n` +
-        `Status: ${status ?? 'N/A'}\n` +
-        `StatusText: ${statusText ?? 'N/A'}\n` +
-        `Response: ${typeof resp === 'string' ? resp : JSON.stringify(resp)}\n` +
-        `Stack: ${stack ?? 'N/A'}`
-      )
+      if (import.meta.env.DEV) {
+        console.warn('Saved products fetch failed', { status, message: msg })
+      }
 
       if (status === 401) {
         setError('Your session has expired. Please log in again.')
-        localStorage.removeItem('clovia_token')
         localStorage.removeItem('token')
         return
       }
@@ -166,8 +146,7 @@ const SavedProducts: React.FC = () => {
         duration: 2000,
         isClosable: true,
       })
-    } catch (error: any) {
-      console.error('Failed to remove saved product:', error)
+    } catch {
       toast({
         id: "savedproducts-error",
         title: 'Error',

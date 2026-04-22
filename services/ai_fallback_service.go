@@ -32,6 +32,7 @@ func AnalyzeProductWithFallback(images []*multipart.FileHeader) (*AIAnalysisResu
 
 	if geminiErr == nil && geminiResult != nil {
 		enrichOtherCategoryExamples(geminiResult)
+		normalizeMarketEstimate(geminiResult)
 
 		// ✅ Gemini succeeded - return immediately (fast path)
 		result.Success = true
@@ -57,6 +58,7 @@ func AnalyzeProductWithFallback(images []*multipart.FileHeader) (*AIAnalysisResu
 
 	if groqErr == nil && groqResult != nil {
 		enrichOtherCategoryExamples(groqResult)
+		normalizeMarketEstimate(groqResult)
 
 		// ✅ Groq succeeded
 		result.Success = true
@@ -77,6 +79,118 @@ func AnalyzeProductWithFallback(images []*multipart.FileHeader) (*AIAnalysisResu
 	log.Printf("❌ [AI] CRITICAL: Both Gemini and Groq failed after %dms total: %s", totalTimeMs, result.Error)
 
 	return result, fmt.Errorf("AI analysis unavailable: %s", result.Error)
+}
+
+type marketFloorRule struct {
+	Floor    float64
+	MaxFloor float64
+	Terms    []string
+}
+
+var marketFloorRules = []marketFloorRule{
+	{Floor: 500, MaxFloor: 900, Terms: []string{"electronics", "phone", "smartphone", "tablet", "laptop", "computer", "camera", "appliance", "monitor", "keyboard", "console", "game device", "earbuds", "headphones", "speaker", "printer", "smartwatch"}},
+	{Floor: 300, MaxFloor: 550, Terms: []string{"helmet", "sports", "bike", "bicycle", "motorcycle", "tool", "power tool", "bag", "backpack", "luggage"}},
+	{Floor: 220, MaxFloor: 450, Terms: []string{"fashion", "shoes", "sneakers", "boots", "jacket", "dress", "pants", "branded", "clothing", "wallet"}},
+	{Floor: 150, MaxFloor: 350, Terms: []string{"collectible", "collectibles", "toy", "figure", "lego", "model", "board game"}},
+	{Floor: 100, MaxFloor: 220, Terms: []string{"book", "books", "textbook", "novel", "manual", "magazine"}},
+}
+
+func normalizeMarketEstimate(data *GeminiResponse) {
+	if data == nil || data.Prohibited || data.IsProhibited {
+		return
+	}
+	if data.EstimatedValueMin < 0 {
+		data.EstimatedValueMin = 0
+	}
+	if data.EstimatedValueMax < 0 {
+		data.EstimatedValueMax = 0
+	}
+	if data.EstimatedValueMax > 0 && data.EstimatedValueMin > data.EstimatedValueMax {
+		data.EstimatedValueMin, data.EstimatedValueMax = data.EstimatedValueMax, data.EstimatedValueMin
+	}
+
+	text := strings.ToLower(strings.Join([]string{
+		data.Category,
+		data.Subcategory,
+		data.ItemType,
+		data.Brand,
+		data.Title,
+		data.Description,
+	}, " "))
+	if isClearlyLowValue(text) {
+		return
+	}
+
+	floor, maxFloor := estimateFloorForText(text)
+	if floor <= 0 {
+		return
+	}
+	if data.EstimatedValueMax == 0 && hasIdentifiableProductDetails(data) {
+		data.EstimatedValueMin = floor
+		data.EstimatedValueMax = maxFloor
+		appendPriceReasoning(data, "AI returned no usable market estimate, so a conservative category-aware PHP resale range was applied.")
+		return
+	}
+	if data.EstimatedValueMax > 0 && data.EstimatedValueMax < floor {
+		originalMin := data.EstimatedValueMin
+		originalMax := data.EstimatedValueMax
+		data.EstimatedValueMin = floor
+		data.EstimatedValueMax = maxFloor
+		appendPriceReasoning(data, fmt.Sprintf("Initial AI estimate (PHP %.0f-%.0f) was below normal local resale ranges for this item type, so it was adjusted to a conservative category-aware range.", originalMin, originalMax))
+		return
+	}
+	if data.EstimatedValueMin > 0 && data.EstimatedValueMin < floor && data.EstimatedValueMax >= floor {
+		data.EstimatedValueMin = floor
+		appendPriceReasoning(data, "Minimum estimate was raised to avoid an unrealistic lowball for this category.")
+	}
+}
+
+func estimateFloorForText(text string) (float64, float64) {
+	for _, rule := range marketFloorRules {
+		for _, term := range rule.Terms {
+			if strings.Contains(text, term) {
+				return rule.Floor, rule.MaxFloor
+			}
+		}
+	}
+	return 0, 0
+}
+
+func hasIdentifiableProductDetails(data *GeminiResponse) bool {
+	if data == nil || data.IsNonProductImage {
+		return false
+	}
+	identifyingText := strings.TrimSpace(strings.Join([]string{
+		data.Title,
+		data.ItemType,
+		data.Subcategory,
+		data.Brand,
+	}, " "))
+	return identifyingText != ""
+}
+
+func isClearlyLowValue(text string) bool {
+	lowValueTerms := []string{
+		"sticker", "paper", "scrap", "damaged", "broken", "for parts", "parts only",
+		"freebie", "pamphlet", "flyer", "sample", "accessory only", "case only",
+		"cable only", "small accessory",
+	}
+	for _, term := range lowValueTerms {
+		if strings.Contains(text, term) {
+			return true
+		}
+	}
+	return false
+}
+
+func appendPriceReasoning(data *GeminiResponse, note string) {
+	if data.PriceReasoning == "" {
+		data.PriceReasoning = note
+		return
+	}
+	if !strings.Contains(data.PriceReasoning, note) {
+		data.PriceReasoning = strings.TrimSpace(data.PriceReasoning) + " " + note
+	}
 }
 
 func enrichOtherCategoryExamples(data *GeminiResponse) {
@@ -152,9 +266,8 @@ func GetActiveAIProvider() string {
 }
 
 func isGeminiAvailable() bool {
-	// Check if GEMINI_API_KEY is set and not empty
-	// This is a simple check; actual availability is tested during analysis
-	return os.Getenv("GEMINI_API_KEY") != ""
+	// Actual availability is tested during analysis.
+	return len(configuredGeminiAPIKeys()) > 0
 }
 
 func isGroqAvailable() bool {

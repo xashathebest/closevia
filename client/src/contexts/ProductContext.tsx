@@ -3,6 +3,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { Product, ProductCreate, ProductUpdate, SearchFilters, PaginatedResponse } from '../types'
 import { api } from '../services/api'
 import { apiCallWithRetry } from '../utils/apiUtils'
+import { getStoredToken } from '../utils/authStorage'
 
 interface ProductContextType {
   products: Product[]
@@ -54,9 +55,8 @@ interface ProductProviderProps {
 export const ProductProvider: React.FC<ProductProviderProps> = ({ children }) => {
   const queryClient = useQueryClient()
   // Avoid calling `useAuth()` here to prevent errors when provider ordering
-  // is incorrect during initialization. Read token from localStorage instead
-  // which is safe even if `AuthProvider` isn't present yet.
-  const [token] = useState<string | null>(() => localStorage.getItem('clovia_token'))
+  // is incorrect during initialization. Read token from the shared auth helper.
+  const [token] = useState<string | null>(() => getStoredToken())
   const [products, setProducts] = useState<Product[]>(() => {
     // Try to restore from localStorage on mount
     try {
@@ -84,7 +84,6 @@ export const ProductProvider: React.FC<ProductProviderProps> = ({ children }) =>
       if (userCached) {
         const user = JSON.parse(userCached)
         if (user?.home_latitude != null && user?.home_longitude != null) {
-          console.log('[ProductContext] Initializing with User Home Profile Coords:', user.home_latitude, user.home_longitude)
           return { lat: user.home_latitude, lng: user.home_longitude, isHome: true }
         }
       }
@@ -446,23 +445,13 @@ export const ProductProvider: React.FC<ProductProviderProps> = ({ children }) =>
   ) => {
     const activeLoc = location ?? latestUserLocationRef.current
     try {
-      console.log('Searching products with filters:', filters, 'viewer:', activeLoc)
       const filterKey = JSON.stringify(filters) + (activeLoc ? `@${activeLoc.lat},${activeLoc.lng}` : '')
 
       // Keep currentFiltersRef in sync for re-fetch on home change
       currentFiltersRef.current = filters
 
-      // Return cached data if available and identical filters + location
-      if (cacheRef.current && cacheRef.current.filters === filterKey) {
-        console.log('Using cached products for filters:', filters)
-        safeSetProducts(cacheRef.current.products)
-        setHasMore(true)
-        return
-      }
-
       // Return pending request if same request is already in flight
       if (pendingRequestRef.current) {
-        console.log('Request already pending, returning existing promise')
         return pendingRequestRef.current
       }
 
@@ -502,11 +491,8 @@ export const ProductProvider: React.FC<ProductProviderProps> = ({ children }) =>
         }
 
         if (viewerLat !== null && viewerLng !== null) {
-          console.log(`[API_REQUEST] Attaching viewer coords to /listings API: lat=${viewerLat}, lng=${viewerLng}`)
           params.append(filters.useSmartSearch ? 'lat' : 'viewer_lat', viewerLat.toString())
           params.append(filters.useSmartSearch ? 'lng' : 'viewer_lng', viewerLng.toString())
-        } else {
-          console.log(`[API_REQUEST] No viewer coords available. Distance badge will hide/be NULL properly.`)
         }
         params.append('page', (filters.page || 1).toString())
         params.append('limit', (filters.limit || 10).toString())
@@ -518,13 +504,10 @@ export const ProductProvider: React.FC<ProductProviderProps> = ({ children }) =>
           })
         })
 
-        console.log('API Response:', response.data)
-
         // Handle different response structures safely
         if (response.data && response.data.data) {
           const data = response.data.data as PaginatedResponse<Product>
           if (data && data.data && Array.isArray(data.data)) {
-            console.log('Setting products from paginated response:', data.data.length)
             safeSetProducts(data.data)
             // Cache the result
             cacheRef.current = { filters: filterKey, products: data.data, timestamp: Date.now() }
@@ -536,19 +519,16 @@ export const ProductProvider: React.FC<ProductProviderProps> = ({ children }) =>
             // If returned fewer than limit, we know there's no more
             setHasMore(loaded >= limit && (data.page < (data.total_pages || Number.MAX_SAFE_INTEGER)))
           } else {
-            console.log('No products in paginated response')
             safeSetProducts([])
             setHasMore(false)
           }
         } else if (response.data && Array.isArray(response.data)) {
           // Direct array response
-          console.log('Setting products from direct array response:', response.data.length)
           safeSetProducts(response.data)
           cacheRef.current = { filters: filterKey, products: response.data, timestamp: Date.now() }
           setHasMore(false)
         } else {
           // Fallback to empty array
-          console.log('No products found, setting empty array')
           safeSetProducts([])
           setHasMore(false)
         }
@@ -667,13 +647,11 @@ export const ProductProvider: React.FC<ProductProviderProps> = ({ children }) =>
   const getProduct = async (idOrSlug: number | string): Promise<Product | null> => {
     try {
       setError(null)
-      console.log(`🔍 Fetching product: ${idOrSlug}`)
 
       const response = await api.get(`/api/products/${idOrSlug}`, {
         headers: getAuthHeaders(),
       })
 
-      console.log(`✓ Product ${idOrSlug} fetched successfully`)
       // Handle different response structures
       // API returns { data: { product: {...}, votes: {...}, user_vote: "" } }
       // We need to extract the actual product object

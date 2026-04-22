@@ -289,6 +289,9 @@ const LandingPage: React.FC = () => {
   const handleGetStarted = () => {
     navigate('/login')
   }
+  const handleBrowseProducts = () => {
+    navigate('/home')
+  }
 
   return (
     <Box
@@ -429,6 +432,21 @@ const LandingPage: React.FC = () => {
                 rightIcon={<Icon as={FiDownload} boxSize={5} />}
               >
                 Download Now
+              </Button>
+              <Button
+                size="lg"
+                variant="ghost"
+                color={C.accentDark}
+                borderRadius="full"
+                px={9}
+                fontWeight="800"
+                fontSize="md"
+                _hover={{ bg: `${C.accent}12`, transform: 'translateY(-4px)' }}
+                transition="all 0.3s"
+                onClick={handleBrowseProducts}
+                rightIcon={<Icon as={FiArrowRight} boxSize={5} />}
+              >
+                Browse Products
               </Button>
             </HStack>
 
@@ -698,6 +716,21 @@ const LandingPage: React.FC = () => {
               >
                 Get Started Now
               </Button>
+              <Button
+                variant="outline"
+                borderColor={C.accent}
+                color={C.accent}
+                borderRadius="full"
+                px={8}
+                size="lg"
+                fontWeight="700"
+                rightIcon={<Icon as={FiArrowRight} boxSize={5} />}
+                _hover={{ bg: `${C.accent}10`, transform: 'translateY(-3px)' }}
+                transition="all 0.3s"
+                onClick={handleBrowseProducts}
+              >
+                Browse Products
+              </Button>
             </VStack>
           </Flex>
         </Container>
@@ -813,6 +846,20 @@ const LandingPage: React.FC = () => {
                 rightIcon={<Icon as={FiArrowRight} boxSize={5} />}
               >
                 Download App
+              </Button>
+              <Button
+                size="lg"
+                variant="ghost"
+                color={C.accentDark}
+                borderRadius="full"
+                px={8}
+                fontWeight="700"
+                _hover={{ bg: `${C.accent}12`, transform: 'translateY(-3px)' }}
+                transition="all 0.3s"
+                onClick={handleBrowseProducts}
+                rightIcon={<Icon as={FiArrowRight} boxSize={5} />}
+              >
+                Browse Products
               </Button>
             </HStack>
           </VStack>

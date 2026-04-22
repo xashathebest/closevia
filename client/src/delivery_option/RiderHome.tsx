@@ -32,7 +32,6 @@ import {
   Alert,
   AlertIcon,
   Progress,
-  Image,
   Tooltip,
 } from '@chakra-ui/react'
 import {
@@ -423,16 +422,10 @@ const ViewDetailsModal: React.FC<ViewDetailsModalProps> = ({
               borderColor="gray.200"
               overflow="hidden"
             >
-              <Image
-                src={`https://api.mapbox.com/styles/v1/mapbox/streets-v11/static/pin-s-a+3b82f6(${delivery.pickup_longitude || 121.0},${delivery.pickup_latitude || 14.6}),pin-s-b+22c55e(${delivery.delivery_longitude || 121.1},${delivery.delivery_latitude || 14.65})/auto/400x150?access_token=YOUR_MAPBOX_TOKEN`}
-                alt="Route preview"
-                fallback={
-                  <VStack spacing={2}>
-                    <Icon as={FaMapMarkerAlt} color="gray.400" boxSize={8} />
-                    <Text fontSize="sm" color="gray.500">Route preview</Text>
-                  </VStack>
-                }
-              />
+              <VStack spacing={2}>
+                <Icon as={FaMapMarkerAlt} color="gray.400" boxSize={8} />
+                <Text fontSize="sm" color="gray.500">Route preview</Text>
+              </VStack>
             </Box>
 
             {/* Addresses */}

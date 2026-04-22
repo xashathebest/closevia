@@ -1511,9 +1511,7 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
       if (updates.sellerConfirmedDelivery !== undefined) payload.seller_confirmed_delivery = updates.sellerConfirmedDelivery
       if (updates.deliveryInstructions !== undefined) payload.delivery_instructions = updates.deliveryInstructions
 
-      console.log('Sending delivery state payload:', payload, 'to trade:', trade.id)
       const response = await api.put(`/api/trades/${trade.id}`, payload)
-      console.log('Delivery state update response:', response)
 
       // Update local trade state with the new delivery data
       if (trade && onTradeUpdate) {
@@ -1551,8 +1549,6 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
           updated_at: new Date().toISOString() // Force re-render
         }
 
-        console.log('Updating trade with delivery fields:', updatedFields)
-        console.log('Updated trade object:', updatedTrade)
         onTradeUpdate(updatedTrade)
       }
 
@@ -1561,7 +1557,6 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
     } catch (error: any) {
       console.error('Failed to save delivery state:', error)
       if (error?.response?.data) {
-        console.error('Backend error details:', error.response.data)
       }
       toast({
         id: "viewtrademodal-error-2",
@@ -1628,7 +1623,6 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
     if (!isOpen || !trade?.id) return
 
     const pollInterval = setInterval(() => {
-      console.log('Polling for trade/delivery updates...')
       onStatusUpdate()
     }, 6000) // Poll every 6 seconds
 
@@ -1638,14 +1632,6 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
   // Load delivery state from trade data when trade changes
   useEffect(() => {
     if (trade && trade.trade_option === 'delivery') {
-      console.log('Loading delivery state from trade:', {
-        delivery_type: trade.delivery_type,
-        payment_method: trade.payment_method,
-        payment_confirmed: trade.payment_confirmed,
-        buyer_confirmed_receipt: trade.buyer_confirmed_receipt,
-        seller_confirmed_delivery: trade.seller_confirmed_delivery
-      })
-
       setDeliveryState(prev => ({
         ...prev,
         deliveryType: (trade.delivery_type as any) || 'standard',
@@ -1659,14 +1645,6 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
         sellerDeliveryType: (trade as any)?.seller_delivery_type as any || null,
         deliveryInstructions: (trade as any).delivery_instructions || '',
       }))
-
-      console.log('Delivery state loaded:', {
-        deliveryType: (trade.delivery_type as any) || 'standard',
-        paymentMethod: (trade.payment_method as any) || 'online',
-        paymentConfirmed: trade.payment_confirmed || false,
-        buyerConfirmedReceipt: trade.buyer_confirmed_receipt || false,
-        sellerConfirmedDelivery: trade.seller_confirmed_delivery || false,
-      })
     }
   }, [trade?.id, trade?.trade_option, trade?.updated_at])
 
@@ -1764,7 +1742,6 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
         const active = deliveries.find(d => d.status !== 'delivered') || deliveries[deliveries.length - 1] || null
         setLinkedDelivery(active && (active as any).id ? active : null)
       } catch (e) {
-        console.log('No linked delivery found for trade', trade.id)
         setLinkedDelivery(null)
         setLinkedDeliveries([])
       }

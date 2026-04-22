@@ -123,25 +123,6 @@ const Offers: React.FC = () => {
     return () => clearInterval(interval)
   }, [])
 
-  // Debug: inspect API structure for /api/trades
-  useEffect(() => {
-    if (!loading) {
-      try {
-        // eslint-disable-next-line no-console
-        console.log('🔍 [TRADE STRUCTURE DEBUG] Incoming trades:', JSON.stringify(incoming.slice(0, 2), null, 2))
-        // eslint-disable-next-line no-console
-        console.log('🔍 [TRADE STRUCTURE DEBUG] Outgoing trades:', JSON.stringify(outgoing.slice(0, 2), null, 2))
-        const sample = incoming[0] || outgoing[0]
-        if (sample?.items && sample.items.length > 0) {
-          // eslint-disable-next-line no-console
-          console.log('🔍 [ITEMS DEBUG] Trade items type:', typeof (sample.items[0] as any))
-          // eslint-disable-next-line no-console
-          console.log('🔍 [ITEMS DEBUG] First item structure:', sample.items[0])
-        }
-      } catch {}
-    }
-  }, [loading, incoming, outgoing])
-
   const updateTrade = async (id: number, action: TradeAction) => {
     // Prevent multiple concurrent requests
     if (isProcessing) {
@@ -300,23 +281,12 @@ const Offers: React.FC = () => {
 
       const errorMsg = error?.response?.data?.error || 'Failed to convert to multi-way'
 
-      // Soft upsell for non-premium users creating loops.
-      if (errorMsg.includes('premium') || error?.response?.status === 403) {
-        toast({
-          id: 'error-convert-multiway-premium',
-          title: 'Pro members can initiate',
-          description: "You're a great match to start a loop here — Pro members can initiate. Upgrade to unlock.",
-          status: 'warning',
-          duration: 5000
-        })
-      } else {
-        toast({
-          id: 'error-convert-multiway',
-          title: 'Error',
-          description: errorMsg,
-          status: 'error'
-        })
-      }
+      toast({
+        id: 'error-convert-multiway',
+        title: 'Error',
+        description: errorMsg,
+        status: 'error'
+      })
     }
   }
 
@@ -1815,3 +1785,4 @@ const Offers: React.FC = () => {
 }
 
 export default Offers
+

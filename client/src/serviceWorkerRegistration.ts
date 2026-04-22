@@ -34,9 +34,18 @@ export const registerServiceWorker = (): void => {
     // it may continue to serve cached assets and make localhost appear "stuck" on old UI.
     // In dev, proactively unregister and clear caches.
     try {
+      const hadActiveController = !!navigator.serviceWorker?.controller
       if ('serviceWorker' in navigator) {
         navigator.serviceWorker.getRegistrations().then((regs) => {
-          regs.forEach((r) => r.unregister())
+          Promise.all(regs.map((r) => r.unregister())).then(() => {
+            if (
+              hadActiveController &&
+              !sessionStorage.getItem('clovia_dev_sw_reloaded')
+            ) {
+              sessionStorage.setItem('clovia_dev_sw_reloaded', 'true')
+              window.location.reload()
+            }
+          })
         })
       }
       if ('caches' in window) {
@@ -53,7 +62,7 @@ export const registerServiceWorker = (): void => {
   registerSW({
     immediate: true,
     onRegistered(registration: ServiceWorkerRegistration | undefined) {
-      if (registration) {
+      if (registration && import.meta.env.DEV) {
         console.info('Service worker registered')
       }
     },
@@ -64,6 +73,10 @@ export const registerServiceWorker = (): void => {
 }
 
 export const initializeInstallPrompt = (onChange?: (isAvailable: boolean) => void): (() => void) => {
+  if (!import.meta.env.PROD) {
+    return () => {}
+  }
+
   const handleBeforeInstallPrompt = (event: Event) => {
     event.preventDefault()
     deferredInstallPrompt = event as BeforeInstallPromptEvent

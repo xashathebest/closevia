@@ -2,13 +2,32 @@ package utils
 
 import (
 	"errors"
+	"os"
+	"strconv"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
 )
 
-var jwtSecret = []byte("your-secret-key-change-in-production")
+const defaultJWTSecret = "your-secret-key-change-in-production"
+
+func jwtSecret() []byte {
+	secret := os.Getenv("JWT_SECRET")
+	if secret == "" {
+		secret = defaultJWTSecret
+	}
+	return []byte(secret)
+}
+
+func TokenTTL() time.Duration {
+	if hours := os.Getenv("JWT_TTL_HOURS"); hours != "" {
+		if parsed, err := strconv.Atoi(hours); err == nil && parsed > 0 && parsed <= 24*30 {
+			return time.Duration(parsed) * time.Hour
+		}
+	}
+	return 7 * 24 * time.Hour
+}
 
 // HashPassword hashes a password using bcrypt
 func HashPassword(password string) (string, error) {
@@ -24,15 +43,17 @@ func CheckPasswordHash(password, hash string) bool {
 
 // GenerateJWT generates a JWT token for a user
 func GenerateJWT(userID int, email string) (string, error) {
+	now := time.Now()
 	claims := jwt.MapClaims{
 		"user_id": userID,
 		"email":   email,
-		"exp":     time.Now().Add(time.Hour * 24 * 7).Unix(), // 7 days
-		"iat":     time.Now().Unix(),
+		"exp":     now.Add(TokenTTL()).Unix(),
+		"iat":     now.Unix(),
+		"iss":     "clovia-api",
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString(jwtSecret)
+	return token.SignedString(jwtSecret())
 }
 
 // ValidateJWT validates a JWT token and returns the claims
@@ -41,7 +62,7 @@ func ValidateJWT(tokenString string) (jwt.MapClaims, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, errors.New("unexpected signing method")
 		}
-		return jwtSecret, nil
+		return jwtSecret(), nil
 	})
 
 	if err != nil {

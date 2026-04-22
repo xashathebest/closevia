@@ -44,7 +44,21 @@ interface Notification {
   type: string
   read: boolean
   created_at: string
-  data?: any
+  data?: {
+    target_type?: string
+    target_id?: number | string
+    target_url?: string
+    product_id?: number | string
+    product_slug?: string
+    product_title?: string
+    product?: {
+      id?: number | string
+      slug?: string
+      title?: string
+    }
+    trade_id?: number | string
+    [key: string]: any
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -126,6 +140,16 @@ function getDateGroup(dateStr: string): string {
   if (dateDay.getTime() === today.getTime()) return 'Today'
   if (dateDay.getTime() === yesterday.getTime()) return 'Yesterday'
   return 'Earlier'
+}
+
+function asPositiveNumber(value: unknown): number | undefined {
+  const n = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN
+  return Number.isFinite(n) && n > 0 ? n : undefined
+}
+
+function getQuotedProductTitle(message: string): string | undefined {
+  const match = message.match(/"([^"]+)"/)
+  return match?.[1]?.trim() || undefined
 }
 
 /* ------------------------------------------------------------------ */
@@ -270,20 +294,46 @@ const Notifications: React.FC = () => {
   }, [query, products])
 
   /* --- Redirect logic --- */
-  const getRedirectPath = (notification: Notification): string | null => {
-    if (notification.type === 'trade_offer' || notification.type === 'trade_update') {
-      return notification.data?.trade_id ? `/offers/buyout/${notification.data.trade_id}` : '/offers/buyout'
+  const getRedirectPath = useCallback((notification: Notification): string | null => {
+    const data = notification.data || {}
+
+    if (typeof data.target_url === 'string' && data.target_url.trim()) {
+      return data.target_url
     }
-    if (notification.type === 'similar_item' || notification.type === 'popular_item') return '/browse'
+
+    const productId = asPositiveNumber(data.product_id ?? data.target_id ?? data.product?.id)
+    const productSlug = data.product_slug || data.product?.slug
+    const pointsToProduct =
+      data.target_type === 'product' ||
+      notification.type === 'product' ||
+      notification.type === 'similar_item' ||
+      notification.type === 'popular_item'
+
+    if (pointsToProduct) {
+      if (productSlug) return `/products/${productSlug}`
+      if (productId) return `/products/${productId}`
+
+      const title = data.product_title || data.product?.title || getQuotedProductTitle(notification.message)
+      if (title) {
+        const match = products.find((p: any) => p?.title?.trim().toLowerCase() === title.toLowerCase())
+        if (match) return getProductUrl(match)
+      }
+
+      return null
+    }
+
+    if (notification.type === 'trade_offer' || notification.type === 'trade_update') {
+      return data.trade_id ? `/offers/buyout/${data.trade_id}` : '/offers/buyout'
+    }
     if (notification.type === 'trade_loop') return '/dashboard?tab=2'
     return null
-  }
+  }, [products])
 
   const handleNotificationClick = useCallback(async (notification: Notification) => {
     if (!notification.read) await markAsRead(notification.id)
     const path = getRedirectPath(notification)
     if (path) navigate(path)
-  }, [markAsRead, navigate])
+  }, [getRedirectPath, markAsRead, navigate])
 
   /* ------------------------------------------------------------------ */
   /*  Loading Skeleton                                                    */

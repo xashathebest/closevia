@@ -20,6 +20,7 @@ import {
 } from '@chakra-ui/react'
 import { CheckIcon } from '@chakra-ui/icons'
 import { Delivery, BatchAddonSuggestion, RiderSlotLedger } from '../types'
+import { api } from '../services/api'
 
 interface BatchClaimModalProps {
   isOpen: boolean
@@ -56,14 +57,10 @@ export const BatchClaimModal: React.FC<BatchClaimModalProps> = ({
     
     try {
       setIsLoadingAddons(true)
-      const response = await fetch(
-        `/api/batches/nearby-addons?anchor_delivery_id=${anchorDelivery.id}`,
-        {
-          headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
-        }
-      )
-      if (!response.ok) throw new Error('Failed to fetch nearby add-ons')
-      const { data } = await response.json()
+      const response = await api.get('/api/batches/nearby-addons', {
+        params: { anchor_delivery_id: anchorDelivery.id },
+      })
+      const { data } = response.data
       setNearbyAddons(data || [])
     } catch (error) {
       toast({
@@ -79,11 +76,8 @@ export const BatchClaimModal: React.FC<BatchClaimModalProps> = ({
 
   const fetchSlotStatus = async () => {
     try {
-      const response = await fetch('/api/batches/rider-slots', {
-        headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
-      })
-      if (!response.ok) throw new Error('Failed to fetch slot status')
-      const { data } = await response.json()
+      const response = await api.get('/api/batches/rider-slots')
+      const { data } = response.data
       setSlotStatus(data)
     } catch (error) {
       toast({

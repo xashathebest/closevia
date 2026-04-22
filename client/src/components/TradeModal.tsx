@@ -6,18 +6,20 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useAuth } from '../contexts/AuthContext'
 import { useNotification } from '../contexts/NotificationContext'
 import { api } from '../services/api'
-import { Product, TradeCreate, TradeOption } from '../types'
+import { Product, Trade, TradeCreate, TradeOption } from '../types'
 import { getFirstImage } from '../utils/imageUtils'
 import { reverseGeocodeToAddress, formatCoordinates } from '../utils/locationUtils'
 import { useInvalidateDashboard, DASHBOARD_QUERY_KEYS } from '../hooks/useDashboard'
+import { updateTrade } from '../services/tradeService'
 
 interface TradeModalProps {
   isOpen: boolean
   onClose: () => void
   targetProductId: number | null
+  editTrade?: Trade | null
 }
 
-const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductId }) => {
+const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductId, editTrade = null }) => {
   const { user, refreshUser } = useAuth()
   const navigate = useNavigate()
   const toast = useToast()
@@ -41,8 +43,12 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
   const [detectedLocationLabel, setDetectedLocationLabel] = useState('')
   const [profileLocationLabel, setProfileLocationLabel] = useState('')
   const [manualAddress, setManualAddress] = useState('')
+  const isEditMode = !!editTrade
   const cardBg = useColorModeValue('white', 'gray.800')
   const borderColor = useColorModeValue('gray.200', 'gray.700')
+  const targetCardBg = useColorModeValue('blue.50', 'blue.900')
+  const targetCardBorderColor = useColorModeValue('blue.200', 'blue.700')
+  const targetLabelColor = useColorModeValue('blue.700', 'blue.200')
   const selectedBg = '#E1F5EE'
   const selectedBorder = '#1D9E75'
   const selectedTextColor = '#1D9E75'
@@ -79,12 +85,16 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
 
   useEffect(() => {
     if (!isOpen) return
-    setSelectedOfferIds([])
+    const existingOfferIds = (editTrade?.items || [])
+      .filter((item) => (item.offered_by || '').toLowerCase() === 'buyer')
+      .map((item) => Number(item.product_id))
+      .filter((id) => Number.isFinite(id) && id > 0)
+    setSelectedOfferIds(existingOfferIds)
     setSearchTerm('')
-    setTradeMessage('')
-    setCashAmount('')
-    setTradeOption(null)
-    setPickupAcknowledged(false)
+    setTradeMessage(editTrade?.message || '')
+    setCashAmount(editTrade?.offered_cash_amount ? String(editTrade.offered_cash_amount) : '')
+    setTradeOption((editTrade?.meeting_type || editTrade?.trade_option || null) as TradeOption | 'pickup' | null)
+    setPickupAcknowledged(Boolean(editTrade && editTrade.meeting_type === 'pickup'))
     setHasPendingOfferOnTarget(false)
     setDetectedCoords(null)
     setDetectedLocationLabel('')
@@ -98,7 +108,7 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
           setLoadingPendingCheck(true)
           const pendingRes = await api.get(`/api/trades?direction=outgoing&status=pending&limit=100`)
           const trades = Array.isArray(pendingRes.data?.data) ? pendingRes.data.data : []
-          const hasPending = trades.some((trade: any) => trade.target_product_id === targetProductId)
+          const hasPending = trades.some((trade: any) => trade.target_product_id === targetProductId && trade.id !== editTrade?.id)
           setHasPendingOfferOnTarget(hasPending)
 
           // Fetch user products
@@ -117,7 +127,7 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
     } else {
       setUserProducts([])
     }
-  }, [isOpen, user, targetProductId])
+  }, [isOpen, user, targetProductId, editTrade])
 
   useEffect(() => {
     if (!isOpen || !user?.latitude || !user?.longitude) return
@@ -134,12 +144,6 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
       cancelled = true
     }
   }, [isOpen, user?.latitude, user?.longitude])
-
-  useEffect(() => {
-    if (!isOpen) return
-    console.log('Selected offer IDs:', selectedOfferIds)
-    console.log('Selected products:', selectedProducts)
-  }, [isOpen, selectedOfferIds, selectedProducts])
 
   // Reset the pickup acknowledgement whenever the user switches away from pickup
   // so they re-confirm the commitment if they come back to it.
@@ -264,15 +268,26 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
         trade_option: 'meetup',
         meeting_type: tradeOption === 'pickup' ? 'pickup' : 'meetup',
       }
-      console.log('Submitting trade payload:', payload)
-      await api.post('/api/trades', payload)
+      if (isEditMode && editTrade?.id) {
+        await updateTrade(editTrade.id, {
+          action: 'edit_offer',
+          offered_product_ids: selectedOfferIds,
+          message: tradeMessage,
+          offered_cash_amount: cashAmount ? Number(cashAmount) : undefined,
+          trade_option: 'meetup',
+          meeting_type: tradeOption === 'pickup' ? 'pickup' : 'meetup',
+          payment_method: editTrade.payment_method,
+        })
+      } else {
+        await api.post('/api/trades', payload)
+      }
 
       // Invalidate dashboard cache so sent offers show immediately
       invalidateOffers()
       invalidateDashboard()
       await queryClient.refetchQueries({ queryKey: DASHBOARD_QUERY_KEYS.sentOffers })
 
-      showNotification('Trade Offer Sent', 'success')
+      showNotification(isEditMode ? 'Trade Offer Updated' : 'Trade Offer Sent', 'success')
       setSelectedOfferIds([])
       setTradeMessage('')
       setCashAmount('')
@@ -282,7 +297,7 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
       setManualAddress('')
       onClose()
     } catch (e: any) {
-      const errorMessage = e?.response?.data?.error || 'Failed to send trade'
+      const errorMessage = e?.response?.data?.error || (isEditMode ? 'Failed to update trade' : 'Failed to send trade')
       toast({
         id: "trademodal-failed", title: 'Failed', description: errorMessage, status: 'error' })
     } finally {
@@ -294,7 +309,7 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
     <Modal isOpen={isOpen} onClose={onClose} isCentered size="sm">
       <ModalOverlay />
       <ModalContent maxW="400px">
-        <ModalHeader fontSize="lg" fontWeight="semibold">{user ? 'Propose a Trade' : 'Sign in to Continue'}</ModalHeader>
+        <ModalHeader fontSize="lg" fontWeight="semibold">{user ? (isEditMode ? 'Edit Your Offer' : 'Propose a Trade') : 'Sign in to Continue'}</ModalHeader>
         <ModalCloseButton />
         <ModalBody pb={6}>
           {user ? (
@@ -310,10 +325,10 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
                   </CardBody>
                 </Card>
               ) : targetProduct ? (
-                <Card variant="outline" bg={useColorModeValue('blue.50', 'blue.900')} borderColor={useColorModeValue('blue.200', 'blue.700')}>
+                <Card variant="outline" bg={targetCardBg} borderColor={targetCardBorderColor}>
                   <CardBody p={3}>
                     <VStack spacing={2} align="stretch">
-                      <Text fontSize="10px" fontWeight="bold" color={useColorModeValue('blue.700', 'blue.200')} textTransform="uppercase" letterSpacing="0.5px">
+                      <Text fontSize="10px" fontWeight="bold" color={targetLabelColor} textTransform="uppercase" letterSpacing="0.5px">
                         Trading For
                       </Text>
                       <HStack spacing={2} align="start">
@@ -607,7 +622,7 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
                   _hover={{ bg: '#158A63' }}
                   _active={{ bg: '#0F5A42' }}
                 >
-                  Confirm
+                  {isEditMode ? 'Save Changes' : 'Confirm'}
                 </Button>
               </HStack>
             </VStack>

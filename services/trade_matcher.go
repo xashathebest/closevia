@@ -77,8 +77,8 @@ func NewTradeGraph(db *sql.DB) (*TradeGraph, error) {
 }
 
 // MaxChainLength is the maximum number of parties in a multi-way trade chain.
-// Set to 3 for MVP — increase this constant to allow longer chains later.
-const MaxChainLength = 3
+// Multiway trades support circular loops from 3 through 5 participants.
+const MaxChainLength = 5
 
 // FindTradeLoops detects cycles in the trade graph and returns them.
 // A loop is a path of trades that starts and ends at the same user.
@@ -91,18 +91,32 @@ func (g *TradeGraph) FindTradeLoops() [][]TradeEdge {
 	}
 
 	var loops [][]TradeEdge
+	seen := make(map[string]bool)
 	for startNode := range g.Nodes {
 		path := []TradeEdge{}
 		visited := make(map[int]bool)
-		g.dfs(startNode, startNode, adj, &path, &visited, &loops, 0)
+		g.dfs(startNode, startNode, adj, &path, &visited, &loops, seen, 0)
 	}
 
 	return loops
 }
 
+func canonicalTradeLoopKey(loop []TradeEdge) string {
+	tradeIDs := make([]int, 0, len(loop))
+	for _, edge := range loop {
+		tradeIDs = append(tradeIDs, edge.TradeID)
+	}
+	sort.Ints(tradeIDs)
+	parts := make([]string, len(tradeIDs))
+	for i, id := range tradeIDs {
+		parts[i] = strconv.Itoa(id)
+	}
+	return strings.Join(parts, "_")
+}
+
 // dfs is a helper function to perform a depth-first search for cycles.
 // depth tracks how many edges deep we are; we stop exploring beyond MaxChainLength.
-func (g *TradeGraph) dfs(startNode, currentNode int, adj map[int][]TradeEdge, path *[]TradeEdge, visited *map[int]bool, loops *[][]TradeEdge, depth int) {
+func (g *TradeGraph) dfs(startNode, currentNode int, adj map[int][]TradeEdge, path *[]TradeEdge, visited *map[int]bool, loops *[][]TradeEdge, seen map[string]bool, depth int) {
 	(*visited)[currentNode] = true
 
 	for _, edge := range adj[currentNode] {
@@ -111,14 +125,18 @@ func (g *TradeGraph) dfs(startNode, currentNode int, adj map[int][]TradeEdge, pa
 
 		if edge.ToUser == startNode {
 			// Found a loop — keep it if within the chain length cap
-			if len(*path) <= MaxChainLength {
+			if len(*path) >= 3 && len(*path) <= MaxChainLength {
 				loop := make([]TradeEdge, len(*path))
 				copy(loop, *path)
-				*loops = append(*loops, loop)
+				key := canonicalTradeLoopKey(loop)
+				if !seen[key] {
+					seen[key] = true
+					*loops = append(*loops, loop)
+				}
 			}
 		} else if !(*visited)[edge.ToUser] && depth+1 < MaxChainLength {
 			// Continue DFS only if we haven't hit the depth cap
-			g.dfs(startNode, edge.ToUser, adj, path, visited, loops, depth+1)
+			g.dfs(startNode, edge.ToUser, adj, path, visited, loops, seen, depth+1)
 		}
 
 		// Backtrack
@@ -256,13 +274,13 @@ func wantedSignalScore(candidateWants, candidateWantedCategories, candidateDesir
 	// 1. Direct cross-containment (Highest Priority)
 	// Example: Title is "Ergonomic Office Chair", Wants is "Office Chair"
 	// Example: Title is "Office Chair", Wants is "Ergonomic Office Chair"
-	
+
 	// Check against specific wants clauses
 	wantsList := strings.Split(candidateWants, ",")
 	if candidateDesiredProduct != "" {
 		wantsList = append(wantsList, candidateDesiredProduct)
 	}
-	
+
 	for _, want := range wantsList {
 		wantStr := strings.ToLower(strings.TrimSpace(want))
 		if wantStr == "" || len(wantStr) < 3 {
@@ -295,7 +313,7 @@ func wantedSignalScore(candidateWants, candidateWantedCategories, candidateDesir
 			matchedKeywords++
 		}
 	}
-	
+
 	// Only score keyword matches if at least a significant portion matches, to avoid "office supplies" matching "office chair"
 	if matchedKeywords > 0 {
 		if matchedKeywords == len(offeredKeywords) || matchedKeywords >= 2 {

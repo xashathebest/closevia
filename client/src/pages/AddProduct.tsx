@@ -73,6 +73,7 @@ export interface ProductFormData {
   authenticity_risks?: string
   estimated_value_min?: number
   estimated_value_max?: number
+  show_estimated_value: boolean
   tags?: string
 
   // Product value
@@ -240,6 +241,7 @@ const AddProduct: React.FC = () => {
     authenticity_risks: undefined,
     estimated_value_min: undefined,
     estimated_value_max: undefined,
+    show_estimated_value: true,
     tags: '[]',
     value: undefined,
     wanted_categories: [],
@@ -448,9 +450,7 @@ const AddProduct: React.FC = () => {
     const fetchApprovedOrganizations = async () => {
       try {
         setIsLoadingOrganizations(true)
-        console.log('📦 [AddProduct] Fetching approved organizations...')
         const response = await api.get('/api/organizations/my-approved')
-        console.log('✅ [AddProduct] Approved organizations loaded:', response.data.data)
         if (response.data.success && response.data.data) {
           setApprovedOrganizations(response.data.data)
         }
@@ -631,13 +631,18 @@ const AddProduct: React.FC = () => {
       // Only increment daily counter on failures if we haven't already
       // (safety rejections already increment above)
       incrementDailyCount()
+      const backendMessage = err?.response?.data?.error || err?.message
+      const fallbackMessage = 'No problem! Just click "Continue" and fill in the product details on the next page.'
+      const description = backendMessage
+        ? `${backendMessage} ${fallbackMessage}`
+        : fallbackMessage
 
       toast({
         id: "addproduct-ai-analysis-failed",
         title: 'AI analysis failed',
-        description: 'No problem! Just click "Continue" and fill in the product details on the next page.',
-        status: 'info',
-        duration: 5000,
+        description,
+        status: backendMessage ? 'warning' : 'info',
+        duration: backendMessage ? 7000 : 5000,
         isClosable: true,
         position: 'top-right',
       })
@@ -902,8 +907,22 @@ const AddProduct: React.FC = () => {
       if (formData.item_type) fd.append('item_type', formData.item_type)
       if (formData.brand) fd.append('brand', formData.brand)
       if (formData.authenticity_risks) fd.append('authenticity_risks', formData.authenticity_risks)
-      if (formData.estimated_value_min !== undefined) fd.append('estimated_value_min', String(formData.estimated_value_min))
-      if (formData.estimated_value_max !== undefined) fd.append('estimated_value_max', String(formData.estimated_value_max))
+      const hasAiEstimate =
+        formData.estimated_value_min !== undefined &&
+        formData.estimated_value_max !== undefined &&
+        formData.estimated_value_min > 0 &&
+        formData.estimated_value_max > 0
+      const fallbackEstimate = !hasAiEstimate && formData.category && formData.condition
+        ? getBackupPriceEstimate(formData.category, formData.condition)
+        : null
+      const submitEstimate = hasAiEstimate
+        ? { min: formData.estimated_value_min as number, max: formData.estimated_value_max as number }
+        : fallbackEstimate
+      if (submitEstimate) {
+        fd.append('estimated_value_min', String(submitEstimate.min))
+        fd.append('estimated_value_max', String(submitEstimate.max))
+      }
+      fd.append('show_estimated_value', formData.show_estimated_value ? 'true' : 'false')
       fd.append('tags', formData.tags || '[]')
       if (formData.value !== undefined) fd.append('value', String(formData.value))
       if (formData.wanted_categories && formData.wanted_categories.length > 0) {
@@ -915,13 +934,11 @@ const AddProduct: React.FC = () => {
       // Add organization IDs for tagging
       if (selectedOrganizationIds.length > 0) {
         fd.append('organization_ids', JSON.stringify(selectedOrganizationIds))
-        console.log('📦 [AddProduct] Tagging organizations:', selectedOrganizationIds)
       }
 
       uploadedImages.forEach(f => fd.append('images', f))
       if (uploadedVideo) fd.append('video', uploadedVideo)
 
-      console.log('📤 [AddProduct] Submitting product with organizations:', selectedOrganizationIds.length > 0 ? selectedOrganizationIds : 'none')
       await createProduct(fd)
 
       // Ensure the dashboard shows the new listing immediately after redirect.
@@ -945,9 +962,6 @@ const AddProduct: React.FC = () => {
         id: "addproduct-product-posted", title: 'All set! 🎉', description: 'Your item is now live and visible to others.', status: 'success', position: 'top', duration: 3000, isClosable: true })
       navigate('/dashboard')
     } catch (err: any) {
-      console.error('❌ [AddProduct] Error creating product:', err)
-      console.error('❌ [AddProduct] Response data:', err.response?.data)
-      console.error('❌ [AddProduct] Response status:', err.response?.status)
       let friendlyMsg = 'Something went wrong while saving your item. Please try again.'
       if (err.response?.status === 413) {
         friendlyMsg = 'One or more of your files are too large. Try uploading a smaller image.'
@@ -1384,14 +1398,13 @@ const AddProduct: React.FC = () => {
         borderWidth="1px"
         borderColor="gray.200"
         p={2.5}
-        cursor="pointer"
-        onClick={() => setExpandProductDetails(!expandProductDetails)}
+        cursor={expandProductDetails ? 'default' : 'pointer'}
         transition="all 0.2s"
         _hover={{ borderColor: "brand.300", shadow: "sm" }}
       >
         {/* Collapsed View */}
         {!expandProductDetails ? (
-          <HStack justify="space-between" align="center" spacing={2}>
+          <HStack justify="space-between" align="center" spacing={2} onClick={() => setExpandProductDetails(true)}>
             {/* AI Badges or Loading Skeleton */}
             {isGenerating && !aiDone ? (
               <HStack spacing={2} flex={1} minW={0}>
@@ -1438,7 +1451,7 @@ const AddProduct: React.FC = () => {
           </HStack>
         ) : (
           /* Expanded View */
-          <VStack spacing={2} align="stretch">
+          <VStack spacing={2} align="stretch" onClick={e => e.stopPropagation()}>
             {/* Close/Collapse hint - clicking these closes the dropdown */}
             <HStack justify="space-between" align="center" onClick={() => setExpandProductDetails(false)}>
               <Text fontSize="xs" fontWeight="bold" color="gray.700">Edit Details</Text>
@@ -2130,14 +2143,44 @@ const AddProduct: React.FC = () => {
           bg="gray.50"
           borderRadius="lg"
           borderLeft="3px solid"
-          borderLeftColor="purple.300"
-          textAlign="center"
+          borderLeftColor={formData.show_estimated_value ? 'purple.300' : 'gray.300'}
         >
-          <Text fontSize="xs" fontWeight="medium" color="gray.600" mb={1}>
-            Estimated Value (Market Range)
-          </Text>
+          <HStack justify="space-between" align="center" mb={2} gap={3}>
+            <Box textAlign="left">
+              <Text fontSize="xs" fontWeight="medium" color="gray.600">
+                Estimated Value (Market Range)
+              </Text>
+              <Text fontSize="10px" color="gray.500">
+                Choose if buyers can see this estimate.
+              </Text>
+            </Box>
+            <HStack spacing={0} borderWidth="1px" borderColor="gray.200" borderRadius="md" overflow="hidden" flexShrink={0}>
+              <Button
+                size="xs"
+                borderRadius={0}
+                colorScheme={formData.show_estimated_value ? 'green' : 'gray'}
+                variant={formData.show_estimated_value ? 'solid' : 'ghost'}
+                onClick={() => handleField('show_estimated_value', true)}
+              >
+                On
+              </Button>
+              <Button
+                size="xs"
+                borderRadius={0}
+                colorScheme={!formData.show_estimated_value ? 'red' : 'gray'}
+                variant={!formData.show_estimated_value ? 'solid' : 'ghost'}
+                onClick={() => handleField('show_estimated_value', false)}
+              >
+                Off
+              </Button>
+            </HStack>
+          </HStack>
           {isGenerating && !aiDone ? (
             <Skeleton height="32px" borderRadius="md" />
+          ) : !formData.show_estimated_value ? (
+            <Text fontSize="sm" color="gray.600" fontWeight="semibold" textAlign="center">
+              Hidden from product viewers
+            </Text>
           ) : (() => {
             const aiEstimate = formData.estimated_value_min && formData.estimated_value_max && formData.estimated_value_min > 0
               ? { min: formData.estimated_value_min, max: formData.estimated_value_max }

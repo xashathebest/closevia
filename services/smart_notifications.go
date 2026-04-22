@@ -2,9 +2,12 @@ package services
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log"
 	"time"
+
+	"github.com/xashathebest/clovia/database"
 )
 
 // SmartNotificationTrigger runs after a product is successfully created.
@@ -28,6 +31,8 @@ func (s *SmartNotificationService) NotifyNewSimilarItem(productID int, sellerID 
 	if category == "" {
 		return
 	}
+	database.EnsureNotificationColumns(s.db)
+
 	// Find users who have wishlisted products (or whose wanted_categories contain the new category),
 	// excluding the seller themselves.
 	rows, err := s.db.Query(`
@@ -52,21 +57,32 @@ func (s *SmartNotificationService) NotifyNewSimilarItem(productID int, sellerID 
 		if err := rows.Scan(&uid, &name); err != nil {
 			continue
 		}
-		// Avoid duplicate notifications within 24h for same category
+		// Avoid duplicate notifications within 24h for this same product.
 		var existingCount int
 		s.db.QueryRow(`
 			SELECT COUNT(*) FROM notifications
-			WHERE user_id = ? AND type = 'similar_item' AND message LIKE ? AND created_at > ?
-		`, uid, "%"+category+"%", time.Now().Add(-24*time.Hour)).Scan(&existingCount)
+			WHERE user_id = ? AND type = 'similar_item' AND target_id = ? AND created_at > ?
+		`, uid, productID, time.Now().Add(-24*time.Hour)).Scan(&existingCount)
 
 		if existingCount == 0 {
+			targetURL := fmt.Sprintf("/products/%d", productID)
+			metadata, _ := json.Marshal(map[string]interface{}{
+				"product_id":    productID,
+				"product_title": productTitle,
+				"category":      category,
+			})
 			_, err := s.db.Exec(
-				`INSERT INTO notifications (user_id, type, message, is_read, created_at)
-				 VALUES (?, 'similar_item', ?, FALSE, NOW())`,
-				uid, msg,
+				`INSERT INTO notifications (user_id, type, message, is_read, target_type, target_id, target_url, metadata, created_at)
+				 VALUES (?, 'similar_item', ?, FALSE, 'product', ?, ?, ?, NOW())`,
+				uid, msg, productID, targetURL, string(metadata),
 			)
 			if err != nil {
 				log.Printf("[SmartNotif] failed to insert similar_item notification for user %d: %v", uid, err)
+				_, _ = s.db.Exec(
+					`INSERT INTO notifications (user_id, type, message, is_read, created_at)
+					 VALUES (?, 'similar_item', ?, FALSE, NOW())`,
+					uid, msg,
+				)
 			}
 		}
 	}
@@ -75,6 +91,8 @@ func (s *SmartNotificationService) NotifyNewSimilarItem(productID int, sellerID 
 // NotifyPopularListings checks the product owner's listings for sudden spikes in saves
 // (wishlists increases of 5+ in the last 24h) and sends them a notification.
 func (s *SmartNotificationService) NotifyPopularListings(sellerID int) {
+	database.EnsureNotificationColumns(s.db)
+
 	rows, err := s.db.Query(`
 		SELECT p.id, p.title, COUNT(w.id) as save_count
 		FROM products p
@@ -102,16 +120,28 @@ func (s *SmartNotificationService) NotifyPopularListings(sellerID int) {
 		// Avoid spam: don't re-notify within 24h for the same product
 		var existing int
 		s.db.QueryRow(
-			`SELECT COUNT(*) FROM notifications WHERE user_id = ? AND type = 'popular_item' AND message LIKE ? AND created_at > ?`,
-			sellerID, "%"+title+"%", time.Now().Add(-24*time.Hour),
+			`SELECT COUNT(*) FROM notifications WHERE user_id = ? AND type = 'popular_item' AND target_id = ? AND created_at > ?`,
+			sellerID, pid, time.Now().Add(-24*time.Hour),
 		).Scan(&existing)
 
 		if existing == 0 {
-			_, _ = s.db.Exec(
-				`INSERT INTO notifications (user_id, type, message, is_read, created_at)
-				 VALUES (?, 'popular_item', ?, FALSE, NOW())`,
-				sellerID, msg,
-			)
+			targetURL := fmt.Sprintf("/products/%d", pid)
+			metadata, _ := json.Marshal(map[string]interface{}{
+				"product_id":    pid,
+				"product_title": title,
+				"save_count":    count,
+			})
+			if _, err := s.db.Exec(
+				`INSERT INTO notifications (user_id, type, message, is_read, target_type, target_id, target_url, metadata, created_at)
+				 VALUES (?, 'popular_item', ?, FALSE, 'product', ?, ?, ?, NOW())`,
+				sellerID, msg, pid, targetURL, string(metadata),
+			); err != nil {
+				_, _ = s.db.Exec(
+					`INSERT INTO notifications (user_id, type, message, is_read, created_at)
+					 VALUES (?, 'popular_item', ?, FALSE, NOW())`,
+					sellerID, msg,
+				)
+			}
 		}
 	}
 }

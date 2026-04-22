@@ -40,7 +40,6 @@ func InitDatabase() error {
 	if dbName == "" {
 		return fmt.Errorf("DB_NAME environment variable is not set")
 	}
-
 	// Determine if using hosted database (Aiven/AWS) or local (XAMPP)
 	isHostedDatabase := caCertPath != ""
 
@@ -280,19 +279,20 @@ func CreateTables() error {
 	}
 	// Robust column migration for products table
 	productCols := map[string]string{
-		"value":               "DECIMAL(10,2) NULL",
-		"estimated_value_min": "DECIMAL(10,2) NULL",
-		"estimated_value_max": "DECIMAL(10,2) NULL",
-		"wants":               "TEXT NULL",
-		"wanted_categories":   "JSON NULL",
-		"desired_price":       "DECIMAL(10,2) NULL",
-		"desired_product":     "VARCHAR(255) NULL",
-		"item_type":           "VARCHAR(100) NULL",
-		"brand":               "VARCHAR(100) NULL",
-		"authenticity_risks":  "VARCHAR(50) NULL",
-		"tags":                "JSON NULL",
-		"boosted_at":          "TIMESTAMP NULL",
-		"view_count":          "INT DEFAULT 0",
+		"value":                "DECIMAL(10,2) NULL",
+		"estimated_value_min":  "DECIMAL(10,2) NULL",
+		"estimated_value_max":  "DECIMAL(10,2) NULL",
+		"show_estimated_value": "BOOLEAN NOT NULL DEFAULT TRUE",
+		"wants":                "TEXT NULL",
+		"wanted_categories":    "JSON NULL",
+		"desired_price":        "DECIMAL(10,2) NULL",
+		"desired_product":      "VARCHAR(255) NULL",
+		"item_type":            "VARCHAR(100) NULL",
+		"brand":                "VARCHAR(100) NULL",
+		"authenticity_risks":   "VARCHAR(50) NULL",
+		"tags":                 "JSON NULL",
+		"boosted_at":           "TIMESTAMP NULL",
+		"view_count":           "INT DEFAULT 0",
 	}
 
 	for col, def := range productCols {
@@ -467,6 +467,7 @@ func CreateTables() error {
 			category VARCHAR(100),
 			estimated_value_min DECIMAL(10,2) NULL,
 			estimated_value_max DECIMAL(10,2) NULL,
+			show_estimated_value BOOLEAN NOT NULL DEFAULT TRUE,
 			value DECIMAL(10,2) NULL,
 			wants TEXT NULL,
 			wanted_categories JSON NULL,
@@ -609,6 +610,10 @@ func CreateTables() error {
 			type VARCHAR(50) NOT NULL,
 			message VARCHAR(500) NOT NULL,
 			is_read BOOLEAN DEFAULT FALSE,
+			target_type VARCHAR(50) NULL,
+			target_id INT NULL,
+			target_url VARCHAR(500) NULL,
+			metadata JSON NULL,
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 		)`,
@@ -1260,6 +1265,7 @@ func CreateTables() error {
 		}
 	}
 
+	EnsureNotificationColumns(DB)
 	ensureIndexes()
 
 	ensureUserColumns()
@@ -1428,7 +1434,8 @@ func ensureAppSettingsDefaults() {
 		('premium_enabled', 'true'),
 		('premium_monthly_price', '79'),
 		('premium_yearly_price', '699'),
-		('premium_promo_price', '')`)
+		('premium_promo_price', ''),
+		('show_own_products_on_home', 'true')`)
 	if err != nil {
 		log.Printf("Warning: failed to seed app_settings defaults: %v", err)
 	}
@@ -1583,6 +1590,7 @@ func ensureProductColumns() {
 		{"tags", "JSON NULL"},
 		{"estimated_value_min", "DECIMAL(10,2) NULL"},
 		{"estimated_value_max", "DECIMAL(10,2) NULL"},
+		{"show_estimated_value", "BOOLEAN NOT NULL DEFAULT TRUE"},
 		{"value", "DECIMAL(10,2) NULL"},
 		{"price_reasoning", "TEXT NULL"},
 		{"ai_analysis_generated_at", "TIMESTAMP NULL"},
@@ -1628,6 +1636,52 @@ func ensureProductColumns() {
 
 	// Ensure defaults
 	DB.Exec("UPDATE products SET max_items_per_offer = 0 WHERE max_items_per_offer IS NULL")
+}
+
+// EnsureNotificationColumns adds optional target metadata columns used for
+// accurate notification click-throughs.
+func EnsureNotificationColumns(db *sql.DB) {
+	if db == nil {
+		db = DB
+	}
+	if db == nil {
+		return
+	}
+
+	columns := []struct {
+		name       string
+		definition string
+	}{
+		{"target_type", "VARCHAR(50) NULL"},
+		{"target_id", "INT NULL"},
+		{"target_url", "VARCHAR(500) NULL"},
+		{"metadata", "JSON NULL"},
+	}
+
+	for _, col := range columns {
+		var count int
+		err := db.QueryRow(`
+			SELECT COUNT(*)
+			FROM information_schema.COLUMNS
+			WHERE TABLE_SCHEMA = DATABASE()
+			  AND TABLE_NAME = 'notifications'
+			  AND COLUMN_NAME = ?
+		`, col.name).Scan(&count)
+		if err != nil {
+			log.Printf("Warning: failed to check notifications.%s column: %v", col.name, err)
+			continue
+		}
+		if count > 0 {
+			continue
+		}
+
+		query := fmt.Sprintf("ALTER TABLE notifications ADD COLUMN %s %s", col.name, col.definition)
+		if _, err := db.Exec(query); err != nil {
+			log.Printf("Warning: failed to add notifications.%s column: %v", col.name, err)
+			continue
+		}
+		log.Printf("Added missing column to notifications: %s", col.name)
+	}
 }
 
 // updateProductStatusEnum ensures the status column has all required enum values
@@ -2116,6 +2170,7 @@ func ensureIndexes() {
 		{"notifications", "idx_notifications_user", "user_id"},
 		{"notifications", "idx_notifications_read", "is_read"},
 		{"notifications", "idx_notifications_type", "type"},
+		{"notifications", "idx_notifications_target", "target_type, target_id"},
 		{"users", "idx_users_org_handle", "org_handle"},
 		{"comments", "idx_comments_product", "product_id"},
 		{"comments", "idx_comments_user", "user_id"},

@@ -32,7 +32,7 @@ func AnalyzeProductWithGroq(images []*multipart.FileHeader) (*GeminiResponse, er
 		return nil, errors.New(logMsg)
 	}
 
-	log.Printf("Using Groq API for product analysis (GROQ_API_KEY length: %d)", len(apiKey))
+	log.Printf("Using Groq API for product analysis (GROQ_API_KEY configured)")
 
 	if len(images) < 1 {
 		return nil, errors.New("at least 1 image required")
@@ -131,6 +131,7 @@ Proceed with product analysis. Return this JSON structure:
   "authenticity_risks": "Low/Medium/High",
   "estimated_value_min": minimum_price,
   "estimated_value_max": maximum_price,
+  "price_reasoning": "Briefly explain why this PHP resale estimate is realistic using item type, brand/model, condition, visible quality, rarity, demand, and local Philippine marketplace prices.",
   "tags": ["tag1", "tag2", "tag3"],
   "is_prohibited": false,
   "prohibited_reason": "",
@@ -168,6 +169,18 @@ IMPORTANT - IMAGE QUALITY DETECTION (check carefully):
    - Marketing text or price tags from other platforms visible in the image
    - Compression artifacts typical of images downloaded and re-uploaded multiple times
    Give the reason in online_image_reason.
+
+PRICE ESTIMATE RULES:
+- Estimate realistic resale value in Philippine Pesos (PHP), not cents, points, or USD.
+- Identify exact product type first, then brand/model if visible.
+- Consider condition, visible wear, completeness/accessories, rarity, local demand, and visible quality.
+- Do NOT lowball to 20-50 PHP unless the item is truly a tiny low-value accessory, scrap, paper, sticker, broken part, or cannot be identified as a sellable product.
+- Category sanity floors for normal usable items:
+  * Books: usually at least 80-150 PHP unless damaged/common pamphlet.
+  * Helmets, sports gear, bags, shoes, branded clothing: usually at least 150-300 PHP.
+  * Electronics, phones, computers, appliances, cameras, game devices: usually at least 500-1000 PHP, often higher by brand/model.
+  * Collectibles and toys: usually at least 100-250 PHP unless clearly cheap/common.
+- If uncertain, give a wider range above the category floor and explain uncertainty in price_reasoning.
 
 Remember: SAFETY IS THE HIGHEST PRIORITY. Check for prohibited items first. If found, return ONLY the rejection JSON.`
 

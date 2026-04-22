@@ -25,6 +25,8 @@ type PaymentHandler struct {
 	db *sql.DB
 }
 
+const paymentProviderUnavailableMessage = "Online payments are temporarily unavailable. Please try again later."
+
 func NewPaymentHandler(db *sql.DB) *PaymentHandler {
 	return &PaymentHandler{db: db}
 }
@@ -176,13 +178,77 @@ func getCapBool(caps map[string]interface{}, key string, def bool) bool {
 	return def
 }
 
+func defaultCapabilitiesForTier(tier string) map[string]interface{} {
+	switch strings.ToLower(strings.TrimSpace(tier)) {
+	case "pro":
+		return map[string]interface{}{
+			"listing_limit":                   999999,
+			"active_trade_limit":              999999,
+			"monthly_boost_limit":             10,
+			"free_boost_enabled":              true,
+			"featured_listing_enabled":        true,
+			"priority_listing_visibility":     true,
+			"premium_badge_enabled":           true,
+			"premium_profile_styling_enabled": true,
+			"advanced_trade_tools_enabled":    true,
+			"analytics_enabled":               true,
+			"premium_filters_enabled":         true,
+			"priority_support_enabled":        true,
+			"wider_visibility_enabled":        true,
+			"discovery_priority":              3,
+		}
+	case "plus", "promo":
+		return map[string]interface{}{
+			"listing_limit":                   30,
+			"active_trade_limit":              25,
+			"monthly_boost_limit":             3,
+			"free_boost_enabled":              true,
+			"featured_listing_enabled":        true,
+			"priority_listing_visibility":     true,
+			"premium_badge_enabled":           true,
+			"premium_profile_styling_enabled": true,
+			"advanced_trade_tools_enabled":    true,
+			"analytics_enabled":               true,
+			"premium_filters_enabled":         true,
+			"priority_support_enabled":        false,
+			"wider_visibility_enabled":        true,
+			"discovery_priority":              2,
+		}
+	default:
+		return map[string]interface{}{
+			"listing_limit":       10,
+			"active_trade_limit":  5,
+			"monthly_boost_limit": 0,
+			"free_boost_enabled":  false,
+			"discovery_priority":  1,
+		}
+	}
+}
+
+func applyDefaultCapabilities(plan *paymentPremiumPlan) {
+	if plan.Capabilities == nil {
+		plan.Capabilities = map[string]interface{}{}
+	}
+	for key, value := range defaultCapabilitiesForTier(plan.Tier) {
+		if _, ok := plan.Capabilities[key]; !ok {
+			plan.Capabilities[key] = value
+		}
+	}
+}
+
 func getUserPlanCapabilities(db *sql.DB, userID int) (paymentPremiumPlan, error) {
 	var tier string
 	var isPremium bool
-	if err := db.QueryRow("SELECT COALESCE(premium_tier, 'free'), COALESCE(is_premium, false) FROM users WHERE id = ?", userID).Scan(&tier, &isPremium); err != nil {
+	var expiresAt sql.NullTime
+	if err := db.QueryRow("SELECT COALESCE(premium_tier, 'free'), COALESCE(is_premium, false), premium_expires_at FROM users WHERE id = ?", userID).Scan(&tier, &isPremium, &expiresAt); err != nil {
 		return paymentPremiumPlan{}, err
 	}
-	if !isPremium || tier == "" {
+	tier = strings.ToLower(strings.TrimSpace(tier))
+	if tier == "" {
+		tier = "free"
+	}
+	hasActiveTier := tier != "free" && (!expiresAt.Valid || expiresAt.Time.After(time.Now()))
+	if !isPremium && !hasActiveTier {
 		tier = "free"
 	}
 	_, plans, _, err := loadPaymentPremiumConfig(db)
@@ -192,6 +258,7 @@ func getUserPlanCapabilities(db *sql.DB, userID int) (paymentPremiumPlan, error)
 	var fallback *paymentPremiumPlan
 	for i := range plans {
 		if plans[i].Tier == tier && plans[i].IsActive {
+			applyDefaultCapabilities(&plans[i])
 			if plans[i].BillingType == "free" || plans[i].BillingType == "monthly" || plans[i].PlanKey == tier {
 				return plans[i], nil
 			}
@@ -201,9 +268,12 @@ func getUserPlanCapabilities(db *sql.DB, userID int) (paymentPremiumPlan, error)
 		}
 	}
 	if fallback != nil {
+		applyDefaultCapabilities(fallback)
 		return *fallback, nil
 	}
-	return paymentPremiumPlan{Tier: "free", Name: "Free", Capabilities: map[string]interface{}{"listing_limit": 10, "active_trade_limit": 5, "monthly_boost_limit": 0}}, nil
+	plan := paymentPremiumPlan{Tier: "free", Name: "Free", Capabilities: map[string]interface{}{}}
+	applyDefaultCapabilities(&plan)
+	return plan, nil
 }
 
 func parseRemittanceExternalID(externalID string) (paymentID int, riderID int, ok bool) {
@@ -335,7 +405,8 @@ func (h *PaymentHandler) CreateRemittanceInvoice(c *fiber.Ctx) error {
 
 	apiKey := os.Getenv("XENDIT_SECRET_KEY")
 	if apiKey == "" {
-		return c.Status(503).JSON(models.APIResponse{Success: false, Error: "Xendit is not configured (missing XENDIT_SECRET_KEY)."})
+		log.Println("Payment provider unavailable: missing XENDIT_SECRET_KEY")
+		return c.Status(503).JSON(models.APIResponse{Success: false, Error: paymentProviderUnavailableMessage})
 	}
 	xenditClient := xendit.NewClient(apiKey)
 
@@ -396,7 +467,8 @@ func (h *PaymentHandler) CreateRemittanceInvoice(c *fiber.Ctx) error {
 
 	resp, _, execErr := req.Execute()
 	if execErr != nil {
-		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to generate payment link: " + execErr.Error()})
+		log.Printf("Failed to generate remittance payment link: %v", execErr)
+		return c.Status(500).JSON(models.APIResponse{Success: false, Error: paymentProviderUnavailableMessage})
 	}
 
 	checkoutURL := strings.TrimSpace(resp.InvoiceUrl)
@@ -534,10 +606,10 @@ func (h *PaymentHandler) CreateTradeInvoice(c *fiber.Ctx) error {
 	// Initialize Xendit Client
 	apiKey := os.Getenv("XENDIT_SECRET_KEY")
 	if apiKey == "" {
-		// Avoid a generic 500 here; this is a configuration problem in local/dev.
+		log.Println("Payment provider unavailable: missing XENDIT_SECRET_KEY")
 		return c.Status(503).JSON(models.APIResponse{
 			Success: false,
-			Error:   "Xendit is not configured (missing XENDIT_SECRET_KEY). Use Cash on Delivery or set the key.",
+			Error:   paymentProviderUnavailableMessage,
 		})
 	}
 	xenditClient := xendit.NewClient(apiKey)
@@ -603,10 +675,10 @@ func (h *PaymentHandler) CreateTradeInvoice(c *fiber.Ctx) error {
 	// Execute Request
 	resp, _, execErr := req.Execute()
 	if execErr != nil {
-		fmt.Printf("❌ Xendit Execute Error: %v\n", execErr)
+		log.Printf("Failed to generate trade payment link: %v", execErr)
 		return c.Status(500).JSON(models.APIResponse{
 			Success: false,
-			Error:   "Failed to generate payment link: " + execErr.Error(),
+			Error:   paymentProviderUnavailableMessage,
 		})
 	}
 
@@ -657,6 +729,10 @@ func (h *PaymentHandler) CreatePremiumInvoice(c *fiber.Ctx) error {
 	h.db.QueryRow("SELECT name, email FROM users WHERE id = ?", userID).Scan(&buyerName, &buyerEmail)
 
 	apiKey := os.Getenv("XENDIT_SECRET_KEY")
+	if apiKey == "" {
+		log.Println("Payment provider unavailable: missing XENDIT_SECRET_KEY")
+		return c.Status(503).JSON(models.APIResponse{Success: false, Error: paymentProviderUnavailableMessage})
+	}
 	xenditClient := xendit.NewClient(apiKey)
 
 	externalID := fmt.Sprintf("premium_%s_%d", productID, userID)
@@ -698,7 +774,8 @@ func (h *PaymentHandler) CreatePremiumInvoice(c *fiber.Ctx) error {
 
 	resp, _, execErr := req.Execute()
 	if execErr != nil {
-		return c.Status(500).JSON(models.APIResponse{Success: false, Error: execErr.Error()})
+		log.Printf("Failed to generate premium payment link: %v", execErr)
+		return c.Status(500).JSON(models.APIResponse{Success: false, Error: paymentProviderUnavailableMessage})
 	}
 
 	return c.JSON(fiber.Map{
@@ -730,6 +807,10 @@ func (h *PaymentHandler) CreateBoostInvoice(c *fiber.Ctx) error {
 	h.db.QueryRow("SELECT name, email FROM users WHERE id = ?", userID).Scan(&buyerName, &buyerEmail)
 
 	apiKey := os.Getenv("XENDIT_SECRET_KEY")
+	if apiKey == "" {
+		log.Println("Payment provider unavailable: missing XENDIT_SECRET_KEY")
+		return c.Status(503).JSON(models.APIResponse{Success: false, Error: paymentProviderUnavailableMessage})
+	}
 	xenditClient := xendit.NewClient(apiKey)
 
 	externalID := fmt.Sprintf("boost_%s_%d", productID, userID)
@@ -771,7 +852,8 @@ func (h *PaymentHandler) CreateBoostInvoice(c *fiber.Ctx) error {
 
 	resp, _, execErr := req.Execute()
 	if execErr != nil {
-		return c.Status(500).JSON(models.APIResponse{Success: false, Error: execErr.Error()})
+		log.Printf("Failed to generate boost payment link: %v", execErr)
+		return c.Status(500).JSON(models.APIResponse{Success: false, Error: paymentProviderUnavailableMessage})
 	}
 
 	return c.JSON(fiber.Map{
@@ -842,6 +924,10 @@ func (h *PaymentHandler) CreateUserPremiumInvoice(c *fiber.Ctx) error {
 	description := fmt.Sprintf("Clovia %s Subscription", selected.Name)
 
 	apiKey := os.Getenv("XENDIT_SECRET_KEY")
+	if apiKey == "" {
+		log.Println("Payment provider unavailable: missing XENDIT_SECRET_KEY")
+		return c.Status(503).JSON(models.APIResponse{Success: false, Error: paymentProviderUnavailableMessage})
+	}
 	xenditClient := xendit.NewClient(apiKey)
 
 	externalID := fmt.Sprintf("user_premium_%s_%s_%d", payload.Tier, payload.Plan, userID)
@@ -882,7 +968,8 @@ func (h *PaymentHandler) CreateUserPremiumInvoice(c *fiber.Ctx) error {
 
 	resp, _, execErr := req.Execute()
 	if execErr != nil {
-		return c.Status(500).JSON(models.APIResponse{Success: false, Error: execErr.Error()})
+		log.Printf("Failed to generate subscription payment link: %v", execErr)
+		return c.Status(500).JSON(models.APIResponse{Success: false, Error: paymentProviderUnavailableMessage})
 	}
 
 	return c.JSON(fiber.Map{
@@ -1025,9 +1112,14 @@ func (h *PaymentHandler) SyncUserPremiumPayment(c *fiber.Ctx) error {
 	}
 
 	apiKey := os.Getenv("XENDIT_SECRET_KEY")
+	if apiKey == "" {
+		log.Println("Payment provider unavailable: missing XENDIT_SECRET_KEY")
+		return c.Status(503).JSON(models.APIResponse{Success: false, Error: paymentProviderUnavailableMessage})
+	}
 	status, amount, resolvedExternalID, err := fetchXenditInvoiceByExternalID(apiKey, payload.ExternalID)
 	if err != nil {
-		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to sync payment: " + err.Error()})
+		log.Printf("Failed to sync subscription payment: %v", err)
+		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to sync payment"})
 	}
 	if resolvedExternalID == "" {
 		resolvedExternalID = payload.ExternalID
@@ -1140,7 +1232,8 @@ func (h *PaymentHandler) SyncTradePayment(c *fiber.Ctx) error {
 
 	apiKey := os.Getenv("XENDIT_SECRET_KEY")
 	if apiKey == "" {
-		return c.Status(503).JSON(models.APIResponse{Success: false, Error: "Xendit is not configured (missing XENDIT_SECRET_KEY)."})
+		log.Println("Payment provider unavailable: missing XENDIT_SECRET_KEY")
+		return c.Status(503).JSON(models.APIResponse{Success: false, Error: paymentProviderUnavailableMessage})
 	}
 
 	// If we have neither invoice ID (stored) nor external ID (from redirect), we can't sync.
@@ -1172,7 +1265,8 @@ func (h *PaymentHandler) SyncTradePayment(c *fiber.Ctx) error {
 		status, amount, xExternalID, err = fetchXenditInvoiceByID(apiKey, invoiceID.String)
 	}
 	if err != nil {
-		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to sync payment: " + err.Error()})
+		log.Printf("Failed to sync trade payment: %v", err)
+		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to sync payment"})
 	}
 	if xExternalID == "" {
 		xExternalID = payload.ExternalID
@@ -1220,7 +1314,8 @@ func (h *PaymentHandler) SyncRemittancePayment(c *fiber.Ctx) error {
 
 	apiKey := os.Getenv("XENDIT_SECRET_KEY")
 	if apiKey == "" {
-		return c.Status(503).JSON(models.APIResponse{Success: false, Error: "Xendit is not configured (missing XENDIT_SECRET_KEY)."})
+		log.Println("Payment provider unavailable: missing XENDIT_SECRET_KEY")
+		return c.Status(503).JSON(models.APIResponse{Success: false, Error: paymentProviderUnavailableMessage})
 	}
 
 	var payload struct {
@@ -1244,7 +1339,8 @@ func (h *PaymentHandler) SyncRemittancePayment(c *fiber.Ctx) error {
 
 	status, amount, _, err := fetchXenditInvoiceByExternalID(apiKey, payload.ExternalID)
 	if err != nil {
-		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to sync payment: " + err.Error()})
+		log.Printf("Failed to sync remittance payment: %v", err)
+		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to sync payment"})
 	}
 
 	paid := status == "PAID" || status == "SETTLED" || status == "COMPLETED" || status == "SUCCEEDED"
@@ -1253,7 +1349,8 @@ func (h *PaymentHandler) SyncRemittancePayment(c *fiber.Ctx) error {
 	}
 
 	if err := h.handleRemittancePaid(payload.ExternalID, amount); err != nil {
-		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to apply remittance payment: " + err.Error()})
+		log.Printf("Failed to apply remittance payment: %v", err)
+		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to apply remittance payment"})
 	}
 
 	return c.JSON(models.APIResponse{Success: true, Data: fiber.Map{"paid": true, "status": status, "external_id": payload.ExternalID}})

@@ -19,7 +19,7 @@ interface SuggestedTradesModalProps {
 export const SuggestedTradesModal: React.FC<SuggestedTradesModalProps> = ({ isOpen, onClose, product, onTradeClick: _onTradeClick }) => {
     const [suggestions, setSuggestions] = useState<Product[]>([]);
     const [loading, setLoading] = useState(false);
-    const [likingId, setLikingId] = useState<number | null>(null);
+    const [actingId, setActingId] = useState<number | null>(null);
     const [likedIds, setLikedIds] = useState<Set<number>>(new Set());
     const toast = useToast();
     const navigate = useNavigate();
@@ -122,7 +122,7 @@ export const SuggestedTradesModal: React.FC<SuggestedTradesModalProps> = ({ isOp
     const handleLike = async (target: Product) => {
         if (!product?.id) return;
         try {
-            setLikingId(target.id);
+            setActingId(target.id);
             const res = await api.post('/api/trades/likes', {
                 liked_product_id: target.id,
                 offered_product_id: product.id,
@@ -166,7 +166,44 @@ export const SuggestedTradesModal: React.FC<SuggestedTradesModalProps> = ({ isOp
                 isClosable: true,
             });
         } finally {
-            setLikingId(null);
+            setActingId(null);
+        }
+    };
+
+    const handleUndoLike = async (target: Product) => {
+        if (!product?.id) return;
+        try {
+            setActingId(target.id);
+            await api.delete('/api/trades/likes', {
+                data: {
+                    liked_product_id: target.id,
+                    offered_product_id: product.id,
+                },
+            });
+            setLikedIds((prev) => {
+                const next = new Set(prev);
+                next.delete(target.id);
+                return next;
+            });
+            toast({
+                id: `undo-like-${target.id}`,
+                title: 'Invite removed',
+                description: 'Your trade invite was undone.',
+                status: 'success',
+                duration: 3000,
+                isClosable: true,
+            });
+        } catch (err: any) {
+            toast({
+                id: `undo-like-error-${target.id}`,
+                title: 'Failed to undo invite',
+                description: err?.response?.data?.error || 'Please try again.',
+                status: 'error',
+                duration: 3000,
+                isClosable: true,
+            });
+        } finally {
+            setActingId(null);
         }
     };
 
@@ -246,28 +283,31 @@ export const SuggestedTradesModal: React.FC<SuggestedTradesModalProps> = ({ isOp
                                         </VStack>
                                         <Box onClick={(e) => e.stopPropagation()}>
                                             <Tooltip
-                                                label="Invite this item for Trade Match or Multi-Way loops."
+                                                label={likedIds.has(s.id)
+                                                    ? "Undo this invite."
+                                                    : "Invite this item for Trade Match or Multi-Way loops."}
                                                 hasArrow
                                                 placement="top"
                                             >
                                             <Button
                                                 size="sm"
-                                                bg={likedIds.has(s.id) ? "gray.100" : "red.400"}
-                                                color={likedIds.has(s.id) ? "gray.500" : "white"}
+                                                bg={likedIds.has(s.id) ? "orange.50" : "red.400"}
+                                                color={likedIds.has(s.id) ? "orange.600" : "white"}
                                                 leftIcon={<FaHeart />}
                                                 borderRadius="xl"
                                                 fontWeight="800"
                                                 h="36px"
                                                 px={4}
                                                 shadow={likedIds.has(s.id) ? "none" : "sm"}
-                                                onClick={() => handleLike(s)}
-                                                isLoading={likingId === s.id}
-                                                loadingText="Inviting"
-                                                isDisabled={likedIds.has(s.id)}
-                                                _hover={likedIds.has(s.id) ? {} : { bg: 'red.500', transform: 'translateY(-1px)', shadow: 'md' }}
+                                                onClick={() => likedIds.has(s.id) ? handleUndoLike(s) : handleLike(s)}
+                                                isLoading={actingId === s.id}
+                                                loadingText={likedIds.has(s.id) ? "Undoing" : "Inviting"}
+                                                _hover={likedIds.has(s.id)
+                                                    ? { bg: 'orange.100', transform: 'translateY(-1px)' }
+                                                    : { bg: 'red.500', transform: 'translateY(-1px)', shadow: 'md' }}
                                                 transition="all 0.2s"
                                             >
-                                                {likedIds.has(s.id) ? 'Invited' : 'Invite'}
+                                                {likedIds.has(s.id) ? 'Undo Invite' : 'Invite'}
                                             </Button>
                                             </Tooltip>
                                         </Box>

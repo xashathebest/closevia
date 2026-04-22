@@ -196,7 +196,7 @@ const TradeLoopsDisplay: React.FC = () => {
               case 'pending_user3': return 'Awaiting Response'
               case 'partially_accepted': return 'Partially Accepted'
               case 'user3_accepted': return 'Accepted'
-              case 'pending_initiator_upgrade': return 'Awaiting Upgrade'
+              case 'pending_initiator_upgrade': return 'Awaiting Response'
               case 'confirmed':
               case 'ongoing':
               case 'active': return 'Active'
@@ -216,7 +216,7 @@ const TradeLoopsDisplay: React.FC = () => {
               case 'active':
               case 'user3_accepted': return 'green'
               case 'completed': return 'blue'
-              case 'pending_initiator_upgrade': return 'orange'
+              case 'pending_initiator_upgrade': return 'yellow'
               case 'broken':
               case 'expired':
               case 'cancelled':

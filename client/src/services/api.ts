@@ -1,4 +1,5 @@
 import axios, { AxiosError, AxiosRequestConfig } from 'axios'
+import { clearStoredAuth, getStoredToken } from '../utils/authStorage'
 
 function normalizeLoopbackBaseUrl(raw: string): string {
   try {
@@ -24,17 +25,18 @@ export const API_BASE_URL = (ENV_API_URL ? normalizeLoopbackBaseUrl(ENV_API_URL)
     : ''
 )
 
-const DEBUG_API = localStorage.getItem('debug_api') === 'true'
+const DEBUG_API = import.meta.env.DEV && localStorage.getItem('debug_api') === 'true'
 
 export const api = axios.create({
   baseURL: API_BASE_URL,
   timeout: 60000, // Increased from 30s to 60s for slower networks
+  withCredentials: true,
 })
 
 // Request interceptor to add auth token and log
 api.interceptors.request.use(
   (config) => {
-    const token = localStorage.getItem('clovia_token')
+    const token = getStoredToken()
     // Ensure headers object exists
     config.headers = config.headers || {}
     if (token) {
@@ -56,18 +58,17 @@ api.interceptors.request.use(
       try {
         const method = (config.method || 'get').toUpperCase()
         const url = `${config.baseURL || ''}${config.url || ''}`
-        // Only log header presence, not full token
         const authHeader = (config.headers['Authorization'] || config.headers['authorization']) as string | undefined
         // eslint-disable-next-line no-console
         console.groupCollapsed(`[API REQUEST] ${method} ${url}`)
         // eslint-disable-next-line no-console
         console.log('Token present:', !!token)
         // eslint-disable-next-line no-console
-        console.log('Authorization header set:', !!authHeader, authHeader ? `${authHeader.slice(0, 20)}…` : '')
+        console.log('Authorization header set:', !!authHeader)
         // eslint-disable-next-line no-console
-        console.log('Params:', config.params)
+        console.log('Has params:', !!config.params)
         // eslint-disable-next-line no-console
-        console.log('Data:', config.data)
+        console.log('Has body:', !!config.data)
         // eslint-disable-next-line no-console
         console.groupEnd()
       } catch { }
@@ -89,8 +90,6 @@ api.interceptors.response.use(
         // eslint-disable-next-line no-console
         console.groupCollapsed(`[API RESPONSE] ${method} ${url} -> ${response.status}`)
         // eslint-disable-next-line no-console
-        console.log('Data:', response.data)
-        // eslint-disable-next-line no-console
         console.groupEnd()
       } catch { }
     }
@@ -111,17 +110,13 @@ api.interceptors.response.use(
         // eslint-disable-next-line no-console
         console.groupCollapsed(`[API ERROR] ${method} ${url} -> ${status}`)
         // eslint-disable-next-line no-console
-        console.log('Response data:', error.response?.data)
-        // eslint-disable-next-line no-console
-        console.log('Headers on request:', cfg?.headers)
-        // eslint-disable-next-line no-console
         console.groupEnd()
       } catch { }
     }
 
     // Simple one-time retry on 401 if token exists but header was missing/not set
     if (status === 401 && cfg && !cfg._retry) {
-      const token = localStorage.getItem('clovia_token')
+      const token = getStoredToken()
       if (token) {
         cfg._retry = true
         cfg.headers = cfg.headers || {}
@@ -133,6 +128,10 @@ api.interceptors.response.use(
     // On 401 after retry failed, let route guards and component-level handlers decide UX.
     // Do NOT hard-redirect here, because some pages are intentionally browsable by guests.
     if (status === 401) {
+      if (typeof url === 'string' && url.includes('/api/auth/refresh-session')) {
+        clearStoredAuth()
+        delete api.defaults.headers.common['Authorization']
+      }
       if (isReviewEndpoint) {
         return Promise.reject(error)
       }

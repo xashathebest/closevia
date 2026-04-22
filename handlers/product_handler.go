@@ -27,10 +27,53 @@ type ProductHandler struct {
 	db *sql.DB
 }
 
+var ensureProductEstimateVisibilityColumnOnce sync.Once
+
 // NewProductHandler creates a new product handler
 func NewProductHandler() *ProductHandler {
 	return &ProductHandler{
 		db: database.DB,
+	}
+}
+
+func (h *ProductHandler) ensureProductEstimateVisibilityColumn() {
+	ensureProductEstimateVisibilityColumnOnce.Do(func() {
+		var exists int
+		err := h.db.QueryRow(`
+			SELECT COUNT(*)
+			FROM information_schema.COLUMNS
+			WHERE TABLE_SCHEMA = DATABASE()
+			AND TABLE_NAME = 'products'
+			AND COLUMN_NAME = 'show_estimated_value'
+		`).Scan(&exists)
+		if err != nil {
+			log.Printf("Warning: failed to check products.show_estimated_value column: %v", err)
+			return
+		}
+		if exists > 0 {
+			return
+		}
+		if _, err := h.db.Exec("ALTER TABLE products ADD COLUMN show_estimated_value BOOLEAN NOT NULL DEFAULT TRUE"); err != nil {
+			log.Printf("Warning: failed to add products.show_estimated_value column: %v", err)
+			return
+		}
+		log.Println("Added missing products.show_estimated_value column")
+	})
+}
+
+func (h *ProductHandler) showOwnProductsOnHome() bool {
+	var raw string
+	if err := h.db.QueryRow("SELECT setting_value FROM app_settings WHERE setting_key = 'show_own_products_on_home'").Scan(&raw); err != nil {
+		return true
+	}
+	enabled, err := strconv.ParseBool(strings.TrimSpace(raw))
+	return err != nil || enabled
+}
+
+func hideEstimatedValueIfNeeded(product *models.Product) {
+	if !product.ShowEstimatedValue {
+		product.EstimatedValueMin = nil
+		product.EstimatedValueMax = nil
 	}
 }
 
@@ -109,6 +152,8 @@ func parseWantedCategories(raw string) models.StringArray {
 
 // CreateProduct creates a new product
 func (h *ProductHandler) CreateProduct(c *fiber.Ctx) error {
+	h.ensureProductEstimateVisibilityColumn()
+
 	userID, ok := middleware.GetUserIDFromContext(c)
 	if !ok {
 		log.Printf("❌ [CreateProduct] ERROR: Failed to extract userID from context")
@@ -122,8 +167,8 @@ func (h *ProductHandler) CreateProduct(c *fiber.Ctx) error {
 	log.Printf("✅ [CreateProduct] User ID %d attempting to create product", userID)
 
 	// Parse fields
-	title := c.FormValue("title")
-	description := c.FormValue("description")
+	title := cleanUserText(c.FormValue("title"), 160)
+	description := cleanUserText(c.FormValue("description"), 5000)
 	priceStr := c.FormValue("price")
 	// Fetch user tier, strikes and enforce data-driven listing limits
 	var tier string
@@ -211,6 +256,12 @@ func (h *ProductHandler) CreateProduct(c *fiber.Ctx) error {
 	if estimatedValueMaxStr != "" {
 		if val, err := strconv.ParseFloat(estimatedValueMaxStr, 64); err == nil {
 			estimatedValueMax = &val
+		}
+	}
+	showEstimatedValue := true
+	if raw := c.FormValue("show_estimated_value"); raw != "" {
+		if parsed, err := strconv.ParseBool(strings.TrimSpace(raw)); err == nil {
+			showEstimatedValue = parsed
 		}
 	}
 
@@ -436,9 +487,9 @@ func (h *ProductHandler) CreateProduct(c *fiber.Ctx) error {
 
 	// Insert new product with slug. Build SQL dynamically so it's tolerant
 	// to missing latitude/longitude columns (some DBs may not have applied migrations).
-	cols := []string{"slug", "title", "description", "price", "image_urls", "seller_id", "premium", "allow_buying", "barter_only", "location", "status", "`condition`", "suggested_value", "category", "wants", "wanted_categories", "item_type", "brand", "authenticity_risks", "tags", "estimated_value_min", "estimated_value_max", "desired_price", "desired_product"}
-	placeholders := []string{"?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?"}
-	args := []interface{}{slug, title, finalDescription, insertPrice, string(imageURLsJSONBytes), userID, premium, allowBuying, barterOnly, location, "available", finalCondition, suggestedValue, category, wants, wantedCategories, itemType, brand, authenticityRisks, tags, estimatedValueMin, estimatedValueMax, desiredPrice, desiredProduct}
+	cols := []string{"slug", "title", "description", "price", "image_urls", "seller_id", "premium", "allow_buying", "barter_only", "location", "status", "`condition`", "suggested_value", "category", "wants", "wanted_categories", "item_type", "brand", "authenticity_risks", "tags", "estimated_value_min", "estimated_value_max", "show_estimated_value", "desired_price", "desired_product"}
+	placeholders := []string{"?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?"}
+	args := []interface{}{slug, title, finalDescription, insertPrice, string(imageURLsJSONBytes), userID, premium, allowBuying, barterOnly, location, "available", finalCondition, suggestedValue, category, wants, wantedCategories, itemType, brand, authenticityRisks, tags, estimatedValueMin, estimatedValueMax, showEstimatedValue, desiredPrice, desiredProduct}
 
 	// Include video_url if a video was uploaded
 	if videoURL != "" {
@@ -494,13 +545,13 @@ func (h *ProductHandler) CreateProduct(c *fiber.Ctx) error {
 	var wantsNull sql.NullString
 	var wantedCategoriesRaw sql.NullString
 	err = h.db.QueryRow(
-		"SELECT id, slug, title, description, price, image_urls, video_url, seller_id, premium, status, allow_buying, barter_only, location, `condition`, suggested_value, category, estimated_value_min, estimated_value_max, `value`, wants, wanted_categories, created_at, updated_at FROM products WHERE id = ?",
+		"SELECT id, slug, title, description, price, image_urls, video_url, seller_id, premium, status, allow_buying, barter_only, location, `condition`, suggested_value, category, estimated_value_min, estimated_value_max, COALESCE(show_estimated_value, TRUE), `value`, wants, wanted_categories, created_at, updated_at FROM products WHERE id = ?",
 		productID,
 	).Scan(&createdProduct.ID, &slugNull, &createdProduct.Title, &createdProduct.Description, &createdProduct.Price,
 		&createdProduct.ImageURLs, &createdVideoURL, &createdProduct.SellerID, &createdProduct.Premium, &createdProduct.Status,
 		&createdProduct.AllowBuying, &createdProduct.BarterOnly, &createdProduct.Location,
 		&createdProduct.Condition, &createdProduct.SuggestedValue, &createdProduct.Category,
-		&createdProduct.EstimatedValueMin, &createdProduct.EstimatedValueMax, &createdProduct.Value,
+		&createdProduct.EstimatedValueMin, &createdProduct.EstimatedValueMax, &createdProduct.ShowEstimatedValue, &createdProduct.Value,
 		&wantsNull, &wantedCategoriesRaw,
 		&createdProduct.CreatedAt, &createdProduct.UpdatedAt)
 
@@ -514,6 +565,7 @@ func (h *ProductHandler) CreateProduct(c *fiber.Ctx) error {
 	if slugNull.Valid {
 		createdProduct.Slug = slugNull.String
 	}
+	hideEstimatedValueIfNeeded(&createdProduct)
 	if createdVideoURL.Valid {
 		createdProduct.VideoURL = createdVideoURL.String
 	}
@@ -584,9 +636,6 @@ func (h *ProductHandler) CreateProduct(c *fiber.Ctx) error {
 
 		// Also trigger notifications in the same background operation
 		services.TriggerSmartNotifications(h.db, int(productID), userID, title, category)
-		NewTradeHandler().autoTriggerMultiwayForNewAvailableProduct(int(productID))
-		// DISABLED: Proactive multiway detection was generating excessive trade_loop notifications
-		// NewTradeHandler().FindProactiveMultiwayLoops(int(productID))
 	}()
 	// ========================================================================
 
@@ -647,6 +696,8 @@ func (h *ProductHandler) CreateProduct(c *fiber.Ctx) error {
 
 // GetProducts gets all products with search and filtering
 func (h *ProductHandler) GetProducts(c *fiber.Ctx) error {
+	h.ensureProductEstimateVisibilityColumn()
+
 	fmt.Println("🔍 [DEBUG] GetProducts called")
 
 	// Parse query parameters
@@ -718,6 +769,10 @@ func (h *ProductHandler) GetProducts(c *fiber.Ctx) error {
 	} else {
 		// For the general public feed, default to 'available' status
 		whereClause += " AND p.status = 'available'"
+		if viewerID, ok := middleware.GetUserIDFromContext(c); ok && !h.showOwnProductsOnHome() {
+			whereClause += " AND p.seller_id != ?"
+			args = append(args, viewerID)
+		}
 	}
 
 	if barterOnlyStr != "" {
@@ -775,7 +830,7 @@ func (h *ProductHandler) GetProducts(c *fiber.Ctx) error {
 		fmt.Println("Error:", err.Error())
 		return c.Status(500).JSON(models.APIResponse{
 			Success: false,
-			Error:   "Failed to get product count: " + err.Error(),
+			Error:   "Failed to get product count",
 		})
 	}
 
@@ -816,7 +871,7 @@ func (h *ProductHandler) GetProducts(c *fiber.Ctx) error {
 	query := `
 		SELECT p.id, COALESCE(p.slug, '') as slug, p.title, COALESCE(p.description, '') as description, p.price, COALESCE(p.image_urls, '[]') as image_urls, p.seller_id,
 		       p.premium, p.status, p.allow_buying, p.barter_only, COALESCE(p.location, '') as location, COALESCE(p.` + "`condition`" + `, '') as ` + "`condition`" + `,
-		       p.suggested_value, COALESCE(p.category, 'General') as category, p.estimated_value_min, p.estimated_value_max, p.` + "`value`" + `, p.wants, p.wanted_categories, p.location_type, p.pickup_latitude, p.pickup_longitude, p.pickup_address, p.latitude, p.longitude, p.created_at, p.updated_at, p.boosted_at,
+		       p.suggested_value, COALESCE(p.category, 'General') as category, p.estimated_value_min, p.estimated_value_max, COALESCE(p.show_estimated_value, TRUE), p.` + "`value`" + `, p.wants, p.wanted_categories, p.location_type, p.pickup_latitude, p.pickup_longitude, p.pickup_address, p.latitude, p.longitude, p.created_at, p.updated_at, p.boosted_at,
 		       COALESCE(u.name, 'User') as seller_name, COALESCE(u.profile_picture, '') as seller_profile_picture,
 		       u.latitude as seller_latitude, u.longitude as seller_longitude,
 		   (SELECT COUNT(*) FROM wishlists w WHERE w.product_id = p.id) as want_count,
@@ -863,7 +918,7 @@ func (h *ProductHandler) GetProducts(c *fiber.Ctx) error {
 		fmt.Println("Error:", err.Error())
 		return c.Status(500).JSON(models.APIResponse{
 			Success: false,
-			Error:   "Failed to get products: " + err.Error(),
+			Error:   "Failed to get products",
 		})
 	}
 	fmt.Println("✅ [DEBUG] Main products query succeeded, iterating rows")
@@ -889,7 +944,7 @@ func (h *ProductHandler) GetProducts(c *fiber.Ctx) error {
 			&imageURLsJSONStr, &product.SellerID, &product.Premium, &product.Status,
 			&product.AllowBuying, &product.BarterOnly, &product.Location,
 			&conditionNull, &product.SuggestedValue, &product.Category,
-			&product.EstimatedValueMin, &product.EstimatedValueMax, &product.Value,
+			&product.EstimatedValueMin, &product.EstimatedValueMax, &product.ShowEstimatedValue, &product.Value,
 			&wantsNull, &wantedCategoriesRaw,
 			&locationTypeNull, &pickupLatNull, &pickupLonNull, &pickupAddressNull,
 			&latNull, &lonNull, &product.CreatedAt, &product.UpdatedAt, &boostedAtNull,
@@ -981,6 +1036,7 @@ func (h *ProductHandler) GetProducts(c *fiber.Ctx) error {
 			log.Printf("📏 [GetProducts] Product ID %d (%s) - NO DISTANCE COMPUTED (NULL coordinates)", product.ID, product.Title)
 		}
 
+		hideEstimatedValueIfNeeded(&product)
 		products = append(products, product)
 	}
 
@@ -1268,8 +1324,7 @@ func (h *ProductHandler) BoostProduct(c *fiber.Ctx) error {
 		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to fetch user plan capabilities"})
 	}
 	monthlyBoostLimit := getCapInt(plan.Capabilities, "monthly_boost_limit", 0)
-	freeBoostEnabled := getCapBool(plan.Capabilities, "free_boost_enabled", false)
-	if monthlyBoostLimit <= 0 || !freeBoostEnabled {
+	if monthlyBoostLimit <= 0 {
 		return c.Status(403).JSON(models.APIResponse{
 			Success: false,
 			Error:   "Boosting is not included in your current plan.",
@@ -1280,6 +1335,33 @@ func (h *ProductHandler) BoostProduct(c *fiber.Ctx) error {
 	_ = h.db.QueryRow("SELECT COALESCE(usage_count, 0) FROM premium_feature_usage WHERE user_id = ? AND feature_key = 'boosted_listings' AND usage_month = ?", userID, usageMonth).Scan(&boostUsage)
 	if boostUsage >= monthlyBoostLimit {
 		return c.Status(403).JSON(models.APIResponse{Success: false, Error: fmt.Sprintf("Your current plan includes %d boost(s) per month.", monthlyBoostLimit)})
+	}
+
+	if boostedAt.Valid {
+		age := time.Since(boostedAt.Time)
+		if age < 24*time.Hour {
+			remainingCooldown := 24*time.Hour - age
+			activeRemaining := 3*time.Hour - age
+			isActive := activeRemaining > 0
+			if !isActive {
+				activeRemaining = 0
+			}
+			message := "This product is in boost cooldown."
+			if isActive {
+				message = "This product is already boosted and visible higher in the feed."
+			}
+			return c.JSON(models.APIResponse{
+				Success: true,
+				Message: message,
+				Data: fiber.Map{
+					"already_boosted":    true,
+					"boosted_at":         boostedAt.Time,
+					"active":             isActive,
+					"active_remaining":   activeRemaining.String(),
+					"cooldown_remaining": remainingCooldown.String(),
+				},
+			})
+		}
 	}
 
 	// Determine if this should be a "Premium pin" boost based on tier limits
@@ -1294,16 +1376,9 @@ func (h *ProductHandler) BoostProduct(c *fiber.Ctx) error {
 		}
 	}
 
-	// Prevent spamming boosts (max once per 24 hours per product)
-	if boostedAt.Valid && time.Since(boostedAt.Time).Hours() < 24 {
-		return c.Status(429).JSON(models.APIResponse{
-			Success: false,
-			Error:   "This product was already boosted recently. You can boost it again in 24 hours.",
-		})
-	}
-
 	// Calculate boost expiration time (3 hours from now)
-	expiresAt := time.Now().Add(3 * time.Hour)
+	boostedAtTime := time.Now()
+	expiresAt := boostedAtTime.Add(3 * time.Hour)
 
 	query := "UPDATE products SET boosted_at = NOW()"
 	if canPin {
@@ -1325,6 +1400,7 @@ func (h *ProductHandler) BoostProduct(c *fiber.Ctx) error {
 	// Prepare response with boost details
 	responseData := map[string]interface{}{
 		"boost_duration": "3 hours",
+		"boosted_at":     boostedAtTime,
 		"expires_at":     expiresAt,
 	}
 
@@ -1596,6 +1672,8 @@ func (h *ProductHandler) GetSuggestedTrades(c *fiber.Ctx) error {
 
 // GetProduct gets a single product by ID or slug
 func (h *ProductHandler) GetProduct(c *fiber.Ctx) error {
+	h.ensureProductEstimateVisibilityColumn()
+
 	idOrSlug := c.Params("id")
 
 	// Try to parse as integer first (ID)
@@ -1621,7 +1699,7 @@ func (h *ProductHandler) GetProduct(c *fiber.Ctx) error {
 		err = h.db.QueryRow(`
 			SELECT p.id, p.slug, p.title, p.description, p.price, p.image_urls, p.video_url, p.seller_id, 
 			       p.premium, p.status, p.allow_buying, p.barter_only, p.location, p.`+"condition"+`, 
-			       p.suggested_value, p.category, p.estimated_value_min, p.estimated_value_max, p.`+"`value`"+`, p.wants, p.wanted_categories, 
+			       p.suggested_value, p.category, p.estimated_value_min, p.estimated_value_max, COALESCE(p.show_estimated_value, TRUE), p.`+"`value`"+`, p.wants, p.wanted_categories,
 			       p.location_type, p.pickup_latitude, p.pickup_longitude, p.pickup_address,
 			       p.price_reasoning, p.created_at, p.updated_at,
 			       u.name as seller_name, u.profile_picture as seller_profile_picture,
@@ -1633,7 +1711,7 @@ func (h *ProductHandler) GetProduct(c *fiber.Ctx) error {
 			&imageURLsJSON, &videoURLNull, &product.SellerID, &product.Premium, &product.Status,
 			&product.AllowBuying, &product.BarterOnly, &product.Location,
 			&product.Condition, &product.SuggestedValue, &product.Category,
-			&product.EstimatedValueMin, &product.EstimatedValueMax, &product.Value,
+			&product.EstimatedValueMin, &product.EstimatedValueMax, &product.ShowEstimatedValue, &product.Value,
 			&wantsNull, &wantedCategoriesRaw, &locationTypeNull, &pickupLatNull, &pickupLonNull, &pickupAddressNull, &priceReasoningNull,
 			&product.CreatedAt, &product.UpdatedAt,
 			&sellerNameNull, &sellerProfilePictureNull, &product.WantCount)
@@ -1641,7 +1719,7 @@ func (h *ProductHandler) GetProduct(c *fiber.Ctx) error {
 		err = h.db.QueryRow(`
 			SELECT p.id, p.slug, p.title, p.description, p.price, p.image_urls, p.video_url, p.seller_id, 
 			       p.premium, p.status, p.allow_buying, p.barter_only, p.location, p.`+"condition"+`, 
-			       p.suggested_value, p.category, p.estimated_value_min, p.estimated_value_max, p.`+"`value`"+`, p.wants, p.wanted_categories, 
+			       p.suggested_value, p.category, p.estimated_value_min, p.estimated_value_max, COALESCE(p.show_estimated_value, TRUE), p.`+"`value`"+`, p.wants, p.wanted_categories,
 			       p.location_type, p.pickup_latitude, p.pickup_longitude, p.pickup_address,
 			       p.price_reasoning, p.created_at, p.updated_at,
 			       u.name as seller_name, u.profile_picture as seller_profile_picture,
@@ -1653,13 +1731,15 @@ func (h *ProductHandler) GetProduct(c *fiber.Ctx) error {
 			&imageURLsJSON, &videoURLNull, &product.SellerID, &product.Premium, &product.Status,
 			&product.AllowBuying, &product.BarterOnly, &product.Location,
 			&product.Condition, &product.SuggestedValue, &product.Category,
-			&product.EstimatedValueMin, &product.EstimatedValueMax, &product.Value,
+			&product.EstimatedValueMin, &product.EstimatedValueMax, &product.ShowEstimatedValue, &product.Value,
 			&wantsNull, &wantedCategoriesRaw, &locationTypeNull, &pickupLatNull, &pickupLonNull, &pickupAddressNull, &priceReasoningNull,
 			&product.CreatedAt, &product.UpdatedAt,
 			&sellerNameNull, &sellerProfilePictureNull, &product.WantCount)
 	}
 
 	if err == nil {
+		hideEstimatedValueIfNeeded(&product)
+
 		// Log product view
 		viewerID, _ := middleware.GetUserIDFromContext(c)
 		if viewerID != product.SellerID { // Don't log self-views
@@ -1826,6 +1906,8 @@ func (h *ProductHandler) VoteProduct(c *fiber.Ctx) error {
 
 // UpdateProduct updates a product (only by seller)
 func (h *ProductHandler) UpdateProduct(c *fiber.Ctx) error {
+	h.ensureProductEstimateVisibilityColumn()
+
 	userID, ok := middleware.GetUserIDFromContext(c)
 	if !ok {
 		return c.Status(401).JSON(models.APIResponse{
@@ -1869,13 +1951,13 @@ func (h *ProductHandler) UpdateProduct(c *fiber.Ctx) error {
 	var updateFields []string
 	var args []interface{}
 
-	title := c.FormValue("title")
+	title := cleanUserText(c.FormValue("title"), 160)
 	if title != "" {
 		updateFields = append(updateFields, "title = ?")
 		args = append(args, title)
 	}
 
-	description := c.FormValue("description")
+	description := cleanUserText(c.FormValue("description"), 5000)
 	if description != "" {
 		updateFields = append(updateFields, "description = ?")
 		args = append(args, description)
@@ -1969,6 +2051,13 @@ func (h *ProductHandler) UpdateProduct(c *fiber.Ctx) error {
 		}
 	}
 
+	if raw := c.FormValue("show_estimated_value"); raw != "" {
+		if val, err := strconv.ParseBool(strings.TrimSpace(raw)); err == nil {
+			updateFields = append(updateFields, "show_estimated_value = ?")
+			args = append(args, val)
+		}
+	}
+
 	desiredPriceStr := c.FormValue("desired_price")
 	if desiredPriceStr != "" {
 		if val, err := strconv.ParseFloat(desiredPriceStr, 64); err == nil {
@@ -2041,18 +2130,6 @@ func (h *ProductHandler) UpdateProduct(c *fiber.Ctx) error {
 			Success: false,
 			Error:   "Failed to update product",
 		})
-	}
-
-	// Re-trigger multiway search if category/wants fields changed and product is available
-	if p.Status == "available" {
-		for _, f := range updateFields {
-			if strings.Contains(f, "category") || strings.Contains(f, "wants") || strings.Contains(f, "desired_product") {
-				go NewTradeHandler().autoTriggerMultiwayForNewAvailableProduct(productID)
-				// DISABLED: Proactive multiway detection was generating excessive trade_loop notifications
-				// go NewTradeHandler().FindProactiveMultiwayLoops(productID)
-				break
-			}
-		}
 	}
 
 	return c.JSON(models.APIResponse{
@@ -2951,6 +3028,8 @@ func (h *ProductHandler) SearchSuggestions(c *fiber.Ctx) error {
 
 // SmartSearch uses AI to parse natural language queries and return relevant products
 func (h *ProductHandler) SmartSearch(c *fiber.Ctx) error {
+	h.ensureProductEstimateVisibilityColumn()
+
 	q := strings.TrimSpace(c.Query("q", ""))
 	if q == "" {
 		return c.JSON(models.APIResponse{
@@ -3031,7 +3110,7 @@ func (h *ProductHandler) SmartSearch(c *fiber.Ctx) error {
 	query := `
 		SELECT p.id, p.slug, p.title, p.description, p.price, p.image_urls, p.seller_id,
 		       p.premium, p.status, p.allow_buying, p.barter_only, p.location, p.` + "`condition`" + `,
-		       p.suggested_value, p.category, p.estimated_value_min, p.estimated_value_max, p.` + "`value`" + `, p.wants, p.wanted_categories, p.location_type, p.pickup_latitude, p.pickup_longitude, p.pickup_address, p.latitude, p.longitude, p.created_at, p.updated_at, p.boosted_at,
+		       p.suggested_value, p.category, p.estimated_value_min, p.estimated_value_max, COALESCE(p.show_estimated_value, TRUE), p.` + "`value`" + `, p.wants, p.wanted_categories, p.location_type, p.pickup_latitude, p.pickup_longitude, p.pickup_address, p.latitude, p.longitude, p.created_at, p.updated_at, p.boosted_at,
 		       u.name as seller_name, u.profile_picture as seller_profile_picture,
 		       u.latitude as seller_latitude, u.longitude as seller_longitude,
 		   (SELECT COUNT(*) FROM wishlists w WHERE w.product_id = p.id) as want_count,
@@ -3087,7 +3166,7 @@ func (h *ProductHandler) SmartSearch(c *fiber.Ctx) error {
 			&imageURLsJSONStr, &product.SellerID, &product.Premium, &product.Status,
 			&product.AllowBuying, &product.BarterOnly, &product.Location,
 			&conditionNull, &product.SuggestedValue, &product.Category,
-			&product.EstimatedValueMin, &product.EstimatedValueMax, &product.Value,
+			&product.EstimatedValueMin, &product.EstimatedValueMax, &product.ShowEstimatedValue, &product.Value,
 			&wantsNull, &wantedCategoriesRaw,
 			&locationTypeNull, &pickupLatNull, &pickupLonNull, &pickupAddressNull,
 			&latNull, &lonNull, &product.CreatedAt, &product.UpdatedAt, &boostedAtNull,
@@ -3173,6 +3252,7 @@ func (h *ProductHandler) SmartSearch(c *fiber.Ctx) error {
 		}
 
 		product.OfferCount = offerCount
+		hideEstimatedValueIfNeeded(&product)
 		products = append(products, product)
 	}
 

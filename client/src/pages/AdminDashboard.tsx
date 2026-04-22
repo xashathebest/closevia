@@ -574,6 +574,8 @@ const AdminDashboard: React.FC = () => {
   const [premiumUserTargetId, setPremiumUserTargetId] = useState('');
   const [premiumUserTier, setPremiumUserTier] = useState('plus');
   const [premiumUserDays, setPremiumUserDays] = useState(30);
+  const [showOwnProductsOnHome, setShowOwnProductsOnHome] = useState(true);
+  const [marketplaceSettingsLoading, setMarketplaceSettingsLoading] = useState(false);
 
   const { isOpen: isDayModalOpen, onOpen: openDayModal, onClose: closeDayModal } = useDisclosure();
   const {
@@ -1473,6 +1475,42 @@ const AdminDashboard: React.FC = () => {
     }
   }, [toast]);
 
+  const fetchMarketplaceSettings = useCallback(async () => {
+    try {
+      setMarketplaceSettingsLoading(true);
+      const response = await api.get('/api/admin/marketplace-settings');
+      if (response.data?.success) {
+        setShowOwnProductsOnHome(response.data.data?.show_own_products_on_home !== false);
+      }
+    } catch (err: any) {
+      toast({ id: 'marketplace-settings-load-failed', title: 'Failed to load marketplace settings', description: err?.response?.data?.error || err.message, status: 'error', duration: 4000, isClosable: true });
+    } finally {
+      setMarketplaceSettingsLoading(false);
+    }
+  }, [toast]);
+
+  const saveShowOwnProductsOnHome = useCallback(async (visible: boolean) => {
+    const previous = showOwnProductsOnHome;
+    if (previous === visible) return;
+
+    try {
+      setShowOwnProductsOnHome(visible);
+      setMarketplaceSettingsLoading(true);
+      const response = await api.put('/api/admin/marketplace-settings', {
+        show_own_products_on_home: visible,
+      });
+      if (response.data?.success) {
+        setShowOwnProductsOnHome(response.data.data?.show_own_products_on_home !== false);
+        toast({ title: visible ? 'Own products visible' : 'Own products hidden', status: 'success', duration: 2500 });
+      }
+    } catch (err: any) {
+      setShowOwnProductsOnHome(previous);
+      toast({ title: 'Failed to save marketplace setting', description: err?.response?.data?.error || err.message, status: 'error', duration: 3000 });
+    } finally {
+      setMarketplaceSettingsLoading(false);
+    }
+  }, [showOwnProductsOnHome, toast]);
+
   const savePremiumManagement = useCallback(async () => {
     try {
       setPremiumSaving(true);
@@ -1780,6 +1818,7 @@ const AdminDashboard: React.FC = () => {
       fetchRemittancePayments(),
       fetchMultiwayDisputes(),
       fetchPremiumManagement(),
+      fetchMarketplaceSettings(),
     ]);
   }, [
     stats,
@@ -1792,6 +1831,7 @@ const AdminDashboard: React.FC = () => {
     fetchRemittancePayments,
     fetchMultiwayDisputes,
     fetchPremiumManagement,
+    fetchMarketplaceSettings,
   ]);
 
   // Separate effect for rider filter changes - doesn't trigger full dashboard refresh
@@ -3424,6 +3464,30 @@ const AdminDashboard: React.FC = () => {
 
       <Card bg={cardBg} border="1px solid" borderColor={borderColor} borderRadius="xl">
         <CardHeader>
+          <HStack><Icon as={FiHome} color="brand.500" boxSize={5} /><Heading size="sm" color={textColor}>Home Feed</Heading></HStack>
+        </CardHeader>
+        <CardBody>
+          <Flex justify="space-between" align={{ base: 'stretch', sm: 'center' }} gap={4} direction={{ base: 'column', sm: 'row' }}>
+            <VStack align="start" spacing={1}>
+              <Text fontWeight="700" color={textColor}>Own products</Text>
+              <Tag size="sm" colorScheme={showOwnProductsOnHome ? 'green' : 'red'}>
+                {showOwnProductsOnHome ? 'Visible' : 'Hidden'}
+              </Tag>
+            </VStack>
+            <HStack spacing={0} borderWidth="1px" borderColor={borderColor} borderRadius="md" overflow="hidden" w="132px">
+              <Button size="sm" flex="1" minW={0} borderRadius={0} colorScheme={showOwnProductsOnHome ? 'green' : 'gray'} variant={showOwnProductsOnHome ? 'solid' : 'ghost'} onClick={() => saveShowOwnProductsOnHome(true)} isDisabled={marketplaceSettingsLoading}>
+                On
+              </Button>
+              <Button size="sm" flex="1" minW={0} borderRadius={0} colorScheme={!showOwnProductsOnHome ? 'red' : 'gray'} variant={!showOwnProductsOnHome ? 'solid' : 'ghost'} onClick={() => saveShowOwnProductsOnHome(false)} isDisabled={marketplaceSettingsLoading}>
+                Off
+              </Button>
+            </HStack>
+          </Flex>
+        </CardBody>
+      </Card>
+
+      <Card bg={cardBg} border="1px solid" borderColor={borderColor} borderRadius="xl">
+        <CardHeader>
           <HStack><Icon as={FiCalendar} color="brand.500" boxSize={5} /><Heading size="sm" color={textColor}>Usage History</Heading></HStack>
           <Text fontSize="xs" color={mutedTextColor} mt={1}>Click any day to view that day's detailed stats.</Text>
         </CardHeader>
@@ -3748,4 +3812,3 @@ const AdminDashboard: React.FC = () => {
 };
 
 export default AdminDashboard;
-

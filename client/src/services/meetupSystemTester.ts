@@ -1,6 +1,10 @@
 import axios from 'axios'
 import { API_BASE_URL } from './api'
 
+const logMeetupTestDebug = (...args: unknown[]) => {
+  if (import.meta.env.DEV) console.log(...args)
+}
+
 /**
  * MeetupSystemTester - Comprehensive testing utility for all meetup stage transitions
  * Tests all 6 primary methods of MeetupService to ensure correct behavior
@@ -323,8 +327,8 @@ class MeetupSystemTester {
   async runAllTests(): Promise<TestResult[]> {
     this.results = []
 
-    console.log('🧪 Starting Meetup System Tests...')
-    console.log(`📋 Trade ID: ${this.testTradeId}`)
+    logMeetupTestDebug('🧪 Starting Meetup System Tests...')
+    logMeetupTestDebug(`📋 Trade ID: ${this.testTradeId}`)
 
     // Run tests in sequence
     this.results.push(await this.testProposeMeetupTime())
@@ -368,29 +372,29 @@ class MeetupSystemTester {
    * Print results to console in a formatted way
    */
   printResults(): void {
-    console.log('\n' + '='.repeat(60))
-    console.log('📊 MEETUP SYSTEM TEST RESULTS')
-    console.log('='.repeat(60))
+    logMeetupTestDebug('\n' + '='.repeat(60))
+    logMeetupTestDebug('📊 MEETUP SYSTEM TEST RESULTS')
+    logMeetupTestDebug('='.repeat(60))
 
     this.results.forEach((result, idx) => {
       const icon = result.passed ? '✅' : '❌'
       const status = result.passed ? 'PASS' : 'FAIL'
-      console.log(`\n${idx + 1}. ${icon} ${result.name} - ${status}`)
-      console.log(`   Duration: ${result.duration}ms`)
-      if (result.details) console.log(`   Details: ${result.details}`)
-      if (result.error) console.log(`   Error: ${result.error}`)
+      logMeetupTestDebug(`\n${idx + 1}. ${icon} ${result.name} - ${status}`)
+      logMeetupTestDebug(`   Duration: ${result.duration}ms`)
+      if (result.details) logMeetupTestDebug(`   Details: ${result.details}`)
+      if (result.error) logMeetupTestDebug(`   Error: ${result.error}`)
     })
 
     const summary = this.getResultsSummary()
-    console.log('\n' + '='.repeat(60))
-    console.log('📈 SUMMARY')
-    console.log('='.repeat(60))
-    console.log(`Total Tests: ${summary.total}`)
-    console.log(`Passed: ${summary.passed} ✅`)
-    console.log(`Failed: ${summary.failed} ❌`)
-    console.log(`Success Rate: ${summary.successRate}%`)
-    console.log(`Average Duration: ${summary.averageDuration}ms`)
-    console.log('='.repeat(60) + '\n')
+    logMeetupTestDebug('\n' + '='.repeat(60))
+    logMeetupTestDebug('📈 SUMMARY')
+    logMeetupTestDebug('='.repeat(60))
+    logMeetupTestDebug(`Total Tests: ${summary.total}`)
+    logMeetupTestDebug(`Passed: ${summary.passed} ✅`)
+    logMeetupTestDebug(`Failed: ${summary.failed} ❌`)
+    logMeetupTestDebug(`Success Rate: ${summary.successRate}%`)
+    logMeetupTestDebug(`Average Duration: ${summary.averageDuration}ms`)
+    logMeetupTestDebug('='.repeat(60) + '\n')
   }
 
   /**
@@ -411,3 +415,4 @@ class MeetupSystemTester {
 }
 
 export default MeetupSystemTester
+

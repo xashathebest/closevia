@@ -26,24 +26,19 @@ export const useDashboardProducts = (userId: number | undefined) => {
       try {
         // Use same method as UserProfile - direct API call (auth header set by interceptor)
         const response = await api.get(`/api/products/user/${userId}`)
-        console.log('Products API Response:', response.data)
 
         // response.data = { success: true, data: { data: [...], total, page, totalPages } }
         const paginatedResponse = response.data?.data
         if (paginatedResponse && Array.isArray(paginatedResponse.data)) {
-          console.log('Returning products from paginated response:', paginatedResponse.data.length)
           return paginatedResponse.data
         }
         // Fallback: direct array
         if (Array.isArray(response.data?.data)) {
-          console.log('Returning direct data array:', response.data.data.length)
           return response.data.data
         }
         if (Array.isArray(response.data)) {
-          console.log('Returning response as array:', response.data.length)
           return response.data
         }
-        console.log('No products array found')
         return []
       } catch (error) {
         console.error('Error fetching products:', error)

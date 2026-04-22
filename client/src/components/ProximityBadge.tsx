@@ -3,6 +3,7 @@ import { Badge, Tooltip, Spinner, HStack, Icon, useColorModeValue } from '@chakr
 import { FaMapMarkerAlt } from 'react-icons/fa'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '../services/api'
+import { useAuth } from '../contexts/AuthContext'
 import { DistanceResult } from '../types'
 
 interface ProximityBadgeProps {
@@ -14,8 +15,13 @@ interface ProximityBadgeProps {
 const AI_DISABLED = import.meta.env.VITE_DISABLE_AI === 'true'
 
 const ProximityBadge: React.FC<ProximityBadgeProps> = ({ type, targetId, showIcon = true }) => {
+  const { user, token, isAuthenticated } = useAuth()
+  const badgeBg = useColorModeValue('whiteAlpha.900', 'blackAlpha.800')
+  const badgeColor = useColorModeValue('brand.600', 'brand.300')
+  const canFetchProximity = !!targetId && !AI_DISABLED && isAuthenticated && !!token
+
   const { data: distance, isLoading: loading, error } = useQuery<DistanceResult | null>({
-    queryKey: ['proximity', type, targetId],
+    queryKey: ['proximity', user?.id, type, targetId],
     queryFn: async () => {
       const response = await api.get('/api/ai/proximity', {
         params: { type, target_id: targetId },
@@ -25,7 +31,7 @@ const ProximityBadge: React.FC<ProximityBadgeProps> = ({ type, targetId, showIco
       }
       return null
     },
-    enabled: !!targetId && !AI_DISABLED,
+    enabled: canFetchProximity,
     staleTime: 1000 * 60 * 15, // 15 minutes — locked home locations rarely change
     gcTime: 1000 * 60 * 30,
     retry: false,
@@ -33,7 +39,7 @@ const ProximityBadge: React.FC<ProximityBadgeProps> = ({ type, targetId, showIco
     refetchOnMount: false,
   })
 
-  if (AI_DISABLED) return null
+  if (!canFetchProximity) return null
 
   if (loading) {
     return (
@@ -71,8 +77,8 @@ const ProximityBadge: React.FC<ProximityBadgeProps> = ({ type, targetId, showIco
   return (
     <Tooltip label={`Distance: ${(distance.distance_km ?? 0).toFixed(2)} km (${(distance.distance_miles ?? 0).toFixed(2)} miles)`}>
       <Badge 
-        bg={useColorModeValue('whiteAlpha.900', 'blackAlpha.800')} 
-        color={useColorModeValue('brand.600', 'brand.300')}
+        bg={badgeBg}
+        color={badgeColor}
         variant="solid" 
         fontSize="10px"
         fontWeight="800"
@@ -92,7 +98,5 @@ const ProximityBadge: React.FC<ProximityBadgeProps> = ({ type, targetId, showIco
 }
 
 export default ProximityBadge
-
-
 
 

@@ -1,5 +1,30 @@
 import { API_BASE_URL } from '../services/api'
 
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1', '[::1]'])
+
+const backendUrl = API_BASE_URL.replace(/\/$/, '')
+
+const isLoopbackUploadUrl = (url: URL): boolean => {
+  return LOOPBACK_HOSTS.has(url.hostname) && url.pathname.startsWith('/uploads/')
+}
+
+export const normalizeImageUrl = (imagePath: string | null | undefined): string => {
+  if (!imagePath) return ''
+
+  if (imagePath.startsWith('http://') || imagePath.startsWith('https://')) {
+    try {
+      const url = new URL(imagePath)
+      if (isLoopbackUploadUrl(url)) {
+        return `${backendUrl}${url.pathname}${url.search}${url.hash}`
+      }
+    } catch {
+      return imagePath
+    }
+  }
+
+  return imagePath
+}
+
 // Cloudinary transformation helper - Build optimized URL with transformations
 const buildCloudinaryUrl = (url: string, transformations: string): string => {
   const parts = url.split('/upload/')
@@ -71,16 +96,17 @@ export const getImageUrl = (imagePath: string | null | undefined, cacheBust: boo
     // Use a local static fallback to avoid external network failures
     return '/placeholder.svg'
   }
+
+  const normalizedPath = normalizeImageUrl(imagePath)
   
   // If it's already a full URL, optionally optimize if Cloudinary
-  if (imagePath.startsWith('http://') || imagePath.startsWith('https://')) {
-    const optimized = optimize ? optimizeCloudinaryUrl(imagePath, { width, quality: 'auto' }) : imagePath
+  if (normalizedPath.startsWith('http://') || normalizedPath.startsWith('https://')) {
+    const optimized = optimize ? optimizeCloudinaryUrl(normalizedPath, { width, quality: 'auto' }) : normalizedPath
     return cacheBust ? addCacheBuster(optimized) : optimized
   }
   
   // If it's a relative path, prepend the backend URL
-  const backendUrl = API_BASE_URL.replace(/\/$/, '')
-  const fullUrl = `${backendUrl}${imagePath}`
+  const fullUrl = `${backendUrl}${normalizedPath}`
   return cacheBust ? addCacheBuster(fullUrl) : fullUrl
 }
 

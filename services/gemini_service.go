@@ -48,29 +48,44 @@ type GeminiResponse struct {
 	OnlineImageReason  string              `json:"online_image_reason,omitempty"`
 }
 
-func GenerateProductDetails(images []*multipart.FileHeader) (*GeminiResponse, error) {
-	rawKey := os.Getenv("GEMINI_API_KEY")
-	// Strip all whitespace, quotes, and non-printable/non-ASCII characters
-	// This handles invisible Unicode chars that cause 400 on hosted environments like Render
+type geminiAPIKey struct {
+	Name  string
+	Value string
+	Tier  int
+}
+
+func sanitizeAPIKey(rawKey string) string {
 	var sanitized strings.Builder
 	for _, r := range rawKey {
 		if r >= 33 && r <= 126 && r != '"' && r != '\'' {
 			sanitized.WriteRune(r)
 		}
 	}
-	apiKey := sanitized.String()
+	return sanitized.String()
+}
 
-	if apiKey == "" {
-		log.Printf("[Gemini] GEMINI_API_KEY raw length=%d, sanitized length=0 — key missing or all invalid chars", len(rawKey))
-		return nil, errors.New("GEMINI_API_KEY environment variable not set or empty")
+func configuredGeminiAPIKeys() []geminiAPIKey {
+	envNames := []string{"GEMINI_API_KEY_PRIMARY", "GEMINI_API_KEY_SECONDARY", "GEMINI_API_KEY"}
+	keys := make([]geminiAPIKey, 0, len(envNames))
+	seen := map[string]bool{}
+	for idx, name := range envNames {
+		key := sanitizeAPIKey(os.Getenv(name))
+		if key == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		keys = append(keys, geminiAPIKey{Name: name, Value: key, Tier: idx + 1})
 	}
+	return keys
+}
 
-	// Diagnostic log: show length and first/last few chars (safe partial reveal for debugging)
-	safePreview := apiKey
-	if len(safePreview) > 8 {
-		safePreview = apiKey[:4] + "..." + apiKey[len(apiKey)-4:]
+func GenerateProductDetails(images []*multipart.FileHeader) (*GeminiResponse, error) {
+	apiKeys := configuredGeminiAPIKeys()
+	if len(apiKeys) == 0 {
+		log.Printf("[Gemini] No Gemini API keys configured. Set GEMINI_API_KEY_PRIMARY, GEMINI_API_KEY_SECONDARY, or GEMINI_API_KEY")
+		return nil, errors.New("Gemini API key environment variables are not configured")
 	}
-	log.Printf("[Gemini] Key loaded: raw_len=%d sanitized_len=%d preview=%s", len(rawKey), len(apiKey), safePreview)
+	log.Printf("[Gemini] %d Gemini API key tier(s) configured", len(apiKeys))
 
 	if len(images) < 1 {
 		return nil, errors.New("at least 1 image required")
@@ -189,7 +204,7 @@ IF THE IMAGE IS SAFE, proceed with normal analysis. Return ONLY this exact struc
   "authenticity_risks": "one of: Low, Medium, High",
   "estimated_value_min": 0,
   "estimated_value_max": 0,
-  "price_reasoning": "Briefly explain what data or facts back this estimate (e.g., matching retail price, market demand, condition-based depreciation).",
+  "price_reasoning": "Briefly explain why this PHP resale estimate is realistic using item type, brand/model, condition, visible quality, rarity, demand, and local Philippine marketplace prices.",
   "tags": ["tag1", "tag2", "tag3"],
   "is_prohibited": false,
   "prohibited_reason": "",
@@ -231,9 +246,18 @@ FURTHER ANALYSIS (only if image is safe):
    - person_warning: "This photo contains a person. Please retake without people in frame for a cleaner listing"
 
 3. Product analysis:
-   - Estimate value in Philippine Pesos (PHP)
+   - Estimate realistic resale value in Philippine Pesos (PHP), not cents, points, or USD.
+   - Identify exact product type first, then brand/model if visible.
+   - Consider condition, visible wear, completeness/accessories, rarity, local demand, and visible quality.
+   - Do NOT lowball to 20-50 PHP unless the item is truly a tiny low-value accessory, scrap, paper, sticker, broken part, or cannot be identified as a sellable product.
+   - Category sanity floors for normal usable items:
+     * Books: usually at least 80-150 PHP unless damaged/common pamphlet.
+     * Helmets, sports gear, bags, shoes, branded clothing: usually at least 150-300 PHP.
+     * Electronics, phones, computers, appliances, cameras, game devices: usually at least 500-1000 PHP, often higher by brand/model.
+     * Collectibles and toys: usually at least 100-250 PHP unless clearly cheap/common.
+   - If uncertain, give a wider range above the category floor and explain uncertainty in price_reasoning.
    - If cannot estimate (abstract), set both to 0
-   - Be conservative if uncertain
+   - Be conservative but realistic if uncertain
    - Provide clear, natural description
 
 Remember: Check for prohibited items FIRST. If found, respond ONLY with {"prohibited": true, "reason": "..."}. Only proceed with full analysis if the image is completely safe. Return valid JSON only, no markdown.`
@@ -269,153 +293,139 @@ Remember: Check for prohibited items FIRST. If found, respond ONLY with {"prohib
 	}
 
 	var lastErr error
-	for _, model := range models {
-		log.Printf("[Gemini] Trying model: %s", model)
-		url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", model, apiKey)
-		log.Printf("Making request to Gemini API (%s / v1beta) with %d image part(s)", model, len(parts)-1)
+	for _, apiKey := range apiKeys {
+		for _, model := range models {
+			log.Printf("[Gemini] Trying key tier %d (%s), model: %s", apiKey.Tier, apiKey.Name, model)
+			url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", model, apiKey.Value)
+			log.Printf("Making request to Gemini API (%s / v1beta) with %d image part(s)", model, len(parts)-1)
 
-		req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
-		if err != nil {
-			log.Printf("Error creating request for %s: %v", model, err)
-			lastErr = err
-			continue
-		}
-		req.Header.Set("Content-Type", "application/json")
-
-		client := &http.Client{Timeout: 45 * time.Second}
-		resp, err := client.Do(req)
-		if err != nil {
-			log.Printf("Error making request to Gemini API (%s): %v", model, err)
-			lastErr = err
-			continue
-		}
-		defer resp.Body.Close()
-
-		body, _ := io.ReadAll(resp.Body)
-
-		log.Printf("Gemini API (%s) response status: %d", model, resp.StatusCode)
-		// Check for model not found errors
-		if resp.StatusCode == 404 {
-			log.Printf("Model %s not found (404), trying next model...", model)
-			lastErr = fmt.Errorf("model %s not found", model)
-			continue
-		}
-		if resp.StatusCode != http.StatusOK {
-			log.Printf("Gemini API error response: %s", string(body))
-			// Special handling for quota exceeded (429)
-			if resp.StatusCode == 429 {
-				lastErr = fmt.Errorf("AI service is temporarily rate-limited. Please try again in a few minutes.")
-				continue // Try fallback model
+			req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+			if err != nil {
+				log.Printf("Error creating Gemini request for %s using key tier %d: %v", model, apiKey.Tier, err)
+				lastErr = err
+				continue
 			}
-			lastErr = fmt.Errorf("gemini API error (status %d): %s", resp.StatusCode, string(body))
-			continue
-		}
+			req.Header.Set("Content-Type", "application/json")
 
-		var geminiResp struct {
-			Candidates []struct {
-				Content struct {
-					Parts []struct {
-						Text string `json:"text"`
-					} `json:"parts"`
-				} `json:"content"`
-				FinishReason string `json:"finishReason"`
-			} `json:"candidates"`
-			PromptFeedback struct {
-				BlockReason string `json:"blockReason"`
-			} `json:"promptFeedback"`
-			Error struct {
-				Code    int    `json:"code"`
-				Message string `json:"message"`
-			} `json:"error"`
-		}
-
-		if err := json.Unmarshal(body, &geminiResp); err != nil {
-			log.Printf("Error unmarshaling Gemini response from %s: %v", model, err)
-			log.Printf("Raw response: %s", string(body))
-			lastErr = fmt.Errorf("failed to parse Gemini response: %v", err)
-			continue
-		}
-
-		// Check for API errors in response body
-		if geminiResp.Error.Message != "" {
-			log.Printf("Gemini API (%s) returned error: %s", model, geminiResp.Error.Message)
-			errMsg := strings.ToLower(geminiResp.Error.Message)
-			if strings.Contains(errMsg, "model") && strings.Contains(errMsg, "not found") {
-				lastErr = fmt.Errorf("model %s: not found", model)
-				continue // Try next model
+			client := &http.Client{Timeout: 45 * time.Second}
+			resp, err := client.Do(req)
+			if err != nil {
+				log.Printf("Error making Gemini request (%s, key tier %d): %v", model, apiKey.Tier, err)
+				lastErr = err
+				break
 			}
-			if strings.Contains(errMsg, "unable to process input image") {
-				return nil, fmt.Errorf("Gemini cannot process uploaded images. Please use clear JPEG/PNG photos.")
-			}
-			if strings.Contains(errMsg, "invalid_argument") || strings.Contains(errMsg, "not supported") {
-				return nil, fmt.Errorf("Image format not supported. Please use JPEG, PNG, or WebP.")
-			}
-			if strings.Contains(errMsg, "permission denied") || strings.Contains(errMsg, "authentication") || strings.Contains(errMsg, "api key") {
-				return nil, fmt.Errorf("Invalid API credentials for Gemini. Please check your GEMINI_API_KEY.")
-			}
-			lastErr = fmt.Errorf("Gemini API: %s", geminiResp.Error.Message)
-			continue
-		}
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
 
-		// Check for blocked content
-		if geminiResp.PromptFeedback.BlockReason != "" {
-			log.Printf("Gemini blocked request from %s: %s", model, geminiResp.PromptFeedback.BlockReason)
-			return nil, fmt.Errorf("Gemini blocked the request: %s", geminiResp.PromptFeedback.BlockReason)
-		}
+			log.Printf("Gemini API (%s, key tier %d) response status: %d", model, apiKey.Tier, resp.StatusCode)
+			if resp.StatusCode == 404 {
+				lastErr = fmt.Errorf("model %s not found", model)
+				continue
+			}
+			if resp.StatusCode != http.StatusOK {
+				log.Printf("Gemini non-OK response for key tier %d, model %s: status=%d body=%s", apiKey.Tier, model, resp.StatusCode, truncate(string(body), 500))
+				if resp.StatusCode == 429 || resp.StatusCode == 401 || resp.StatusCode == 403 || resp.StatusCode == 408 || resp.StatusCode >= 500 {
+					lastErr = fmt.Errorf("Gemini key tier %d failed with status %d", apiKey.Tier, resp.StatusCode)
+					break
+				}
+				lastErr = fmt.Errorf("Gemini API error (status %d)", resp.StatusCode)
+				continue
+			}
 
-		if len(geminiResp.Candidates) == 0 {
-			log.Printf("No candidates in Gemini response from %s", model)
+			var geminiResp struct {
+				Candidates []struct {
+					Content struct {
+						Parts []struct {
+							Text string `json:"text"`
+						} `json:"parts"`
+					} `json:"content"`
+					FinishReason string `json:"finishReason"`
+				} `json:"candidates"`
+				PromptFeedback struct {
+					BlockReason string `json:"blockReason"`
+				} `json:"promptFeedback"`
+				Error struct {
+					Code    int    `json:"code"`
+					Message string `json:"message"`
+				} `json:"error"`
+			}
+
+			if err := json.Unmarshal(body, &geminiResp); err != nil {
+				log.Printf("Error unmarshaling Gemini response from %s: %v", model, err)
+				log.Printf("Raw response: %s", truncate(string(body), 500))
+				lastErr = fmt.Errorf("failed to parse Gemini response: %v", err)
+				continue
+			}
+
+			if geminiResp.Error.Message != "" {
+				log.Printf("Gemini API (%s, key tier %d) returned error: %s", model, apiKey.Tier, geminiResp.Error.Message)
+				errMsg := strings.ToLower(geminiResp.Error.Message)
+				if strings.Contains(errMsg, "model") && strings.Contains(errMsg, "not found") {
+					lastErr = fmt.Errorf("model %s not found", model)
+					continue
+				}
+				if strings.Contains(errMsg, "unable to process input image") {
+					return nil, fmt.Errorf("Gemini cannot process uploaded images. Please use clear JPEG/PNG photos.")
+				}
+				if strings.Contains(errMsg, "invalid_argument") || strings.Contains(errMsg, "not supported") {
+					return nil, fmt.Errorf("Image format not supported. Please use JPEG, PNG, or WebP.")
+				}
+				if strings.Contains(errMsg, "permission denied") || strings.Contains(errMsg, "authentication") || strings.Contains(errMsg, "api key") || strings.Contains(errMsg, "quota") || strings.Contains(errMsg, "rate") {
+					lastErr = fmt.Errorf("Gemini key tier %d failed: %s", apiKey.Tier, geminiResp.Error.Message)
+					break
+				}
+				lastErr = fmt.Errorf("Gemini API: %s", geminiResp.Error.Message)
+				continue
+			}
+
 			if geminiResp.PromptFeedback.BlockReason != "" {
+				log.Printf("Gemini blocked request from %s: %s", model, geminiResp.PromptFeedback.BlockReason)
 				return nil, fmt.Errorf("Gemini blocked the request: %s", geminiResp.PromptFeedback.BlockReason)
 			}
-			lastErr = errors.New("no response from Gemini")
-			continue
-		}
 
-		var sb strings.Builder
-		for _, candidate := range geminiResp.Candidates {
-			for _, part := range candidate.Content.Parts {
-				sb.WriteString(part.Text)
+			if len(geminiResp.Candidates) == 0 {
+				log.Printf("No candidates in Gemini response from %s", model)
+				lastErr = errors.New("no response from Gemini")
+				continue
 			}
-		}
-		raw := sb.String()
 
-		log.Printf("Raw Gemini response from %s: %s", model, truncate(raw, 200))
-
-		// Remove markdown code blocks if present
-		raw = strings.TrimSpace(raw)
-		if strings.HasPrefix(raw, "```") {
-			old := raw
-			raw = strings.TrimPrefix(raw, "```")
-			if idx := strings.Index(raw, "\n"); idx != -1 {
-				raw = raw[idx+1:]
+			var sb strings.Builder
+			for _, candidate := range geminiResp.Candidates {
+				for _, part := range candidate.Content.Parts {
+					sb.WriteString(part.Text)
+				}
 			}
-			raw = strings.TrimSuffix(raw, "```")
+			raw := sb.String()
+			log.Printf("Raw Gemini response from %s: %s", model, truncate(raw, 200))
+
 			raw = strings.TrimSpace(raw)
-			log.Printf("Stripped markdown: %q -> %q", truncate(old, 50), truncate(raw, 50))
-		}
-
-		// Extract the JSON object even when the model wraps it in chatter like
-		// "Here's the analysis:" or trailing notes. This is the single biggest
-		// source of instability — parse fails because of a prefix/suffix that
-		// has nothing to do with the payload.
-		if start := strings.Index(raw, "{"); start >= 0 {
-			if end := strings.LastIndex(raw, "}"); end > start {
-				raw = raw[start : end+1]
+			if strings.HasPrefix(raw, "```") {
+				old := raw
+				raw = strings.TrimPrefix(raw, "```")
+				if idx := strings.Index(raw, "\n"); idx != -1 {
+					raw = raw[idx+1:]
+				}
+				raw = strings.TrimSuffix(raw, "```")
+				raw = strings.TrimSpace(raw)
+				log.Printf("Stripped markdown: %q -> %q", truncate(old, 50), truncate(raw, 50))
 			}
-		}
+			if start := strings.Index(raw, "{"); start >= 0 {
+				if end := strings.LastIndex(raw, "}"); end > start {
+					raw = raw[start : end+1]
+				}
+			}
 
-		var result GeminiResponse
-		if err := json.Unmarshal([]byte(raw), &result); err != nil {
-			log.Printf("Error unmarshaling JSON from Gemini (%s): %v", model, err)
-			log.Printf("Raw text: %s", raw)
-			lastErr = fmt.Errorf("failed to parse Gemini analysis: %v", err)
-			continue
-		}
+			var result GeminiResponse
+			if err := json.Unmarshal([]byte(raw), &result); err != nil {
+				log.Printf("Error unmarshaling JSON from Gemini (%s): %v", model, err)
+				log.Printf("Raw text: %s", raw)
+				lastErr = fmt.Errorf("failed to parse Gemini analysis: %v", err)
+				continue
+			}
 
-		// Success - return immediately
-		log.Printf("✅ [Gemini] Successfully analyzed with model: %s", model)
-		return &result, nil
+			log.Printf("[Gemini] Successfully analyzed with key tier %d, model: %s", apiKey.Tier, model)
+			return &result, nil
+		}
 	}
 
 	// All Gemini models failed

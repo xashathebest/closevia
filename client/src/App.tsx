@@ -33,6 +33,7 @@ import SavedProducts from './pages/SavedProducts'
 import Premium from './pages/premium'
 import DeliveryOption from './delivery_option/delivery'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
+import { setStoredToken } from './utils/authStorage'
 import { ProductProvider } from './contexts/ProductContext'
 import { RealtimeProvider } from './contexts/RealtimeContext'
 import ProtectedRoute from './components/ProtectedRoute'
@@ -42,6 +43,7 @@ import { MobileNavProvider } from './contexts/MobileNavContext'
 import { NotificationProvider } from './contexts/NotificationContext'
 import ErrorBoundary from './components/ErrorBoundary'
 import ToastNotification from './components/ToastNotification'
+import SessionTimeoutManager from './components/SessionTimeoutManager'
 
 // Theme applier component - loads and applies saved theme preference
 const ThemeApplier: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -82,7 +84,7 @@ const LoadingOverlay: React.FC = () => {
   const handleSkip = () => {
     // Enable development mode and reload
     localStorage.setItem('skip_auth', 'true')
-    localStorage.removeItem('clovia_token')
+    setStoredToken(null)
     window.location.reload()
   }
 
@@ -140,7 +142,7 @@ const AppContent: React.FC = () => {
         {/* Landing page route - no sidebar or app layout */}
         <Route path="/" element={
           <PageTransition>
-            {localStorage.getItem('has_visited') === 'true' ? <Navigate to="/home" replace /> : <LandingPage />}
+            {localStorage.getItem('has_visited') === 'true' ? <Navigate to="/home" replace /> : <Home />}
           </PageTransition>
         } />
         {/* Always-accessible landing page route (for logo clicks) */}
@@ -346,8 +348,9 @@ function App() {
             <MobileNavProvider>
               <NotificationProvider>
                 <RealtimeProvider>
-                  <Router>
+                  <Router future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
                     <ErrorBoundary>
+                      <SessionTimeoutManager />
                       <AppContent />
                     </ErrorBoundary>
                     <GlobalPopup />

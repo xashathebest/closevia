@@ -66,8 +66,7 @@ const RemittanceLedger: React.FC<RemittanceLedgerProps> = ({ embedded = false, t
       if (res.data?.success) {
         setLedgerData(res.data.data)
       }
-    } catch (err) {
-      console.error(err)
+    } catch {
       toast({
         id: "remittance-error",
         title: 'Error loading ledger',
@@ -155,7 +154,7 @@ const RemittanceLedger: React.FC<RemittanceLedgerProps> = ({ embedded = false, t
         title: 'Payment Failed',
         description:
           (isXenditNotConfigured
-            ? `${backendErr} Set XENDIT_SECRET_KEY in the backend environment and restart the Go server.`
+            ? 'Online remittance is temporarily unavailable. Please try again later or contact support.'
             : backendErr || error.message || 'Please try again'),
         status: 'error',
         duration: 2000,

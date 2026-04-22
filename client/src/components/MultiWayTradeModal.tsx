@@ -224,7 +224,7 @@ function statusLabel(status: string): string {
     rejected: 'Rejected',
     in_progress: 'In Progress',
     multiway_active: 'Active',
-    pending_initiator_upgrade: 'Upgrade Required',
+    pending_initiator_upgrade: 'Pending',
   }
   return map[status] || status.replace(/_/g, ' ')
 }

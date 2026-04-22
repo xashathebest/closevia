@@ -185,6 +185,9 @@ export default defineConfig({
     server: {
         host: true,
         port: 5173,
+        headers: {
+            'Cross-Origin-Opener-Policy': 'same-origin-allow-popups',
+        },
         hmr: {
             host: 'localhost',
             port: 5173,
@@ -196,6 +199,11 @@ export default defineConfig({
                 changeOrigin: true,
                 secure: false,
             },
+        },
+    },
+    preview: {
+        headers: {
+            'Cross-Origin-Opener-Policy': 'same-origin-allow-popups',
         },
     },
 });

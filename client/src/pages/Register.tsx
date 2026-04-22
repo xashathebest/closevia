@@ -23,9 +23,14 @@ import {
   FormHelperText,
   Flex,
   Checkbox,
+  Divider,
 } from '@chakra-ui/react'
 import { ViewIcon, ViewOffIcon, ArrowBackIcon } from '@chakra-ui/icons'
+import { FaGoogle } from 'react-icons/fa'
+import { signInWithPopup, GoogleAuthProvider } from 'firebase/auth'
 import { useAuth } from '../contexts/AuthContext'
+import { auth } from '../config/firebase'
+import { clearStoredAuth, getStoredUser } from '../utils/authStorage'
 
 const Register: React.FC = () => {
   const [firstName, setFirstName] = useState('')
@@ -38,13 +43,14 @@ const Register: React.FC = () => {
   const [showPassword, setShowPassword] = useState(false)
   const [showConfirmPassword, setShowConfirmPassword] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [googleLoading, setGoogleLoading] = useState(false)
 
   const [bio, setBio] = useState('')
   const [error, setError] = useState('')
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
   const [tncAccepted, setTncAccepted] = useState(false)
 
-  const { register } = useAuth()
+  const { register, googleLogin } = useAuth()
   const navigate = useNavigate()
   const toast = useToast()
 
@@ -155,6 +161,61 @@ const Register: React.FC = () => {
       setError(error.message || 'Registration failed')
     } finally {
       setLoading(false)
+    }
+  }
+
+  const handleGoogleRegister = async () => {
+    try {
+      setGoogleLoading(true)
+      setError('')
+
+      clearStoredAuth()
+
+      if (!auth) {
+        setError('Google registration is not available in this environment.')
+        return
+      }
+
+      try {
+        ;(auth as any).languageCode = 'en'
+      } catch {
+        // ignore if auth object doesn't support languageCode
+      }
+
+      const googleProvider = new GoogleAuthProvider()
+      const result = await signInWithPopup(auth, googleProvider)
+      const firebaseUser = result.user
+      const idToken = await firebaseUser.getIdToken()
+
+      await googleLogin(idToken, {
+        uid: firebaseUser.uid,
+        email: firebaseUser.email,
+        displayName: firebaseUser.displayName,
+        photoURL: firebaseUser.photoURL,
+      })
+
+      toast({
+        id: 'register-google-success',
+        title: 'Welcome to Clovia!',
+        description: `Signed in with ${firebaseUser.email || 'Google'}.`,
+        status: 'success',
+        duration: 3000,
+        isClosable: true,
+      })
+
+      const storedUser = getStoredUser()
+      const parsedUser = storedUser ? JSON.parse(storedUser) : null
+      navigate(parsedUser?.role === 'admin' ? '/admin' : '/dashboard', { replace: true })
+    } catch (error: any) {
+      if (error.code === 'auth/popup-closed-by-user') {
+        setError('Google popup was closed. Please try again.')
+      } else if (error.code === 'auth/popup-blocked') {
+        setError('Google popup was blocked. Please check your browser settings.')
+      } else {
+        setError(error.message || 'Google registration failed. Please try again.')
+      }
+    } finally {
+      setGoogleLoading(false)
     }
   }
 
@@ -609,6 +670,45 @@ const Register: React.FC = () => {
                     isDisabled={loading}
                   >
                     Create Account
+                  </Button>
+
+                  {/* Divider */}
+                  <HStack w="full" spacing={3} my={1}>
+                    <Divider borderColor="#DDD" />
+                    <Text fontSize="xs" color="#888" whiteSpace="nowrap" fontWeight="500">
+                      Or
+                    </Text>
+                    <Divider borderColor="#DDD" />
+                  </HStack>
+
+                  {/* Google Register Button */}
+                  <Button
+                    type="button"
+                    w="full"
+                    variant="outline"
+                    borderColor="#DDD"
+                    borderWidth="1px"
+                    leftIcon={<FaGoogle size={18} />}
+                    onClick={handleGoogleRegister}
+                    isLoading={googleLoading}
+                    loadingText="Continuing..."
+                    size="lg"
+                    fontSize="15px"
+                    fontWeight="600"
+                    color="#333"
+                    height="44px"
+                    borderRadius="10px"
+                    bg="white"
+                    _hover={{
+                      bg: '#F9F9F9',
+                      borderColor: '#BBB',
+                    }}
+                    _active={{
+                      bg: '#F0F0F0',
+                    }}
+                    transition="all 0.2s"
+                  >
+                    Continue with Google
                   </Button>
 
                   {/* Sign In Link */}

@@ -360,7 +360,6 @@ const SettingsPage: React.FC = () => {
 
   // Refresh user data on component mount.
   useEffect(() => {
-    console.log('🗺️ Settings page mounted, refreshing user data...')
     refreshUser()
   }, [])
 
@@ -440,7 +439,6 @@ const SettingsPage: React.FC = () => {
     const file = event.target.files?.[0]
     if (!file) return
 
-    console.log('📸 Image file selected:', { name: file.name, size: file.size, type: file.type })
 
     // Validate file type
     const supportedImageTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp']
@@ -473,8 +471,6 @@ const SettingsPage: React.FC = () => {
     const reader = new FileReader()
     reader.onloadend = () => {
       const dataUrl = reader.result as string
-      console.log('📸 Image converted to data URL, length:', dataUrl.length)
-      console.log('📸 Data URL preview (first 100 chars):', dataUrl.substring(0, 100))
       setProfileImage(dataUrl)
       setUploadingImage(false)
       markFieldDirty('profileImage')

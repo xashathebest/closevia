@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"database/sql"
+	"log"
 	"path/filepath"
 	"strings"
 
@@ -30,7 +31,8 @@ func (h *AdvertisementHandler) GetActiveAdvertisements(c *fiber.Ctx) error {
 		ORDER BY priority ASC, created_at DESC 
 	`)
 	if err != nil {
-		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to fetch advertisements: " + err.Error()})
+		log.Printf("Failed to fetch active advertisements: %v", err)
+		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to fetch advertisements"})
 	}
 	defer rows.Close()
 
@@ -108,7 +110,8 @@ func (h *AdvertisementHandler) CreateAdvertisement(c *fiber.Ctx) error {
 	res, err := h.db.Exec(`INSERT INTO advertisements (title, description, media_url, media_type, link_url, cta_text, is_active, priority, start_date, end_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		title, description, url, mediaType, linkURL, ctaText, isActive, priority, startExpr, endExpr)
 	if err != nil {
-		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to insert advertisement: " + err.Error()})
+		log.Printf("Failed to insert advertisement: %v", err)
+		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to create advertisement"})
 	}
 
 	id, _ := res.LastInsertId()

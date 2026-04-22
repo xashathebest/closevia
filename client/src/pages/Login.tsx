@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
 import { Link as RouterLink, useNavigate } from 'react-router-dom'
 import {
   Box,
@@ -27,7 +27,8 @@ import { ViewIcon, ViewOffIcon, ArrowBackIcon } from '@chakra-ui/icons'
 import { FaGoogle } from 'react-icons/fa'
 import { useAuth } from '../contexts/AuthContext'
 import { auth } from '../config/firebase'
-import { signInWithPopup, GoogleAuthProvider } from 'firebase/auth'
+import { clearStoredAuth, getStoredUser } from '../utils/authStorage'
+import { signInWithPopup, GoogleAuthProvider, User as FirebaseUser } from 'firebase/auth'
 
 const Login: React.FC = () => {
   const [email, setEmail] = useState('')
@@ -43,10 +44,31 @@ const Login: React.FC = () => {
   const navigate = useNavigate()
   const toast = useToast()
 
+  const completeGoogleLogin = useCallback(async (firebaseUser: FirebaseUser) => {
+    const idToken = await firebaseUser.getIdToken()
+
+    await googleLogin(idToken, {
+      uid: firebaseUser.uid,
+      email: firebaseUser.email,
+      displayName: firebaseUser.displayName,
+      photoURL: firebaseUser.photoURL,
+    })
+
+    toast({
+      id: "login-login-successful-2",
+      title: 'Login successful!',
+      description: `Welcome, ${firebaseUser.displayName || firebaseUser.email}`,
+      status: 'success',
+      duration: 3000,
+      isClosable: true,
+    })
+
+    setGoogleLoginSuccess(true)
+  }, [googleLogin, toast])
+
   // Navigate to appropriate page when user state is updated after Google login
   useEffect(() => {
     if (googleLoginSuccess && isAuthenticated && !isLoggingIn) {
-      console.log('Login: Authentication state ready after Google login, navigating')
       navigate(user?.role === 'admin' ? '/admin' : '/dashboard')
     }
   }, [googleLoginSuccess, isAuthenticated, isLoggingIn, navigate, user])
@@ -58,7 +80,6 @@ const Login: React.FC = () => {
     if (!isOnLoginPage) return
 
     if (isAuthenticated && !isLoggingIn && !authLoading) {
-      console.log('Login: User authenticated on login page, redirecting')
       navigate(user?.role === 'admin' ? '/admin' : '/dashboard', { replace: true })
     }
   }, [isAuthenticated, isLoggingIn, authLoading, navigate, user])
@@ -88,7 +109,7 @@ const Login: React.FC = () => {
       })
 
       // Check user role from localStorage since state may not be updated yet
-      const storedUser = localStorage.getItem('clovia_user')
+      const storedUser = getStoredUser()
       const parsedUser = storedUser ? JSON.parse(storedUser) : null
       const redirectPath = parsedUser?.role === 'admin' ? '/admin' : '/dashboard'
 
@@ -110,12 +131,13 @@ const Login: React.FC = () => {
       setError('')
       
       // Clear any existing auth state before new login
-      localStorage.removeItem('clovia_token')
+      clearStoredAuth()
 
       // Check if Firebase is initialized
       if (!auth) {
         setError('Firebase is not properly configured. Please check your environment variables.')
         setGoogleLoading(false)
+        setIsLoggingIn(false)
         return
       }
 
@@ -137,44 +159,9 @@ const Login: React.FC = () => {
         // ignore if auth object doesn't support languageCode
       }
 
-      // Sign in with Google popup
       const result = await signInWithPopup(auth, googleProvider)
-      const user = result.user
-
-      // Get ID token
-      const idToken = await user.getIdToken()
-
-      // Log user info
-      console.log('Google login successful:', {
-        uid: user.uid,
-        email: user.email,
-        displayName: user.displayName,
-        photoURL: user.photoURL,
-      })
-
-      // Use AuthContext to handle Google login
-      await googleLogin(idToken, {
-        uid: user.uid,
-        email: user.email,
-        displayName: user.displayName,
-        photoURL: user.photoURL,
-      })
-
-      // Show success message
-      toast({
-        id: "login-login-successful-2",
-        title: 'Login successful!',
-        description: `Welcome, ${user.displayName || user.email}`,
-        status: 'success',
-        duration: 3000,
-        isClosable: true,
-      })
-
-      // Set flag to trigger navigation when user state is ready
-      setGoogleLoginSuccess(true)
+      await completeGoogleLogin(result.user)
     } catch (error: any) {
-      console.error('Google login error:', error)
-
       // Handle specific error codes
       if (error.code === 'auth/popup-closed-by-user') {
         setError('Login popup was closed. Please try again.')

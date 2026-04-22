@@ -52,7 +52,7 @@ const Sidebar: React.FC = () => {
   const mobileUserCardBg = useColorModeValue('brand.50', 'gray.700')
   const { isOpen, onOpen, onClose } = useMobileNav()
   const { notificationCount } = useRealtime()
-  const { user, logout } = useAuth()
+  const { user, token, logout } = useAuth()
   const [riderStatus, setRiderStatus] = useState<{ is_rider: boolean; status?: string } | null>(null)
   const [touchStart, setTouchStart] = useState<number | null>(null)
   const [isStandalone, setIsStandalone] = useState(false)
@@ -69,7 +69,7 @@ const Sidebar: React.FC = () => {
     let mounted = true
 
     const fetchRiderStatus = async () => {
-      if (!user) {
+      if (!user || !token) {
         setRiderStatus(null)
         return
       }
@@ -89,7 +89,7 @@ const Sidebar: React.FC = () => {
     return () => {
       mounted = false
     }
-  }, [user])
+  }, [user, token])
 
   // Handle swipe to open menu
   const handleTouchStart = useCallback((e: TouchEvent) => {

@@ -34,6 +34,10 @@ func (h *CommentHandler) CreateComment(c *fiber.Ctx) error {
 	if err := c.BodyParser(&payload); err != nil {
 		return fiber.ErrBadRequest
 	}
+	payload.Content = cleanUserText(payload.Content, 1000)
+	if payload.Content == "" {
+		return fiber.ErrBadRequest
+	}
 
 	query := `INSERT INTO comments (product_id, user_id, content) VALUES (?, ?, ?)`
 	res, err := database.DB.Exec(query, productID, userID, payload.Content)

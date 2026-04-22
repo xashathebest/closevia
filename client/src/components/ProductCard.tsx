@@ -149,6 +149,7 @@ const ProductCard: React.FC<ProductCardProps> = ({
     if (num >= 1000) return (num / 1000).toFixed(0) + 'k'
     return num.toString()
   }
+  const canShowEstimate = product.show_estimated_value !== false && product.estimated_value_min && product.estimated_value_max
 
   return (
     <Box
@@ -229,21 +230,21 @@ const ProductCard: React.FC<ProductCardProps> = ({
                 <Text fontSize={{ base: '9px', md: 'xs' }} fontWeight="800" lineHeight="1.2">
                   {product.price && product.price > 0
                     ? `₱${formatPriceCompact(product.price)}`
-                    : product.estimated_value_min && product.estimated_value_max
+                    : canShowEstimate
                       ? `₱${formatPriceCompact(product.estimated_value_min)} – ₱${formatPriceCompact(product.estimated_value_max)}`
                       : 'Price Unavailable'}
                 </Text>
-                {product.price && product.price > 0 && product.estimated_value_min && product.estimated_value_max && (
+                {product.price && product.price > 0 && canShowEstimate && (
                   <Text display={{ base: 'none', sm: 'block' }} fontSize="2xs" color={useColorModeValue('brand.600', 'brand.300')} lineHeight="1.25" mt={0.5} fontWeight="700" whiteSpace="nowrap">
                     📊 Market Est. ₱{formatPriceUltraCompact(product.estimated_value_min)} – ₱{formatPriceUltraCompact(product.estimated_value_max)}
                   </Text>
                 )}
-                {product.price && product.price > 0 && product.estimated_value_min && product.estimated_value_max && (
+                {product.price && product.price > 0 && canShowEstimate && (
                   <Text display={{ base: 'block', sm: 'none' }} fontSize="2xs" color={useColorModeValue('brand.600', 'brand.300')} lineHeight="1.2" mt={0.5} fontWeight="700" whiteSpace="nowrap">
                     📊 Est. ₱{formatPriceUltraCompact(product.estimated_value_min)}-₱{formatPriceUltraCompact(product.estimated_value_max)}
                   </Text>
                 )}
-                {(!product.price || product.price <= 0) && product.estimated_value_min && product.estimated_value_max && (
+                {(!product.price || product.price <= 0) && canShowEstimate && (
                   <Text fontSize="2xs" color={useColorModeValue('green.600', 'green.300')} mt={0.5} fontWeight="700">
                     📊 Market Est. range
                   </Text>
@@ -418,6 +419,24 @@ const ProductCard: React.FC<ProductCardProps> = ({
 
         {/* Wishlist badge */}
         <Flex mb={1} align="center" gap={1} minH={{ base: '16px', md: '18px' }}>
+          {isBoosted && (
+            <Tooltip label={boostTimeRemaining ? `Boosted for ${boostTimeRemaining} more` : 'Boosted'} placement="top" hasArrow>
+              <Badge
+                colorScheme="orange"
+                variant="solid"
+                borderRadius="full"
+                px={2}
+                py={0.5}
+                fontSize="xs"
+                display="inline-flex"
+                alignItems="center"
+                gap={1}
+              >
+                <StarIcon boxSize={2.5} />
+                Boosted
+              </Badge>
+            </Tooltip>
+          )}
           {product.wishlist_count > 0 && (
             <Badge
               colorScheme="pink"
@@ -430,8 +449,6 @@ const ProductCard: React.FC<ProductCardProps> = ({
               ❤️ {product.wishlist_count} {product.wishlist_count === 1 ? 'person wants' : 'people want'}
             </Badge>
           )}
-          
-          {/* Boosted indicator moved to image badge stack */}
         </Flex>
 
         {/* Organization Tags */}

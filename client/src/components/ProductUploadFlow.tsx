@@ -21,6 +21,7 @@ interface ProductData {
   barterOnly: boolean
   wants: string
   wanted_categories: string[]
+  show_estimated_value: boolean
   aiAnalysis?: {
     success: boolean
     provider: string
@@ -58,6 +59,7 @@ const ProductUploadFlow: React.FC<ProductUploadFlowProps> = ({ onSuccess }) => {
     barterOnly: false,
     wants: '',
     wanted_categories: [],
+    show_estimated_value: true,
   })
 
   const navigate = useNavigate()
@@ -80,11 +82,9 @@ const ProductUploadFlow: React.FC<ProductUploadFlowProps> = ({ onSuccess }) => {
       })
 
       if (response.data.success) {
-        console.log(`🤖 AI Analysis: ${response.data.provider} (${response.data.time_ms}ms)`)
         return response.data
       }
     } catch (error) {
-      console.error('AI analysis failed:', error)
     }
     return null
   }
@@ -112,7 +112,6 @@ const ProductUploadFlow: React.FC<ProductUploadFlowProps> = ({ onSuccess }) => {
 
       toast({
         id: "productuploadflow-ai-analysis-complete",
-        title: '✨ AI Analysis Complete',
         description: `Results from ${aiAnalysis.provider} (${aiAnalysis.time_ms}ms)${aiAnalysis.retried ? ' - Used backup AI' : ''}`,
         status: 'success',
         duration: 3,
@@ -169,6 +168,7 @@ const ProductUploadFlow: React.FC<ProductUploadFlowProps> = ({ onSuccess }) => {
       formData.append('barter_only', productData.barterOnly.toString())
       formData.append('wants', productData.wants)
       formData.append('wanted_categories', JSON.stringify(productData.wanted_categories))
+      formData.append('show_estimated_value', productData.show_estimated_value ? 'true' : 'false')
       
       if (productData.aiAnalysis?.data?.estimated_value_min !== undefined) {
         formData.append('estimated_value_min', productData.aiAnalysis.data.estimated_value_min.toString())
@@ -271,8 +271,10 @@ const ProductUploadFlow: React.FC<ProductUploadFlowProps> = ({ onSuccess }) => {
             wanted_categories: productData.wanted_categories,
             estimated_value_min: productData.aiAnalysis?.data?.estimated_value_min,
             estimated_value_max: productData.aiAnalysis?.data?.estimated_value_max,
+            show_estimated_value: productData.show_estimated_value,
             isAnalyzing: isLoading,
           }}
+          onToggleEstimateVisibility={(show) => setProductData((prev) => ({ ...prev, show_estimated_value: show }))}
           onSubmit={handleStep3Submit}
           onBack={() => setCurrentStep(2)}
           isLoading={isLoading}

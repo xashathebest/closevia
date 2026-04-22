@@ -186,7 +186,6 @@ const BuyoutModal: React.FC<BuyoutModalProps> = ({ isOpen, onClose, targetProduc
         })
       } as TradeCreate & { delivery_type: string, delivery_instructions: string }
       
-      console.log('Submitting buyout payload:', payload)
       await api.post('/api/trades', payload)
       showNotification('Buyout Offer Sent', 'success')
       setTradeMessage('')

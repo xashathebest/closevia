@@ -1,7 +1,11 @@
 # Test available Gemini models
 Write-Host "Checking available Gemini models..." -ForegroundColor Cyan
 
-$geminiKey = "AIzaSyDPFpDwknRDYa7TW0IESkAnJxbSVB0qYe4"
+$geminiKey = $env:GEMINI_API_KEY
+if (-not $geminiKey) {
+    Write-Host "Set GEMINI_API_KEY in your environment before running this script." -ForegroundColor Yellow
+    exit 1
+}
 $listModelsUrl = "https://generativelanguage.googleapis.com/v1/models?key=$geminiKey"
 
 try {

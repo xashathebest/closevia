@@ -2,6 +2,10 @@
 import { api } from './api'
 import { useNotification } from '../contexts/NotificationContext'
 
+const logMeetupDebug = (...args: unknown[]) => {
+  if (import.meta.env.DEV) console.log(...args)
+}
+
 /**
  * MeetupAlertService - Handles automated user alerts for meetup events
  * Sends notifications at strategic times to keep users engaged and informed
@@ -172,7 +176,7 @@ class MeetupAlertService {
       timerId,
     })
 
-    console.log(
+    logMeetupDebug(
       `📅 [Alert Scheduled] ${alertType} for trade ${tradeId} at ${scheduleTime.toLocaleTimeString()}`
     )
   }
@@ -186,7 +190,7 @@ class MeetupAlertService {
 
     if (alert?.timerId) {
       clearTimeout(alert.timerId)
-      console.log(`❌ [Alert Cancelled] ${alertType} for trade ${tradeId}`)
+      logMeetupDebug(`❌ [Alert Cancelled] ${alertType} for trade ${tradeId}`)
     }
 
     this.scheduledAlerts.delete(key)
@@ -206,7 +210,7 @@ class MeetupAlertService {
     })
 
     keysToDelete.forEach(key => this.scheduledAlerts.delete(key))
-    console.log(`❌ [All Alerts Cancelled] for trade ${tradeId}`)
+    logMeetupDebug(`❌ [All Alerts Cancelled] for trade ${tradeId}`)
   }
 
   /**
@@ -270,7 +274,7 @@ class MeetupAlertService {
       this.scheduleAlert(tradeId, AlertType.ONE_HOUR_BEFORE, oneHourBefore)
     }
 
-    console.log(`📅 [Meetup Alerts Setup] for trade ${tradeId} at ${meetupTime.toLocaleTimeString()}`)
+    logMeetupDebug(`📅 [Meetup Alerts Setup] for trade ${tradeId} at ${meetupTime.toLocaleTimeString()}`)
   }
 
   /**
@@ -292,7 +296,7 @@ class MeetupAlertService {
    */
   static async requestNotificationPermission(): Promise<boolean> {
     if (!('Notification' in window)) {
-      console.log('Browser does not support notifications')
+      logMeetupDebug('Browser does not support notifications')
       return false
     }
 
@@ -301,7 +305,7 @@ class MeetupAlertService {
     }
 
     if (Notification.permission === 'denied') {
-      console.log('Notification permission was denied')
+      logMeetupDebug('Notification permission was denied')
       return false
     }
 
@@ -321,7 +325,7 @@ class MeetupAlertService {
     }
 
     this.showAlert(testConfig)
-    console.log('✅ Test alert sent')
+    logMeetupDebug('✅ Test alert sent')
   }
 
   /**
@@ -334,7 +338,7 @@ class MeetupAlertService {
       }
     })
     this.scheduledAlerts.clear()
-    console.log('🗑️ All alerts cleared')
+    logMeetupDebug('🗑️ All alerts cleared')
   }
 
   /**
@@ -368,3 +372,4 @@ class MeetupAlertService {
 const meetupAlertService = new MeetupAlertService()
 
 export default meetupAlertService
+

@@ -156,7 +156,7 @@ func (h *AIFeaturesHandler) GetProximity(c *fiber.Ctx) error {
 	}
 
 	if err != nil {
-		return c.Status(500).JSON(models.APIResponse{Success: false, Error: err.Error()})
+		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to calculate distance"})
 	}
 
 	return c.JSON(models.APIResponse{

@@ -35,10 +35,10 @@ const POLL_INTERVAL_MS = 60000
 const SSE_MESSAGE_DEDUP_WINDOW = 2000  // Prevent duplicate SSE messages within 2 seconds
 
 export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { user } = useAuth()
+  const { user, token } = useAuth()
   const { showNotification } = useNotification()
   const queryClient = useQueryClient()
-  const esRef = useRef<EventSource | null>(null)
+  const streamAbortRef = useRef<AbortController | null>(null)
   const seenNotifIdsRef = useRef<Set<number>>(new Set())
   const hasInitializedSeenRef = useRef(false)
   const recentSSEMessagesRef = useRef<Map<string, number>>(new Map())  // Track recent SSE messages
@@ -79,6 +79,8 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   }, [])
 
   const refreshCounts = useCallback(async () => {
+    if (!user) return
+
     try {
       // Admin only sees report notifications, so only count those for the badge
       const notifEndpoint = user?.role === 'admin' ? '/api/notifications?type=report' : '/api/notifications'
@@ -139,29 +141,24 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         seenNotifIdsRef.current = new Set(ids)
       }
     } catch { }
-  }, [user, showNotification, shouldNotify])
+  }, [user, token, showNotification, shouldNotify])
 
   useEffect(() => {
     if (!user) {
-      if (esRef.current) {
-        esRef.current.close()
-        esRef.current = null
+      if (streamAbortRef.current) {
+        streamAbortRef.current.abort()
+        streamAbortRef.current = null
       }
+      setOfferCount(0)
+      setNotificationCount(0)
       seenNotifIdsRef.current = new Set()
       hasInitializedSeenRef.current = false
       return
     }
-    // Use token for SSE auth
-    const token = localStorage.getItem('clovia_token')
-    if (!token) return
-    const base = getSseBaseUrl()
-    const url = `${base}/api/chat/stream?token=${encodeURIComponent(token)}`
-    const es = new EventSource(url)
-    esRef.current = es
 
-    es.onmessage = (ev) => {
+    const handleMessage = (rawData: string) => {
       try {
-        const payload = JSON.parse(ev.data)
+        const payload = JSON.parse(rawData)
         if (!payload?.type) return
         
         // Deduplicate SSE messages: create a unique key and check if we've processed this recently
@@ -290,26 +287,65 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       } catch { }
     }
 
-    es.onerror = () => {
-      // auto-reconnect pattern: close and let useEffect create again on next render
-      es.close()
-      esRef.current = null
+    const base = getSseBaseUrl()
+    const url = `${base}/api/chat/stream`
+    const controller = new AbortController()
+    streamAbortRef.current = controller
+
+    const readStream = async () => {
+      try {
+        const response = await fetch(url, {
+          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+          credentials: 'include',
+          signal: controller.signal,
+        })
+        if (!response.ok || !response.body) return
+
+        const reader = response.body.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ''
+
+        while (!controller.signal.aborted) {
+          const { value, done } = await reader.read()
+          if (done) break
+          buffer += decoder.decode(value, { stream: true })
+          const events = buffer.split(/\n\n/)
+          buffer = events.pop() || ''
+
+          for (const event of events) {
+            const data = event
+              .split(/\n/)
+              .filter(line => line.startsWith('data:'))
+              .map(line => line.replace(/^data:\s?/, ''))
+              .join('\n')
+            if (data) handleMessage(data)
+          }
+        }
+      } catch (error: any) {
+        if (error?.name !== 'AbortError' && import.meta.env.DEV) {
+          console.warn('Realtime stream disconnected')
+        }
+      }
     }
+
+    void readStream()
 
     return () => {
-      es.close()
-      esRef.current = null
+      controller.abort()
+      if (streamAbortRef.current === controller) {
+        streamAbortRef.current = null
+      }
     }
-  }, [user, getSseBaseUrl, shouldNotify, showNotification, queryClient, refreshCounts])
+  }, [user, token, getSseBaseUrl, shouldNotify, showNotification, queryClient, refreshCounts])
 
-  useEffect(() => { if (user) refreshCounts() }, [user, refreshCounts])
+  useEffect(() => { if (user) refreshCounts() }, [user, token, refreshCounts])
 
   // Polling fallback when SSE may not deliver (e.g. tab backgrounded, connection issues)
   useEffect(() => {
     if (!user) return
     const interval = setInterval(refreshCounts, POLL_INTERVAL_MS)
     return () => clearInterval(interval)
-  }, [user, refreshCounts])
+  }, [user, token, refreshCounts])
 
   const refreshMultiWayTrades = useCallback(() => {
     if (refreshCallbacksRef.current.multiway) {

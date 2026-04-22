@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"log"
+	"os"
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
@@ -11,25 +12,33 @@ import (
 // AuthMiddleware checks if the request has a valid JWT token
 func AuthMiddleware() fiber.Handler {
 	return func(c *fiber.Ctx) error {
-		// Get the Authorization header
+		token := ""
+		authSource := ""
+
 		authHeader := c.Get("Authorization")
-		if authHeader == "" {
+		if strings.HasPrefix(authHeader, "Bearer ") {
+			token = strings.TrimSpace(strings.TrimPrefix(authHeader, "Bearer "))
+			authSource = "header"
+		}
+		if token == "" {
+			token = strings.TrimSpace(c.Cookies(utils.AuthCookieName))
+			if token != "" {
+				authSource = "cookie"
+			}
+		}
+		if token == "" {
 			return c.Status(401).JSON(fiber.Map{
 				"success": false,
-				"error":   "Authorization header required",
+				"error":   "Authentication required",
 			})
 		}
 
-		// Check if the header starts with "Bearer "
-		if !strings.HasPrefix(authHeader, "Bearer ") {
+		if authHeader != "" && authSource == "" {
 			return c.Status(401).JSON(fiber.Map{
 				"success": false,
 				"error":   "Invalid authorization format. Use 'Bearer <token>'",
 			})
 		}
-
-		// Extract the token
-		token := strings.TrimPrefix(authHeader, "Bearer ")
 
 		// Validate the token
 		claims, err := utils.ValidateJWT(token)
@@ -59,12 +68,28 @@ func AuthMiddleware() fiber.Handler {
 			})
 		}
 
-		// DEBUG LOG: Track which user_id is being extracted from the JWT token
-		log.Printf("✅ [AuthMiddleware] User authenticated - user_id=%d, email=%s", int(userID), email)
-
 		// Store user information in context for later use
 		c.Locals("user_id", int(userID))
 		c.Locals("user_email", email)
+		c.Locals("auth_source", authSource)
+
+		if authSource == "cookie" && !isSafeMethod(c.Method()) {
+			origin := c.Get("Origin")
+			if origin == "" {
+				origin = originFromReferer(c.Get("Referer"))
+			}
+			allowed := parseAllowedOrigins(os.Getenv("CORS_ORIGINS"))
+			if origin != "" && len(allowed) > 0 && !allowed[origin] {
+				return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+					"success": false,
+					"error":   "Request origin is not allowed",
+				})
+			}
+		}
+
+		if authSource == "cookie" {
+			utils.SetAuthCookie(c, token)
+		}
 
 		return c.Next()
 	}
@@ -73,19 +98,23 @@ func AuthMiddleware() fiber.Handler {
 // OptionalAuthMiddleware checks for JWT token but doesn't require it
 func OptionalAuthMiddleware() fiber.Handler {
 	return func(c *fiber.Ctx) error {
-		// Get the Authorization header
+		token := ""
+		authSource := ""
+
 		authHeader := c.Get("Authorization")
-		if authHeader == "" {
+		if strings.HasPrefix(authHeader, "Bearer ") {
+			token = strings.TrimSpace(strings.TrimPrefix(authHeader, "Bearer "))
+			authSource = "header"
+		}
+		if token == "" {
+			token = strings.TrimSpace(c.Cookies(utils.AuthCookieName))
+			if token != "" {
+				authSource = "cookie"
+			}
+		}
+		if token == "" {
 			return c.Next()
 		}
-
-		// Check if the header starts with "Bearer "
-		if !strings.HasPrefix(authHeader, "Bearer ") {
-			return c.Next()
-		}
-
-		// Extract the token
-		token := strings.TrimPrefix(authHeader, "Bearer ")
 
 		// Try to validate the token
 		claims, err := utils.ValidateJWT(token)
@@ -107,6 +136,7 @@ func OptionalAuthMiddleware() fiber.Handler {
 		// Store user information in context for later use
 		c.Locals("user_id", int(userID))
 		c.Locals("user_email", email)
+		c.Locals("auth_source", authSource)
 
 		return c.Next()
 	}

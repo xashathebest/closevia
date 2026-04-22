@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
+	"log"
 	"strconv"
 	"strings"
 	"sync"
@@ -60,6 +61,47 @@ type AdminStats struct {
 
 func NewAdminHandler() *AdminHandler {
 	return &AdminHandler{db: database.DB}
+}
+
+func (h *AdminHandler) loadMarketplaceSettings() fiber.Map {
+	showOwnProducts := true
+	var raw string
+	if err := h.db.QueryRow("SELECT setting_value FROM app_settings WHERE setting_key = 'show_own_products_on_home'").Scan(&raw); err == nil {
+		if parsed, parseErr := strconv.ParseBool(strings.TrimSpace(raw)); parseErr == nil {
+			showOwnProducts = parsed
+		}
+	}
+
+	return fiber.Map{
+		"show_own_products_on_home": showOwnProducts,
+	}
+}
+
+func (h *AdminHandler) GetMarketplaceSettings(c *fiber.Ctx) error {
+	return c.JSON(models.APIResponse{Success: true, Data: h.loadMarketplaceSettings()})
+}
+
+func (h *AdminHandler) UpdateMarketplaceSettings(c *fiber.Ctx) error {
+	var payload struct {
+		ShowOwnProductsOnHome *bool `json:"show_own_products_on_home"`
+	}
+	if err := c.BodyParser(&payload); err != nil {
+		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "Invalid marketplace settings payload"})
+	}
+	if payload.ShowOwnProductsOnHome == nil {
+		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "show_own_products_on_home is required"})
+	}
+
+	value := strconv.FormatBool(*payload.ShowOwnProductsOnHome)
+	if _, err := h.db.Exec(`
+		INSERT INTO app_settings (setting_key, setting_value)
+		VALUES ('show_own_products_on_home', ?)
+		ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)
+	`, value); err != nil {
+		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to save marketplace settings"})
+	}
+
+	return c.JSON(models.APIResponse{Success: true, Data: h.loadMarketplaceSettings()})
 }
 
 // GetAdminStats returns essential dashboard statistics for admin
@@ -847,7 +889,8 @@ func (h *AdminHandler) GetDataExplorer(c *fiber.Ctx) error {
 	}
 	result, err := h.buildDataExplorerResult(filters)
 	if err != nil {
-		return c.Status(500).JSON(models.APIResponse{Success: false, Error: err.Error()})
+		log.Printf("Admin data explorer failed: %v", err)
+		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to load admin data"})
 	}
 	return c.JSON(models.APIResponse{Success: true, Data: result})
 }
@@ -859,7 +902,8 @@ func (h *AdminHandler) ExportDataExplorer(c *fiber.Ctx) error {
 	}
 	result, err := h.buildDataExplorerResult(filters)
 	if err != nil {
-		return c.Status(500).JSON(models.APIResponse{Success: false, Error: err.Error()})
+		log.Printf("Admin data export failed: %v", err)
+		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to export admin data"})
 	}
 
 	format := strings.ToLower(strings.TrimSpace(c.Query("format", "csv")))
