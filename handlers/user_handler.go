@@ -762,7 +762,12 @@ func (h *UserHandler) RefreshSession(c *fiber.Ctx) error {
 		token = strings.TrimSpace(strings.TrimPrefix(authHeader, "Bearer "))
 	}
 	if token == "" {
-		token = strings.TrimSpace(c.Cookies(utils.AuthCookieName))
+		for _, cookieName := range utils.AuthCookieNames() {
+			token = strings.TrimSpace(c.Cookies(cookieName))
+			if token != "" {
+				break
+			}
+		}
 	}
 	if token == "" {
 		return c.Status(fiber.StatusUnauthorized).JSON(models.APIResponse{

@@ -76,6 +76,63 @@ const CATEGORY_PRICE_RANGES: Record<string, { new: [number, number]; likeNew: [n
   },
 }
 
+const CATEGORY_ALIASES: Record<string, keyof typeof CATEGORY_PRICE_RANGES> = {
+  electronics: 'Electronics',
+  'mobile phones': 'Mobile Phones',
+  phones: 'Mobile Phones',
+  'home appliances': 'Home Appliances',
+  appliances: 'Home Appliances',
+  furniture: 'Other',
+  plants: 'Other',
+  fashion: 'Fashion',
+  'beauty & personal care': 'Other',
+  beauty: 'Other',
+  collectibles: 'Collectibles',
+  sports: 'Sports',
+  toys: 'Toys',
+  accessories: 'Fashion',
+  books: 'Books',
+  'arts & crafts': 'Other',
+  automotive: 'Automotive',
+  'parts & accessories': 'Automotive',
+  parts: 'Automotive',
+  other: 'Other',
+  others: 'Other',
+  general: 'Other',
+}
+
+const normalizeCategory = (category: string): keyof typeof CATEGORY_PRICE_RANGES | null => {
+  const trimmed = (category || '').trim()
+  if (!trimmed) return null
+
+  if (trimmed in CATEGORY_PRICE_RANGES) {
+    return trimmed as keyof typeof CATEGORY_PRICE_RANGES
+  }
+
+  return CATEGORY_ALIASES[trimmed.toLowerCase()] || null
+}
+
+const normalizeCondition = (condition: string): 'new' | 'likeNew' | 'good' | 'used' | 'forParts' => {
+  const normalized = (condition || '').trim().toLowerCase().replace(/[\s-]+/g, ' ')
+
+  switch (normalized) {
+    case 'new':
+      return 'new'
+    case 'like new':
+      return 'likeNew'
+    case 'good':
+      return 'good'
+    case 'used':
+    case 'fair':
+    case 'poor':
+      return 'used'
+    case 'for parts':
+      return 'forParts'
+    default:
+      return 'good'
+  }
+}
+
 /**
  * Estimate price based on category and condition
  * Returns min and max price range as a fallback when AI analysis is unavailable
@@ -84,14 +141,19 @@ export const getBackupPriceEstimate = (
   category: string,
   condition: string
 ): { min: number; max: number } | null => {
-  const categoryRanges = CATEGORY_PRICE_RANGES[category]
+  const normalizedCategory = normalizeCategory(category)
+  if (!normalizedCategory) {
+    return null
+  }
+
+  const categoryRanges = CATEGORY_PRICE_RANGES[normalizedCategory]
   
   if (!categoryRanges) {
     return null
   }
 
-  const conditionKey = (condition || 'good').toLowerCase()
-  const range = (categoryRanges as any)[conditionKey] || categoryRanges.good
+  const conditionKey = normalizeCondition(condition)
+  const range = categoryRanges[conditionKey] || categoryRanges.good
 
   return {
     min: Math.round(range[0]),

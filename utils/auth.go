@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -50,6 +51,7 @@ func GenerateJWT(userID int, email string) (string, error) {
 		"exp":     now.Add(TokenTTL()).Unix(),
 		"iat":     now.Unix(),
 		"iss":     "clovia-api",
+		"sid":     uuid.NewString(),
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)

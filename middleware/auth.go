@@ -21,9 +21,12 @@ func AuthMiddleware() fiber.Handler {
 			authSource = "header"
 		}
 		if token == "" {
-			token = strings.TrimSpace(c.Cookies(utils.AuthCookieName))
-			if token != "" {
-				authSource = "cookie"
+			for _, cookieName := range utils.AuthCookieNames() {
+				token = strings.TrimSpace(c.Cookies(cookieName))
+				if token != "" {
+					authSource = "cookie"
+					break
+				}
 			}
 		}
 		if token == "" {
@@ -43,6 +46,9 @@ func AuthMiddleware() fiber.Handler {
 		// Validate the token
 		claims, err := utils.ValidateJWT(token)
 		if err != nil {
+			if authSource == "cookie" {
+				utils.ClearAuthCookie(c)
+			}
 			return c.Status(401).JSON(fiber.Map{
 				"success": false,
 				"error":   "Invalid or expired token",
@@ -53,6 +59,9 @@ func AuthMiddleware() fiber.Handler {
 		userID, ok := claims["user_id"].(float64)
 		if !ok {
 			log.Printf("❌ [AuthMiddleware] JWT claim extraction failed - user_id type: %T", claims["user_id"])
+			if authSource == "cookie" {
+				utils.ClearAuthCookie(c)
+			}
 			return c.Status(401).JSON(fiber.Map{
 				"success": false,
 				"error":   "Invalid token claims",
@@ -62,6 +71,9 @@ func AuthMiddleware() fiber.Handler {
 		email, ok := claims["email"].(string)
 		if !ok {
 			log.Printf("❌ [AuthMiddleware] JWT claim extraction failed - email type: %T", claims["email"])
+			if authSource == "cookie" {
+				utils.ClearAuthCookie(c)
+			}
 			return c.Status(401).JSON(fiber.Map{
 				"success": false,
 				"error":   "Invalid token claims",
@@ -107,9 +119,12 @@ func OptionalAuthMiddleware() fiber.Handler {
 			authSource = "header"
 		}
 		if token == "" {
-			token = strings.TrimSpace(c.Cookies(utils.AuthCookieName))
-			if token != "" {
-				authSource = "cookie"
+			for _, cookieName := range utils.AuthCookieNames() {
+				token = strings.TrimSpace(c.Cookies(cookieName))
+				if token != "" {
+					authSource = "cookie"
+					break
+				}
 			}
 		}
 		if token == "" {

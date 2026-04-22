@@ -329,6 +329,7 @@ export interface TradeCreate {
   meeting_type?: 'meetup' | 'pickup' // Type of meeting flow for trades
   delivery_address?: string // Required if trade_option is 'delivery'
   payment_method?: 'cod' | 'upfront' // Payment method preference for buyout offers
+  additional_target_product_ids?: number[]
 }
 
 export interface TradeAction {

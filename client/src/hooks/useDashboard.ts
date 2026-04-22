@@ -17,6 +17,21 @@ export const DASHBOARD_QUERY_KEYS = {
 
 const OFFER_REFETCH_INTERVAL_MS = 5000
 
+const buildReciprocalOngoingKey = (trade: Trade): string | null => {
+  if (trade.status !== 'active') return null
+
+  const buyerOfferedItems = (trade.items || []).filter((item) => (item.offered_by || '').toLowerCase() === 'buyer')
+  const buyerOfferedProductIDs = buyerOfferedItems
+    .map((item) => Number(item.product_id))
+    .filter((id) => Number.isFinite(id) && id > 0)
+
+  const productIDs = Array.from(new Set([Number(trade.target_product_id), ...buyerOfferedProductIDs])).sort((a, b) => a - b)
+  if (productIDs.length !== 2 || buyerOfferedProductIDs.length !== 1) return null
+
+  const userIDs = [Number(trade.buyer_id), Number(trade.seller_id)].sort((a, b) => a - b)
+  return `reciprocal:${userIDs.join('-')}:${productIDs.join('-')}`
+}
+
 // Custom hook for user products with caching
 export const useDashboardProducts = (userId: number | undefined) => {
   return useQuery({
@@ -182,10 +197,15 @@ export const useOngoingTrades = () => {
       const ongoingStatuses = new Set(['accepted', 'active', 'ongoing', 'awaiting_confirmation', 'multiway_active'])
       const allTrades = extractData(response).filter((trade: Trade) => ongoingStatuses.has(trade.status))
 
-      // Deduplicate by trade ID
-      const uniqueTrades = new Map<number, Trade>()
+      const uniqueTrades = new Map<string | number, Trade>()
       allTrades.forEach((tr: Trade) => {
-        if (tr && tr.id) uniqueTrades.set(tr.id, tr)
+        if (!tr || !tr.id) return
+        const reciprocalKey = buildReciprocalOngoingKey(tr)
+        const key = reciprocalKey || tr.id
+        const existing = uniqueTrades.get(key)
+        if (!existing || tr.id < existing.id) {
+          uniqueTrades.set(key, tr)
+        }
       })
 
       return Array.from(uniqueTrades.values())

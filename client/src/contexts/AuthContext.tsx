@@ -1,7 +1,9 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode, useRef } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { User } from '../types'
 import { api, API_BASE_URL } from '../services/api'
 import { normalizeImageUrl } from '../utils/imageUtils'
+import { onAuthInvalid, resetAuthInvalid } from '../utils/authEvents'
 import { clearStoredAuth, getStoredToken, getStoredUser, setStoredToken, setStoredUser } from '../utils/authStorage'
 
 interface AuthContextType {
@@ -77,6 +79,7 @@ const getPersistableUser = (user: User): Record<string, unknown> => {
 }
 
 export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
+  const queryClient = useQueryClient()
   // Synchronously initialize from localStorage so auth survives refresh
   const [user, setUserState] = useState<User | null>(() => getCachedUser())
   const [token, setTokenState] = useState<string | null>(() => getStoredToken())
@@ -128,6 +131,22 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   // Computed authentication state
   const isAuthenticated = !!user
 
+  const clearAuthState = () => {
+    delete api.defaults.headers.common['Authorization']
+    clearStoredAuth()
+    setTokenState(null)
+    setUserState(null)
+    queryClient.cancelQueries()
+    queryClient.removeQueries({
+      predicate: query => Array.isArray(query.queryKey) && [
+        'dashboard',
+        'trades',
+        'notifications',
+        'profile',
+      ].includes(String(query.queryKey[0])),
+    })
+  }
+
   useEffect(() => {
     // Prevent double execution in React StrictMode (dev)
     if (initOnceRef.current) return
@@ -161,6 +180,13 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     initializeAuth()
   }, [])
 
+  useEffect(() => {
+    return onAuthInvalid(() => {
+      void api.post('/api/auth/logout').catch(() => undefined)
+      clearAuthState()
+    })
+  }, [queryClient])
+
   const fetchUserProfile = async (currentToken?: string) => {
     try {
       // Add timeout to prevent infinite loading (generous for mobile connections)
@@ -189,14 +215,10 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
       // Only clear auth if it's a genuine 401 (unauthorized) error
       if (error.response?.status === 401) {
-        setToken(null)
-        setUser(null)
-        delete api.defaults.headers.common['Authorization']
+        clearAuthState()
       } else if (error.response?.status === 404) {
         // User not found in database - clear auth
-        setToken(null)
-        setUser(null)
-        delete api.defaults.headers.common['Authorization']
+        clearAuthState()
       } else {
         // For network errors, timeouts, or server errors (5xx):
         // Keep the token AND user from cache so the user stays logged in
@@ -258,6 +280,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   }
 
   const completeLogin = async (newToken: string, userData?: User) => {
+    resetAuthInvalid()
     // 1. Set authorization header for current and future requests
     api.defaults.headers.common['Authorization'] = `Bearer ${newToken}`
     
@@ -362,10 +385,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
   const logout = () => {
     void api.post('/api/auth/logout').catch(() => undefined)
-    delete api.defaults.headers.common['Authorization']
-    clearStoredAuth()
-    setTokenState(null)
-    setUserState(null)
+    resetAuthInvalid()
+    clearAuthState()
   }
 
   const value: AuthContextType = {

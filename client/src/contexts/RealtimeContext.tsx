@@ -3,6 +3,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useAuth } from './AuthContext'
 import { useNotification } from './NotificationContext'
 import { api, API_BASE_URL } from '../services/api'
+import { isAuthInvalid, markAuthInvalid } from '../utils/authEvents'
 import { isNotificationAllowed } from '../utils/notificationPreferences'
 
 type RealtimeContextValue = {
@@ -79,7 +80,7 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   }, [])
 
   const refreshCounts = useCallback(async () => {
-    if (!user) return
+    if (!user || isAuthInvalid()) return
 
     try {
       // Admin only sees report notifications, so only count those for the badge
@@ -299,6 +300,10 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           credentials: 'include',
           signal: controller.signal,
         })
+        if (response.status === 401) {
+          markAuthInvalid('unauthorized')
+          return
+        }
         if (!response.ok || !response.body) return
 
         const reader = response.body.getReader()

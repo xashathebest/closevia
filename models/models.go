@@ -463,7 +463,8 @@ type TradeCreate struct {
 	DeliveryAddress      string   `json:"delivery_address,omitempty"`
 	DeliveryType         string   `json:"delivery_type,omitempty" validate:"omitempty,oneof=standard express"`
 	DeliveryInstructions string   `json:"delivery_instructions,omitempty"`
-	PaymentMethod        string   `json:"payment_method,omitempty" validate:"omitempty,oneof=cod upfront"`
+	PaymentMethod              string `json:"payment_method,omitempty" validate:"omitempty,oneof=cod upfront"`
+	AdditionalTargetProductIDs []int  `json:"additional_target_product_ids,omitempty" validate:"omitempty,dive,gt=0"`
 }
 
 // TradeAction represents accept/decline/counter actions

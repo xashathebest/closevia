@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useMemo } from 'react'
-import { Modal, ModalOverlay, ModalContent, ModalHeader, ModalBody, ModalCloseButton, VStack, Grid, Box, Image, Text, FormControl, FormLabel, Input, HStack, Button, useToast, Badge, Card, CardBody, Icon, useColorModeValue, Textarea, Spinner, Flex, Link, Checkbox, Alert, AlertIcon } from '@chakra-ui/react'
-import { FaMapMarkerAlt, FaTruck, FaLocationArrow, FaBoxOpen, FaHandshake } from 'react-icons/fa'
+import { Modal, ModalOverlay, ModalContent, ModalHeader, ModalBody, ModalCloseButton, VStack, Grid, Box, Image, Text, FormControl, FormLabel, Input, HStack, Button, useToast, Badge, Card, CardBody, Icon, useColorModeValue, Textarea, Spinner, Flex, Link, Checkbox, Alert, AlertIcon, Switch } from '@chakra-ui/react'
+import { FaMapMarkerAlt, FaTruck, FaLocationArrow, FaBoxOpen, FaHandshake, FaTimes } from 'react-icons/fa'
 import { useNavigate } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { useAuth } from '../contexts/AuthContext'
@@ -33,11 +33,18 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
   const [tradeMessage, setTradeMessage] = useState('')
   const [submittingTrade, setSubmittingTrade] = useState(false)
   const [cashAmount, setCashAmount] = useState<string>('')
+  const [cashError, setCashError] = useState('')
   const [tradeOption, setTradeOption] = useState<TradeOption | 'pickup' | null>(null)
   const [pickupAcknowledged, setPickupAcknowledged] = useState(false)
   const [hasPendingOfferOnTarget, setHasPendingOfferOnTarget] = useState(false)
+  const [committedProductIds, setCommittedProductIds] = useState<Set<number>>(new Set())
   const [loadingPendingCheck, setLoadingPendingCheck] = useState(false)
   const [detectingLocation, setDetectingLocation] = useState(false)
+  const [multiTargetMode, setMultiTargetMode] = useState(false)
+  const [additionalTargetIds, setAdditionalTargetIds] = useState<number[]>([])
+  const [sellerProducts, setSellerProducts] = useState<Product[]>([])
+  const [targetSearchTerm, setTargetSearchTerm] = useState('')
+  const [loadingSellerProducts, setLoadingSellerProducts] = useState(false)
   // Delivery location state
   const [detectedCoords, setDetectedCoords] = useState<{ lat: number; lng: number } | null>(null)
   const [detectedLocationLabel, setDetectedLocationLabel] = useState('')
@@ -55,6 +62,27 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
   const mutedTextColor = useColorModeValue('gray.600', 'gray.400')
 
   const selectedProducts = useMemo(() => userProducts.filter(p => selectedOfferIds.includes(p.id)), [userProducts, selectedOfferIds])
+  const visibleProducts = useMemo(() => {
+    const hidden = new Set(['traded', 'sold', 'suspended', 'deleted'])
+    return userProducts
+      .filter(p => p.title.toLowerCase().includes(searchTerm) && !hidden.has(p.status))
+      .sort((a, b) => {
+        const aOff = a.status !== 'available' || committedProductIds.has(a.id)
+        const bOff = b.status !== 'available' || committedProductIds.has(b.id)
+        return aOff === bOff ? 0 : aOff ? 1 : -1
+      })
+  }, [userProducts, searchTerm, committedProductIds])
+  const selectedOfferIdSet = useMemo(() => new Set(selectedOfferIds), [selectedOfferIds])
+  const visibleSellerProducts = useMemo(() => {
+    const hidden = new Set(['traded', 'sold', 'suspended', 'deleted'])
+    return sellerProducts
+      .filter(p => p.title.toLowerCase().includes(targetSearchTerm) && !hidden.has(p.status))
+      .sort((a, b) => {
+        const aOff = a.status !== 'available'
+        const bOff = b.status !== 'available'
+        return aOff === bOff ? 0 : aOff ? 1 : -1
+      })
+  }, [sellerProducts, targetSearchTerm])
 
   const hasFixedLocation = useMemo(() => {
     const locationType = targetProduct?.location_type
@@ -93,6 +121,7 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
     setSearchTerm('')
     setTradeMessage(editTrade?.message || '')
     setCashAmount(editTrade?.offered_cash_amount ? String(editTrade.offered_cash_amount) : '')
+    setCashError('')
     setTradeOption((editTrade?.meeting_type || editTrade?.trade_option || null) as TradeOption | 'pickup' | null)
     setPickupAcknowledged(Boolean(editTrade && editTrade.meeting_type === 'pickup'))
     setHasPendingOfferOnTarget(false)
@@ -101,31 +130,54 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
     setProfileLocationLabel('')
     setManualAddress('')
     setDetectingLocation(false)
+    setCommittedProductIds(new Set())
+    setMultiTargetMode(false)
+    setAdditionalTargetIds([])
+    setSellerProducts([])
+    setTargetSearchTerm('')
     if (user && targetProductId) {
       ; (async () => {
         try {
-          // Fetch user's pending trades to check for existing offer on this product
           setLoadingPendingCheck(true)
-          const pendingRes = await api.get(`/api/trades?direction=outgoing&status=pending&limit=100`)
-          const trades = Array.isArray(pendingRes.data?.data) ? pendingRes.data.data : []
-          const hasPending = trades.some((trade: any) => trade.target_product_id === targetProductId && trade.id !== editTrade?.id)
-          setHasPendingOfferOnTarget(hasPending)
+          const [tradeRes, productRes] = await Promise.all([
+            api.get(`/api/trades?limit=1000`),
+            api.get(`/api/products/user/${user.id}?page=1&limit=100`),
+          ])
 
-          // Fetch user products
-          const res = await api.get(`/api/products/user/${user.id}?page=1&limit=50`)
-          const data = res.data?.data
+          const trades = Array.isArray(tradeRes.data?.data) ? tradeRes.data.data : []
+          const activeStatuses = new Set(['pending', 'pending_multiway', 'accepted_by_one', 'countered', 'accepted', 'active', 'ongoing', 'awaiting_confirmation', 'multiway_active'])
+          const hasPending = trades.some((trade: any) =>
+            trade.buyer_id === user.id &&
+            trade.target_product_id === targetProductId &&
+            trade.id !== editTrade?.id &&
+            activeStatuses.has(trade.status)
+          )
+          const committedIds = new Set<number>()
+          trades.forEach((trade: any) => {
+            if (trade.id === editTrade?.id || !activeStatuses.has(trade.status)) return
+            const targetId = Number(trade.target_product_id)
+            if (Number.isFinite(targetId) && targetId > 0) committedIds.add(targetId)
+            ;(trade.items || []).forEach((item: any) => {
+              const productId = Number(item.product_id)
+              if (Number.isFinite(productId) && productId > 0) committedIds.add(productId)
+            })
+          })
+          setHasPendingOfferOnTarget(hasPending)
+          setCommittedProductIds(committedIds)
+
+          const data = productRes.data?.data
           const list: Product[] = Array.isArray(data?.data) ? data.data : []
-          // Filter out sold products from trade proposals
-          const availableProducts = list.filter(product => product.status === 'available')
-          setUserProducts(availableProducts)
+          setUserProducts(list)
         } catch (_) {
           setUserProducts([])
+          setCommittedProductIds(new Set())
         } finally {
           setLoadingPendingCheck(false)
         }
       })()
     } else {
       setUserProducts([])
+      setCommittedProductIds(new Set())
     }
   }, [isOpen, user, targetProductId, editTrade])
 
@@ -151,7 +203,62 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
     if (tradeOption !== 'pickup') setPickupAcknowledged(false)
   }, [tradeOption])
 
-  const toggleOfferSelection = (id: number) => {
+  // Fetch seller's other products when multi-target mode is enabled
+  useEffect(() => {
+    if (!multiTargetMode || !targetProduct?.seller_id || !isOpen) {
+      setSellerProducts([])
+      return
+    }
+    ;(async () => {
+      setLoadingSellerProducts(true)
+      try {
+        const res = await api.get(`/api/products/user/${targetProduct.seller_id}?page=1&limit=100`)
+        const data = res.data?.data
+        const list: Product[] = Array.isArray(data?.data) ? data.data : []
+        setSellerProducts(list.filter(p => p.id !== targetProductId))
+      } catch (_) {
+        setSellerProducts([])
+      } finally {
+        setLoadingSellerProducts(false)
+      }
+    })()
+  }, [multiTargetMode, targetProduct?.seller_id, isOpen, targetProductId])
+
+  const toggleAdditionalTarget = (productId: number) => {
+    setAdditionalTargetIds(prev =>
+      prev.includes(productId) ? prev.filter(id => id !== productId) : [...prev, productId]
+    )
+  }
+
+  const getTargetUnavailableReason = (product: Product) => {
+    if (product.status !== 'available') return product.status === 'locked' ? 'Locked' : 'Unavailable'
+    return ''
+  }
+
+  const getUnavailableReason = (product: Product) => {
+    if (selectedOfferIdSet.has(product.id)) return ''
+    if (committedProductIds.has(product.id)) return 'Already offered'
+    if (product.status !== 'available') return 'Locked'
+    return ''
+  }
+
+  const toggleOfferSelection = (product: Product) => {
+    const unavailableReason = getUnavailableReason(product)
+    if (unavailableReason) {
+      toast({
+        id: `trademodal-product-disabled-${product.id}`,
+        title: unavailableReason,
+        description: unavailableReason === 'Already offered'
+          ? 'Cancel the related sent offer before using this item again.'
+          : 'This item cannot be offered right now.',
+        status: 'info',
+        duration: 2500,
+        isClosable: true,
+      })
+      return
+    }
+
+    const id = product.id
     setSelectedOfferIds(prev => {
       if (prev.includes(id)) {
         return prev.filter(x => x !== id)
@@ -173,6 +280,38 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
       
       return [...prev, id]
     })
+  }
+
+  const normalizeCashAmount = (value: string) => {
+    const cleaned = value.replace(/[^\d]/g, '')
+    if (!cleaned) return ''
+    return String(Number(cleaned))
+  }
+
+  const handleCashAmountChange = (value: string) => {
+    if (/[.eE+-]/.test(value)) {
+      setCashAmount(value)
+      setCashError('Enter a clean whole PHP amount')
+      return
+    }
+    const normalized = normalizeCashAmount(value)
+    setCashAmount(normalized)
+    if (!normalized) {
+      setCashError('')
+      return
+    }
+    const amount = Number(normalized)
+    setCashError(amount > 0 ? '' : 'Offer money must be greater than 0')
+  }
+
+  const getValidCashAmount = () => {
+    if (!cashAmount.trim()) return undefined
+    const normalized = normalizeCashAmount(cashAmount)
+    const amount = Number(normalized)
+    if (!normalized || !Number.isInteger(amount) || amount <= 0) {
+      return null
+    }
+    return amount
   }
 
   // Resolved delivery address for payload submission
@@ -258,22 +397,37 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
       return
     }
 
+    const offeredCashAmount = getValidCashAmount()
+    if (offeredCashAmount === null || cashError) {
+      setCashError('Enter a clean whole PHP amount greater than 0')
+      toast({
+        id: "trademodal-invalid-cash",
+        title: 'Invalid offer money',
+        description: 'Enter a clean whole PHP amount greater than 0.',
+        status: 'warning',
+      })
+      return
+    }
+
     try {
       setSubmittingTrade(true)
       const payload: TradeCreate = {
         target_product_id: targetProductId,
         offered_product_ids: selectedOfferIds,
         message: tradeMessage,
-        offered_cash_amount: cashAmount ? Number(cashAmount) : undefined,
+        offered_cash_amount: offeredCashAmount || undefined,
         trade_option: 'meetup',
         meeting_type: tradeOption === 'pickup' ? 'pickup' : 'meetup',
+        ...(multiTargetMode && additionalTargetIds.length > 0 && {
+          additional_target_product_ids: additionalTargetIds,
+        }),
       }
       if (isEditMode && editTrade?.id) {
         await updateTrade(editTrade.id, {
           action: 'edit_offer',
           offered_product_ids: selectedOfferIds,
           message: tradeMessage,
-          offered_cash_amount: cashAmount ? Number(cashAmount) : undefined,
+          offered_cash_amount: offeredCashAmount || undefined,
           trade_option: 'meetup',
           meeting_type: tradeOption === 'pickup' ? 'pickup' : 'meetup',
           payment_method: editTrade.payment_method,
@@ -295,6 +449,10 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
       setPickupAcknowledged(false)
       setDetectedCoords(null)
       setManualAddress('')
+      setMultiTargetMode(false)
+      setAdditionalTargetIds([])
+      setSellerProducts([])
+      setTargetSearchTerm('')
       onClose()
     } catch (e: any) {
       const errorMessage = e?.response?.data?.error || (isEditMode ? 'Failed to update trade' : 'Failed to send trade')
@@ -328,9 +486,31 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
                 <Card variant="outline" bg={targetCardBg} borderColor={targetCardBorderColor}>
                   <CardBody p={3}>
                     <VStack spacing={2} align="stretch">
-                      <Text fontSize="10px" fontWeight="bold" color={targetLabelColor} textTransform="uppercase" letterSpacing="0.5px">
-                        Trading For
-                      </Text>
+                      {/* Header row: label + toggle */}
+                      <HStack justify="space-between" align="center">
+                        <Text fontSize="10px" fontWeight="bold" color={targetLabelColor} textTransform="uppercase" letterSpacing="0.5px">
+                          Trading For: {multiTargetMode ? `${additionalTargetIds.length + 1} Item${additionalTargetIds.length > 0 ? 's' : ''}` : '1 Item'}
+                        </Text>
+                        {!isEditMode && (
+                          <HStack spacing={1} align="center">
+                            <Text fontSize="9px" color={mutedTextColor} fontWeight="500">Multiple</Text>
+                            <Switch
+                              size="sm"
+                              colorScheme="blue"
+                              isChecked={multiTargetMode}
+                              onChange={() => {
+                                if (multiTargetMode) {
+                                  setAdditionalTargetIds([])
+                                  setTargetSearchTerm('')
+                                }
+                                setMultiTargetMode(prev => !prev)
+                              }}
+                            />
+                          </HStack>
+                        )}
+                      </HStack>
+
+                      {/* Primary target product — always shown */}
                       <HStack spacing={2} align="start">
                         <Image src={getFirstImage(targetProduct.image_urls)} alt={targetProduct.title} w="60px" h="60px" objectFit="cover" rounded="md" loading="lazy" />
                         <VStack spacing={1} align="start" flex={1}>
@@ -339,19 +519,93 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
                           {targetProduct.bidding_type && targetProduct.bidding_type !== 'none' && (
                             <HStack spacing={1}>
                               {targetProduct.bidding_type === 'blind' && (
-                                <Badge colorScheme="orange" fontSize="9px">
-                                  Blind Bidding
-                                </Badge>
+                                <Badge colorScheme="orange" fontSize="9px">Blind Bidding</Badge>
                               )}
                               {targetProduct.bidding_type === 'open' && (
-                                <Badge colorScheme="green" fontSize="9px">
-                                  Open Bidding
-                                </Badge>
+                                <Badge colorScheme="green" fontSize="9px">Open Bidding</Badge>
                               )}
                             </HStack>
                           )}
                         </VStack>
                       </HStack>
+
+                      {/* Multi-target section */}
+                      {multiTargetMode && (
+                        <VStack spacing={2} align="stretch">
+                          {additionalTargetIds.length > 0 && (
+                            <VStack align="start" spacing={1}>
+                              <Text fontSize="9px" color="blue.600" fontWeight="600">
+                                +{additionalTargetIds.length} more item{additionalTargetIds.length > 1 ? 's' : ''} selected
+                              </Text>
+                              <HStack wrap="wrap" spacing={1}>
+                                {sellerProducts
+                                  .filter(p => additionalTargetIds.includes(p.id))
+                                  .map(p => (
+                                    <HStack key={p.id} bg="blue.100" borderRadius="sm" px={1.5} py={0.5} spacing={1}>
+                                      <Image src={getFirstImage(p.image_urls)} w="14px" h="14px" objectFit="cover" rounded="sm" />
+                                      <Text fontSize="9px" fontWeight="500" maxW="60px" noOfLines={1}>{p.title}</Text>
+                                      <Icon as={FaTimes} boxSize={2} cursor="pointer" color="blue.500" onClick={() => toggleAdditionalTarget(p.id)} />
+                                    </HStack>
+                                  ))
+                                }
+                              </HStack>
+                            </VStack>
+                          )}
+
+                          <Text fontSize="9px" color="blue.600">
+                            Select more products from this seller to bundle into one trade.
+                          </Text>
+
+                          <Input
+                            placeholder="Search seller's items..."
+                            value={targetSearchTerm}
+                            onChange={(e) => setTargetSearchTerm(e.target.value.toLowerCase())}
+                            size="sm"
+                            fontSize="11px"
+                            _placeholder={{ color: 'gray.400' }}
+                            bg="white"
+                          />
+
+                          {loadingSellerProducts ? (
+                            <HStack justify="center" py={2}><Spinner size="sm" /></HStack>
+                          ) : visibleSellerProducts.length === 0 ? (
+                            <Text fontSize="9px" color={mutedTextColor} textAlign="center" py={2}>
+                              No other available items from this seller.
+                            </Text>
+                          ) : (
+                            <Box maxH="100px" overflowY="auto" pr={1}>
+                              <Grid templateColumns="repeat(4, 1fr)" gap={1.5} gridAutoRows="70px">
+                                {visibleSellerProducts.map(p => {
+                                  const isSelected = additionalTargetIds.includes(p.id)
+                                  const unavailReason = getTargetUnavailableReason(p)
+                                  const isDisabled = Boolean(unavailReason)
+                                  return (
+                                    <Box
+                                      key={p.id}
+                                      minH="70px"
+                                      borderWidth={isSelected ? '2px' : '0.5px'}
+                                      borderColor={isSelected ? 'blue.500' : borderColor}
+                                      rounded="md"
+                                      overflow="hidden"
+                                      onClick={() => !isDisabled && toggleAdditionalTarget(p.id)}
+                                      cursor={isDisabled ? 'not-allowed' : 'pointer'}
+                                      bg={isSelected ? 'blue.50' : 'white'}
+                                      opacity={isDisabled ? 0.48 : 1}
+                                      position="relative"
+                                    >
+                                      <Image src={getFirstImage(p.image_urls)} alt={p.title} w="full" h="35px" objectFit="cover" loading="lazy" filter={isDisabled ? 'grayscale(1)' : undefined} />
+                                      <Box p="0.5">
+                                        <Text fontSize="9px" noOfLines={1} fontWeight={isSelected ? '600' : '500'} color={isSelected ? 'blue.600' : 'inherit'}>{p.title}</Text>
+                                        {isDisabled && <Text fontSize="8px" color="gray.700" fontWeight="700">{unavailReason}</Text>}
+                                      </Box>
+                                    </Box>
+                                  )
+                                })}
+                              </Grid>
+                            </Box>
+                          )}
+                        </VStack>
+                      )}
                     </VStack>
                   </CardBody>
                 </Card>
@@ -360,7 +614,7 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
               {/* Item Selection */}
               <VStack align="start" spacing={1} w="full">
                 <Text fontWeight="600" fontSize="11px" textTransform="uppercase" color={mutedTextColor} letterSpacing="0.5px">
-                  Select your items to offer:
+                  Offering: 1 or more of my items
                   {targetProduct?.max_items_per_offer ? (
                     <Badge ml={2} colorScheme="brand" variant="subtle" fontSize="9px">
                       Max {targetProduct.max_items_per_offer}
@@ -369,7 +623,13 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
                 </Text>
                 {selectedOfferIds.length > 0 && (
                   <Text fontSize="9px" color={selectedTextColor} fontWeight="bold">
-                    {selectedOfferIds.length} {targetProduct?.max_items_per_offer ? `/ ${targetProduct.max_items_per_offer}` : ''} selected
+                    You are offering {selectedOfferIds.length} {selectedOfferIds.length === 1 ? 'item' : 'items'}
+                    {targetProduct?.max_items_per_offer ? ` / ${targetProduct.max_items_per_offer}` : ''}
+                  </Text>
+                )}
+                {selectedOfferIds.length > 1 && (
+                  <Text fontSize="9px" color={mutedTextColor}>
+                    These items will be sent as one bundled offer. The seller accepts or declines the whole bundle.
                   </Text>
                 )}
               </VStack>
@@ -386,7 +646,7 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
 
               {/* Scrollable grid: 4 items per row, minimized boxes */}
               <Box maxH="90px" overflowY="auto" pr={2}>
-                {userProducts.filter(p => p.title.toLowerCase().includes(searchTerm)).length === 0 ? (
+                {visibleProducts.length === 0 ? (
                   <Flex direction="column" align="center" justify="center" h="140px" gap={2} p={4} bg="gray.50" borderRadius="md" borderWidth="1px" borderColor={borderColor}>
                     <Icon as={FaBoxOpen} boxSize={8} color="gray.400" />
                     <VStack spacing={1} textAlign="center">
@@ -407,14 +667,33 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
                   </Flex>
                 ) : (
                   <Grid templateColumns="repeat(4, 1fr)" gap={1.5} gridAutoRows="70px" justifyContent="start">
-                    {userProducts.filter(p => p.title.toLowerCase().includes(searchTerm)).map((p) => (
-                      <Box key={p.id} minH="70px" borderWidth={selectedOfferIds.includes(p.id) ? '2px' : '0.5px'} borderColor={selectedOfferIds.includes(p.id) ? selectedBorder : borderColor} rounded="md" overflow="hidden" onClick={() => toggleOfferSelection(p.id)} cursor="pointer" bg={selectedOfferIds.includes(p.id) ? selectedBg : 'white'}>
-                        <Image src={getFirstImage(p.image_urls)} alt={p.title} w="full" h="35px" objectFit="cover" loading="lazy" />
+                    {visibleProducts.map((p) => {
+                      const isSelected = selectedOfferIds.includes(p.id)
+                      const unavailableReason = getUnavailableReason(p)
+                      const isDisabled = Boolean(unavailableReason)
+                      return (
+                      <Box
+                        key={p.id}
+                        minH="70px"
+                        borderWidth={isSelected ? '2px' : '0.5px'}
+                        borderColor={isSelected ? selectedBorder : borderColor}
+                        rounded="md"
+                        overflow="hidden"
+                        onClick={() => toggleOfferSelection(p)}
+                        cursor={isDisabled ? 'not-allowed' : 'pointer'}
+                        bg={isSelected ? selectedBg : 'white'}
+                        opacity={isDisabled ? 0.48 : 1}
+                        position="relative"
+                      >
+                        <Image src={getFirstImage(p.image_urls)} alt={p.title} w="full" h="35px" objectFit="cover" loading="lazy" filter={isDisabled ? 'grayscale(1)' : undefined} />
                         <Box p="0.5">
-                          <Text fontSize="9px" noOfLines={1} wordBreak="break-word" fontWeight={selectedOfferIds.includes(p.id) ? '600' : '500'} color={selectedOfferIds.includes(p.id) ? selectedTextColor : 'inherit'}>{p.title}</Text>
+                          <Text fontSize="9px" noOfLines={1} wordBreak="break-word" fontWeight={isSelected ? '600' : '500'} color={isSelected ? selectedTextColor : 'inherit'}>{p.title}</Text>
+                          {isDisabled && (
+                            <Text fontSize="8px" noOfLines={1} color="gray.700" fontWeight="700">{unavailableReason}</Text>
+                          )}
                         </Box>
                       </Box>
-                    ))}
+                    )})}
                   </Grid>
                 )}
               </Box>
@@ -438,16 +717,19 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
                 <FormLabel fontSize="11px" fontWeight="bold" textTransform="uppercase" color={mutedTextColor} letterSpacing="0.5px" mb={1}>
                   Offer money (optional, PHP)
                 </FormLabel>
-                <Input 
-                  type="number" 
-                  placeholder="₱0.00" 
-                  value={cashAmount} 
-                  onChange={(e) => setCashAmount(e.target.value)} 
-                  min={0} 
-                  step="0.01"
+                <Input
+                  type="text"
+                  inputMode="numeric"
+                  placeholder="e.g. 500"
+                  value={cashAmount}
+                  onChange={(e) => handleCashAmountChange(e.target.value)}
                   fontSize="11px"
                   py={2}
+                  isInvalid={Boolean(cashError)}
                 />
+                {cashError && (
+                  <Text fontSize="9px" color="red.500" mt={1}>{cashError}</Text>
+                )}
               </FormControl>
 
               {/* Trade Method - Meetup and Pickup Options based on Product Location Type */}

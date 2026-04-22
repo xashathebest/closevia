@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
@@ -85,6 +86,8 @@ var conditionMultipliers = map[string]float64{
 	"Fair":     0.4,
 }
 
+var wholePesoPricePattern = regexp.MustCompile(`^\d+$`)
+
 // calculateSuggestedValue calculates the value in points based on price and condition.
 func calculateSuggestedValue(price float64, condition string) int {
 	multiplier, ok := conditionMultipliers[condition]
@@ -150,6 +153,59 @@ func parseWantedCategories(raw string) models.StringArray {
 	return models.StringArray(fallback)
 }
 
+func parseAskingPrice(raw string) (float64, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, fmt.Errorf("price is required")
+	}
+	if !wholePesoPricePattern.MatchString(raw) {
+		return 0, fmt.Errorf("price must be a whole-peso amount")
+	}
+	normalized := strings.TrimLeft(raw, "0")
+	if normalized == "" {
+		return 0, fmt.Errorf("price must be greater than 0")
+	}
+	price, err := strconv.ParseInt(normalized, 10, 64)
+	if err != nil || price <= 0 {
+		return 0, fmt.Errorf("price must be greater than 0")
+	}
+	return float64(price), nil
+}
+
+func validateProductDescription(description string) error {
+	description = strings.TrimSpace(description)
+	if description == "" {
+		return fmt.Errorf("description is required")
+	}
+	if len([]rune(description)) < 20 {
+		return fmt.Errorf("description is too short")
+	}
+
+	letters := 0
+	alphanumeric := 0
+	uniqueChars := map[rune]struct{}{}
+	for _, r := range strings.ToLower(description) {
+		if unicode.IsLetter(r) {
+			letters++
+			alphanumeric++
+			uniqueChars[r] = struct{}{}
+			continue
+		}
+		if unicode.IsDigit(r) {
+			alphanumeric++
+			uniqueChars[r] = struct{}{}
+		}
+	}
+
+	if alphanumeric < 8 || letters < 6 {
+		return fmt.Errorf("description must include meaningful words")
+	}
+	if len(uniqueChars) <= 2 {
+		return fmt.Errorf("description is too repetitive")
+	}
+	return nil
+}
+
 // CreateProduct creates a new product
 func (h *ProductHandler) CreateProduct(c *fiber.Ctx) error {
 	h.ensureProductEstimateVisibilityColumn()
@@ -169,6 +225,12 @@ func (h *ProductHandler) CreateProduct(c *fiber.Ctx) error {
 	// Parse fields
 	title := cleanUserText(c.FormValue("title"), 160)
 	description := cleanUserText(c.FormValue("description"), 5000)
+	if err := validateProductDescription(description); err != nil {
+		return c.Status(400).JSON(models.APIResponse{
+			Success: false,
+			Error:   "Add a short description to help others understand your item",
+		})
+	}
 	priceStr := c.FormValue("price")
 	// Fetch user tier, strikes and enforce data-driven listing limits
 	var tier string
@@ -200,17 +262,22 @@ func (h *ProductHandler) CreateProduct(c *fiber.Ctx) error {
 		})
 	}
 
-	var price *float64
-	if priceStr != "" {
-		p, err := strconv.ParseFloat(priceStr, 64)
-		if err == nil {
-			price = &p
-		}
+	insertPrice, err := parseAskingPrice(priceStr)
+	if err != nil {
+		return c.Status(400).JSON(models.APIResponse{
+			Success: false,
+			Error:   "Enter a valid asking price greater than 0",
+		})
 	}
 	premium := c.FormValue("premium") == "true"
 	allowBuying := c.FormValue("allow_buying") == "true"
 	barterOnly := c.FormValue("barter_only") == "true"
-	location := c.FormValue("location")
+	location := cleanUserText(c.FormValue("location"), 255)
+	locationType := c.FormValue("location_type")
+	if locationType != "current_location" && locationType != "pickup_location" && locationType != "no_location" {
+		locationType = "no_location"
+	}
+	pickupAddress := cleanUserText(c.FormValue("pickup_address"), 1000)
 	condition := c.FormValue("condition")
 
 	// Parse organization IDs for tagging (comma-separated or JSON array)
@@ -338,12 +405,6 @@ func (h *ProductHandler) CreateProduct(c *fiber.Ctx) error {
 		imageURLsJSONBytes = []byte("[]")
 	}
 
-	// Ensure DB non-null price: default to 0.0 if not provided
-	var insertPrice float64 = 0.0
-	if price != nil {
-		insertPrice = *price
-	}
-
 	// Check for duplicate listings (same title, description, price, user, within 24h)
 	var duplicateCount int
 	duplicateCheckQuery := `SELECT COUNT(*) FROM products 
@@ -428,6 +489,27 @@ func (h *ProductHandler) CreateProduct(c *fiber.Ctx) error {
 		}
 	}
 
+	var pickupLat, pickupLon *float64
+	if locationType == "pickup_location" {
+		pickupLatStr := c.FormValue("pickup_latitude")
+		pickupLonStr := c.FormValue("pickup_longitude")
+		if pickupLatStr != "" && pickupLonStr != "" {
+			if parsedPickupLat, err := strconv.ParseFloat(pickupLatStr, 64); err == nil {
+				if parsedPickupLon, err := strconv.ParseFloat(pickupLonStr, 64); err == nil {
+					pickupLat = &parsedPickupLat
+					pickupLon = &parsedPickupLon
+				}
+			}
+		}
+		if pickupLat == nil || pickupLon == nil {
+			pickupLat = lat
+			pickupLon = lon
+		}
+		if pickupAddress == "" {
+			pickupAddress = location
+		}
+	}
+
 	// Calculate suggested value
 	suggestedValue := calculateSuggestedValue(insertPrice, finalCondition)
 
@@ -487,9 +569,15 @@ func (h *ProductHandler) CreateProduct(c *fiber.Ctx) error {
 
 	// Insert new product with slug. Build SQL dynamically so it's tolerant
 	// to missing latitude/longitude columns (some DBs may not have applied migrations).
+<<<<<<< fix/login-stats-final
 	cols := []string{"slug", "title", "description", "price", "image_urls", "seller_id", "premium", "allow_buying", "barter_only", "location", "status", "`condition`", "suggested_value", "category", "wants", "wanted_categories", "item_type", "brand", "authenticity_risks", "tags", "estimated_value_min", "estimated_value_max", "show_estimated_value", "desired_price", "desired_product"}
 	placeholders := []string{"?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?"}
 	args := []interface{}{slug, title, finalDescription, insertPrice, string(imageURLsJSONBytes), userID, premium, allowBuying, barterOnly, location, "available", finalCondition, suggestedValue, category, wants, wantedCategories, itemType, brand, authenticityRisks, tags, estimatedValueMin, estimatedValueMax, showEstimatedValue, desiredPrice, desiredProduct}
+=======
+	cols := []string{"slug", "title", "description", "price", "image_urls", "seller_id", "premium", "allow_buying", "barter_only", "location", "location_type", "status", "`condition`", "suggested_value", "category", "wants", "wanted_categories", "item_type", "brand", "authenticity_risks", "tags", "estimated_value_min", "estimated_value_max", "desired_price", "desired_product"}
+	placeholders := []string{"?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?"}
+	args := []interface{}{slug, title, finalDescription, insertPrice, string(imageURLsJSONBytes), userID, premium, allowBuying, barterOnly, location, locationType, "available", finalCondition, suggestedValue, category, wants, wantedCategories, itemType, brand, authenticityRisks, tags, estimatedValueMin, estimatedValueMax, desiredPrice, desiredProduct}
+>>>>>>> main
 
 	// Include video_url if a video was uploaded
 	if videoURL != "" {
@@ -506,6 +594,17 @@ func (h *ProductHandler) CreateProduct(c *fiber.Ctx) error {
 		log.Printf("📥 [CreateProduct] Final coordinates to be saved: lat=%f, lon=%f", *lat, *lon)
 	} else {
 		log.Printf("⚠️ [CreateProduct] Final result: NO COORDINATES to be saved")
+	}
+
+	if locationType == "pickup_location" {
+		cols = append(cols, "pickup_address")
+		placeholders = append(placeholders, "?")
+		args = append(args, pickupAddress)
+		if pickupLat != nil && pickupLon != nil {
+			cols = append(cols, "pickup_latitude", "pickup_longitude")
+			placeholders = append(placeholders, "?", "?")
+			args = append(args, *pickupLat, *pickupLon)
+		}
 	}
 
 	sqlStr := fmt.Sprintf("INSERT INTO products (%s) VALUES (%s)", strings.Join(cols, ", "), strings.Join(placeholders, ", "))
@@ -1959,16 +2058,27 @@ func (h *ProductHandler) UpdateProduct(c *fiber.Ctx) error {
 
 	description := cleanUserText(c.FormValue("description"), 5000)
 	if description != "" {
+		if err := validateProductDescription(description); err != nil {
+			return c.Status(400).JSON(models.APIResponse{
+				Success: false,
+				Error:   "Add a short description to help others understand your item",
+			})
+		}
 		updateFields = append(updateFields, "description = ?")
 		args = append(args, description)
 	}
 
 	priceStr := c.FormValue("price")
 	if priceStr != "" {
-		if price, err := strconv.ParseFloat(priceStr, 64); err == nil {
-			updateFields = append(updateFields, "price = ?")
-			args = append(args, price)
+		price, err := parseAskingPrice(priceStr)
+		if err != nil {
+			return c.Status(400).JSON(models.APIResponse{
+				Success: false,
+				Error:   "Enter a valid asking price greater than 0",
+			})
 		}
+		updateFields = append(updateFields, "price = ?")
+		args = append(args, price)
 	}
 
 	premiumStr := c.FormValue("premium")

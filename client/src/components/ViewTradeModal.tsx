@@ -1133,6 +1133,7 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
   const [uploadingChatPhoto, setUploadingChatPhoto] = useState(false)
   const chatPhotoInputRef = useRef<HTMLInputElement>(null)
   const [requestedProduct, setRequestedProduct] = useState<Product | null>(null)
+  const [additionalRequestedProducts, setAdditionalRequestedProducts] = useState<Product[]>([])
   const [offeredProducts, setOfferedProducts] = useState<Product[]>([])
   const [loadingProducts, setLoadingProducts] = useState(false)
   const [selectedLocation, setSelectedLocation] = useState<string | null>(null)
@@ -1832,7 +1833,7 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
       setRequestedProduct(requested)
 
       // Only show items offered by the buyer (offered_by === 'buyer') in the "offered" column.
-      // Some trades may store seller counter-offer items with offered_by === 'seller' G�� keep them separate.
+      // Some trades may store seller counter-offer items with offered_by === 'seller' — keep them separate.
       const buyerItems = (trade.items || []).filter((item: any) => {
         const ob = (item?.offered_by ?? item?.offeredBy ?? '').toLowerCase()
         return !ob || ob === 'buyer' || ob === 'from_buyer' || ob === 'sender'
@@ -1840,6 +1841,15 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
       const offeredIds = buyerItems.map((item: any) => item.product_id).filter(Boolean)
       const offeredResults = await Promise.all(offeredIds.map((pid: number) => getProduct(pid)))
       setOfferedProducts(offeredResults.filter(Boolean) as Product[])
+
+      // Load additional target products from multi-target mode (stored as offered_by === 'seller' in trade_items).
+      const sellerItems = (trade.items || []).filter((item: any) => {
+        const ob = (item?.offered_by ?? item?.offeredBy ?? '').toLowerCase()
+        return ob === 'seller'
+      })
+      const additionalIds = sellerItems.map((item: any) => item.product_id).filter(Boolean)
+      const additionalResults = await Promise.all(additionalIds.map((pid: number) => getProduct(pid)))
+      setAdditionalRequestedProducts(additionalResults.filter(Boolean) as Product[])
     } catch (error) {
       console.error('Failed to fetch products:', error)
     } finally {
@@ -2981,7 +2991,7 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
                       <Spinner />
                     ) : (
                       <SimpleGrid columns={{ base: 1, md: 2 }} spacing={4} w="full">
-                        {/* Requested Product (What you're giving) */}
+                        {/* Requested Products (What the seller is giving — primary + any additional from multi-target mode) */}
                         <Card variant="unstyled" borderRadius="2xl" borderWidth="0" shadow="sm" bg="white" h="full">
                           <CardBody display="flex" flexDirection="column" p={5}>
                             <VStack spacing={3} align="stretch" h="full">
@@ -2995,35 +3005,45 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
                                         : 'Requested'}
                                 </Badge>
                                 <Text fontSize="sm" color="gray.600">
-                                  ({isUserSeller ? "Your Item" : (isUserBuyer ? tradingPartner + "'s Item" : "Seller's Item")})
+                                  ({isUserSeller
+                                    ? (additionalRequestedProducts.length > 0 ? "Your Items" : "Your Item")
+                                    : (isUserBuyer
+                                      ? (additionalRequestedProducts.length > 0 ? tradingPartner + "'s Items" : tradingPartner + "'s Item")
+                                      : (additionalRequestedProducts.length > 0 ? "Seller's Items" : "Seller's Item"))})
                                 </Text>
                               </HStack>
                               {requestedProduct ? (
-                                <>
-                                  <Box w="full" bg="gray.50" borderRadius="md" overflow="hidden" aspectRatio="1" display="flex" alignItems="center" justifyContent="center">
-                                    <OptimizedImage
-                                      src={getFirstImage(requestedProduct.image_urls)}
-                                      alt={requestedProduct.title}
-                                      displayWidth="full"
-                                      displayHeight="100%"
-                                      objectFit="contain"
-                                      borderRadius="md"
-                                      fallbackSrc="/no-image.svg"
-                                      width={400}
-                                    />
-                                  </Box>
-                                  <Box flex={1}>
-                                    <Text fontWeight="600" fontSize="sm" color="gray.800" noOfLines={2}>
-                                      {requestedProduct.title}
-                                    </Text>
-                                    <Badge bg="yellow.100" color="yellow.700" borderRadius="md" px={2} py={0.5} fontSize="10px" fontWeight="600" mt={2} mb={1}>
-                                      ₱{Number(requestedProduct.price || requestedProduct.estimated_value_min || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                                    </Badge>
-                                    <Text fontSize="xs" fontWeight="500" color="gray.500" noOfLines={3} mt={1}>
-                                      {requestedProduct.description}
-                                    </Text>
-                                  </Box>
-                                </>
+                                <SimpleGrid columns={additionalRequestedProducts.length > 0 ? 2 : 1} spacing={3} w="full" flex={1}>
+                                  {[requestedProduct, ...additionalRequestedProducts].map((product) => (
+                                    <VStack key={`requested-${product.id}`} spacing={2} align="stretch" h="full">
+                                      <Box w="full" bg="gray.50" borderRadius="md" overflow="hidden" aspectRatio="1" display="flex" alignItems="center" justifyContent="center" flex={1}>
+                                        <OptimizedImage
+                                          src={getFirstImage(product.image_urls)}
+                                          alt={product.title}
+                                          displayWidth="full"
+                                          displayHeight="100%"
+                                          objectFit="contain"
+                                          borderRadius="md"
+                                          fallbackSrc="/no-image.svg"
+                                          width={additionalRequestedProducts.length > 0 ? 300 : 400}
+                                        />
+                                      </Box>
+                                      <Box>
+                                        <Text fontWeight="600" fontSize="sm" color="gray.800" noOfLines={2}>
+                                          {product.title}
+                                        </Text>
+                                        <Badge bg="yellow.100" color="yellow.700" borderRadius="md" px={2} py={0.5} fontSize="10px" fontWeight="600" mt={2} mb={1}>
+                                          ₱{Number(product.price || product.estimated_value_min || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                        </Badge>
+                                        {additionalRequestedProducts.length === 0 && (
+                                          <Text fontSize="xs" fontWeight="500" color="gray.500" noOfLines={3} mt={1}>
+                                            {product.description}
+                                          </Text>
+                                        )}
+                                      </Box>
+                                    </VStack>
+                                  ))}
+                                </SimpleGrid>
                               ) : (
                                 <Text color="gray.500">Loading...</Text>
                               )}

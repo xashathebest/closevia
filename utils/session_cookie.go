@@ -10,6 +10,7 @@ import (
 )
 
 const AuthCookieName = "__Host-clovia_session"
+const DevAuthCookieName = "clovia_session"
 
 func isProduction() bool {
 	env := strings.ToLower(strings.TrimSpace(os.Getenv("APP_ENV")))
@@ -48,6 +49,20 @@ func AuthCookieSecure() bool {
 	return isProduction()
 }
 
+func PrimaryAuthCookieName() string {
+	if AuthCookieSecure() {
+		return AuthCookieName
+	}
+	return DevAuthCookieName
+}
+
+func AuthCookieNames() []string {
+	if PrimaryAuthCookieName() == AuthCookieName {
+		return []string{AuthCookieName, DevAuthCookieName}
+	}
+	return []string{DevAuthCookieName, AuthCookieName}
+}
+
 func SessionIdleTimeout() time.Duration {
 	if minutes := strings.TrimSpace(os.Getenv("SESSION_IDLE_TIMEOUT_MINUTES")); minutes != "" {
 		if parsed, err := strconv.Atoi(minutes); err == nil && parsed > 0 && parsed <= 24*60 {
@@ -62,27 +77,33 @@ func SetAuthCookie(c *fiber.Ctx, token string) {
 	if tokenTTL := TokenTTL(); tokenTTL < maxAge {
 		maxAge = tokenTTL
 	}
+	sameSite := AuthCookieSameSite()
+	secure := AuthCookieSecure() || sameSite == "None"
 	c.Cookie(&fiber.Cookie{
-		Name:     AuthCookieName,
+		Name:     PrimaryAuthCookieName(),
 		Value:    token,
 		Path:     "/",
 		HTTPOnly: true,
-		Secure:   AuthCookieSecure(),
-		SameSite: AuthCookieSameSite(),
+		Secure:   secure,
+		SameSite: sameSite,
 		Expires:  time.Now().Add(maxAge),
 		MaxAge:   int(maxAge.Seconds()),
 	})
 }
 
 func ClearAuthCookie(c *fiber.Ctx) {
-	c.Cookie(&fiber.Cookie{
-		Name:     AuthCookieName,
-		Value:    "",
-		Path:     "/",
-		HTTPOnly: true,
-		Secure:   AuthCookieSecure(),
-		SameSite: AuthCookieSameSite(),
-		Expires:  time.Unix(0, 0),
-		MaxAge:   -1,
-	})
+	sameSite := AuthCookieSameSite()
+	secure := AuthCookieSecure() || sameSite == "None"
+	for _, name := range AuthCookieNames() {
+		c.Cookie(&fiber.Cookie{
+			Name:     name,
+			Value:    "",
+			Path:     "/",
+			HTTPOnly: true,
+			Secure:   secure,
+			SameSite: sameSite,
+			Expires:  time.Unix(0, 0),
+			MaxAge:   -1,
+		})
+	}
 }

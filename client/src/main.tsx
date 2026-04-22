@@ -6,6 +6,7 @@ import App from './App.tsx'
 import '@fontsource/prata/400.css'
 import './index.css'
 import { initializeInstallPrompt, registerServiceWorker } from './serviceWorkerRegistration'
+import { isAuthInvalid } from './utils/authEvents'
 
 // Load and apply font size immediately before React renders
 // This ensures the font size is applied on page load without flashing
@@ -47,8 +48,12 @@ const queryClient = new QueryClient({
       refetchOnWindowFocus: false,
       // Don't refetch on reconnect
       refetchOnReconnect: false,
-      // Retry failed requests 2 times
-      retry: 2,
+      // Retry transient failures, but never retry auth expiry/cancelled auth requests.
+      retry: (failureCount, error: any) => {
+        if (isAuthInvalid()) return false
+        if (error?.response?.status === 401 || error?.code === 'ERR_CANCELED') return false
+        return failureCount < 2
+      },
       // Don't refetch on mount if data is fresh
       refetchOnMount: false,
       // Keep previous data while refetching (prevents loading states)

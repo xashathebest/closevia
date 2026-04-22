@@ -1,4 +1,5 @@
 import axios, { AxiosError, AxiosRequestConfig } from 'axios'
+import { isAuthInvalid, markAuthInvalid } from '../utils/authEvents'
 import { clearStoredAuth, getStoredToken } from '../utils/authStorage'
 
 function normalizeLoopbackBaseUrl(raw: string): string {
@@ -27,6 +28,52 @@ export const API_BASE_URL = (ENV_API_URL ? normalizeLoopbackBaseUrl(ENV_API_URL)
 
 const DEBUG_API = import.meta.env.DEV && localStorage.getItem('debug_api') === 'true'
 
+const protectedApiPrefixes = [
+  '/api/auth/refresh-session',
+  '/api/users/profile',
+  '/api/notifications',
+  '/api/chat/stream',
+  '/api/trades',
+  '/api/dashboard',
+  '/api/orders',
+  '/api/payments',
+  '/api/admin',
+  '/api/products/user',
+]
+
+const authRecoveryApiPrefixes = [
+  '/api/auth/login',
+  '/api/auth/google',
+  '/api/auth/register',
+  '/api/auth/logout',
+  '/api/auth/forgot-password',
+  '/api/auth/reset-password',
+  '/api/auth/verify-email',
+  '/api/auth/resend-verification',
+]
+
+const safeMethods = new Set(['get', 'head', 'options'])
+
+const isProtectedApiUrl = (url?: string): boolean => {
+  if (!url) return false
+  try {
+    const parsed = new URL(url, window.location.origin)
+    return protectedApiPrefixes.some(prefix => parsed.pathname.startsWith(prefix))
+  } catch {
+    return protectedApiPrefixes.some(prefix => url.startsWith(prefix))
+  }
+}
+
+const isAuthRecoveryApiUrl = (url?: string): boolean => {
+  if (!url) return false
+  try {
+    const parsed = new URL(url, window.location.origin)
+    return authRecoveryApiPrefixes.some(prefix => parsed.pathname.startsWith(prefix))
+  } catch {
+    return authRecoveryApiPrefixes.some(prefix => url.startsWith(prefix))
+  }
+}
+
 export const api = axios.create({
   baseURL: API_BASE_URL,
   timeout: 60000, // Increased from 30s to 60s for slower networks
@@ -36,6 +83,12 @@ export const api = axios.create({
 // Request interceptor to add auth token and log
 api.interceptors.request.use(
   (config) => {
+    const method = String(config.method || 'get').toLowerCase()
+    const isUnsafeApiRequest = !safeMethods.has(method) && String(config.url || '').startsWith('/api/')
+    if (isAuthInvalid() && !isAuthRecoveryApiUrl(config.url) && (isProtectedApiUrl(config.url) || isUnsafeApiRequest)) {
+      return Promise.reject(new axios.CanceledError('Authentication is invalid'))
+    }
+
     const token = getStoredToken()
     // Ensure headers object exists
     config.headers = config.headers || {}
@@ -115,9 +168,10 @@ api.interceptors.response.use(
     }
 
     // Simple one-time retry on 401 if token exists but header was missing/not set
-    if (status === 401 && cfg && !cfg._retry) {
+    if (status === 401 && cfg && !cfg._retry && !isAuthInvalid()) {
       const token = getStoredToken()
-      if (token) {
+      const authHeader = cfg.headers?.['Authorization'] || cfg.headers?.['authorization']
+      if (token && !authHeader) {
         cfg._retry = true
         cfg.headers = cfg.headers || {}
         cfg.headers['Authorization'] = `Bearer ${token}`
@@ -128,9 +182,10 @@ api.interceptors.response.use(
     // On 401 after retry failed, let route guards and component-level handlers decide UX.
     // Do NOT hard-redirect here, because some pages are intentionally browsable by guests.
     if (status === 401) {
-      if (typeof url === 'string' && url.includes('/api/auth/refresh-session')) {
+      if (!isReviewEndpoint) {
         clearStoredAuth()
         delete api.defaults.headers.common['Authorization']
+        markAuthInvalid(typeof url === 'string' && url.includes('/api/auth/refresh-session') ? 'refresh_failed' : 'unauthorized')
       }
       if (isReviewEndpoint) {
         return Promise.reject(error)

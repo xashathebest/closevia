@@ -279,6 +279,7 @@ func CreateTables() error {
 	}
 	// Robust column migration for products table
 	productCols := map[string]string{
+<<<<<<< fix/login-stats-final
 		"value":                "DECIMAL(10,2) NULL",
 		"estimated_value_min":  "DECIMAL(10,2) NULL",
 		"estimated_value_max":  "DECIMAL(10,2) NULL",
@@ -293,6 +294,25 @@ func CreateTables() error {
 		"tags":                 "JSON NULL",
 		"boosted_at":           "TIMESTAMP NULL",
 		"view_count":           "INT DEFAULT 0",
+=======
+		"value":               "DECIMAL(10,2) NULL",
+		"estimated_value_min": "DECIMAL(10,2) NULL",
+		"estimated_value_max": "DECIMAL(10,2) NULL",
+		"wants":               "TEXT NULL",
+		"wanted_categories":   "JSON NULL",
+		"desired_price":       "DECIMAL(10,2) NULL",
+		"desired_product":     "VARCHAR(255) NULL",
+		"item_type":           "VARCHAR(100) NULL",
+		"brand":               "VARCHAR(100) NULL",
+		"authenticity_risks":  "VARCHAR(50) NULL",
+		"tags":                "JSON NULL",
+		"boosted_at":          "TIMESTAMP NULL",
+		"view_count":          "INT DEFAULT 0",
+		"location_type":       "VARCHAR(20) DEFAULT 'no_location'",
+		"pickup_latitude":     "DECIMAL(10,8) NULL",
+		"pickup_longitude":    "DECIMAL(11,8) NULL",
+		"pickup_address":      "TEXT NULL",
+>>>>>>> main
 	}
 
 	for col, def := range productCols {
@@ -462,6 +482,10 @@ func CreateTables() error {
 			barter_only BOOLEAN DEFAULT FALSE,
 			max_items_per_offer INT DEFAULT 0,
 			location VARCHAR(255),
+			location_type VARCHAR(20) DEFAULT 'no_location',
+			pickup_latitude DECIMAL(10,8) NULL,
+			pickup_longitude DECIMAL(11,8) NULL,
+			pickup_address TEXT NULL,
 			` + "`condition`" + ` VARCHAR(50),
 			suggested_value INT,
 			category VARCHAR(100),
