@@ -179,12 +179,12 @@ const MediaGallery: React.FC<MediaGalleryProps> = ({
           p={0}
         >
           {isPremium && (
-            <Badge colorScheme="orange" variant="subtle" px={{ base: 2, md: 2.5 }} py={{ base: 0.5, md: 1 }} fontSize={{ base: '2xs', md: 'xs' }} borderRadius="full" fontWeight="700">
+            <Badge display={{ base: 'none', md: 'inline-flex' }} colorScheme="orange" variant="subtle" px={{ base: 2, md: 2.5 }} py={{ base: 0.5, md: 1 }} fontSize={{ base: '2xs', md: 'xs' }} borderRadius="full" fontWeight="700">
               Premium
             </Badge>
           )}
           {typeof wishlistCount === 'number' && (
-            <Badge colorScheme="brand" variant="subtle" px={{ base: 2, md: 2.5 }} py={{ base: 0.5, md: 1 }} fontSize={{ base: '2xs', md: 'xs' }} borderRadius="full" fontWeight="600">
+            <Badge display={{ base: 'none', md: 'inline-flex' }} colorScheme="brand" variant="subtle" px={{ base: 2, md: 2.5 }} py={{ base: 0.5, md: 1 }} fontSize={{ base: '2xs', md: 'xs' }} borderRadius="full" fontWeight="600">
               {wishlistCount} Saved
             </Badge>
           )}
@@ -199,7 +199,7 @@ const MediaGallery: React.FC<MediaGalleryProps> = ({
             </Badge>
           )}
           {listedDate && (
-            <Badge colorScheme="gray" variant="subtle" px={{ base: 2, md: 2.5 }} py={{ base: 0.5, md: 1 }} fontSize={{ base: '2xs', md: 'xs' }} borderRadius="full" fontWeight="600">
+            <Badge display={{ base: 'none', md: 'inline-flex' }} colorScheme="gray" variant="subtle" px={{ base: 2, md: 2.5 }} py={{ base: 0.5, md: 1 }} fontSize={{ base: '2xs', md: 'xs' }} borderRadius="full" fontWeight="600">
               Listed {listedDate}
             </Badge>
           )}

@@ -97,10 +97,20 @@ func publishToUser(userID int, evt sseEvent) {
 // Helper to publish notification event
 func publishNotification(userID int, message string, notificationType ...string) {
 	data := fiber.Map{"message": message}
+	notifType := ""
 	if len(notificationType) > 0 && notificationType[0] != "" {
-		data["notification_type"] = notificationType[0]
+		notifType = notificationType[0]
+		data["notification_type"] = notifType
 	}
 	publishToUser(userID, sseEvent{Type: "notification", Data: data})
+	switch notifType {
+	case "trade_offer":
+		sendPushToUser(userID, "New trade offer", message, "/offers", notifType)
+	case "trade_update":
+		sendPushToUser(userID, "Trade update", message, "/trades", notifType)
+	case "trade_loop":
+		sendPushToUser(userID, "Multiway trade update", message, "/dashboard?tab=2", notifType)
+	}
 }
 
 // EnsureConversation creates or returns an existing conversation
@@ -147,6 +157,9 @@ func (h *ChatHandler) SendMessage(c *fiber.Ctx) error {
 	}}
 	for _, pid := range participants {
 		publishToUser(pid, evt)
+		if pid != userID {
+			sendPushToUser(pid, "New chat message", p.Content, "/trades", "chat_message")
+		}
 	}
 	return c.JSON(models.APIResponse{Success: true})
 }

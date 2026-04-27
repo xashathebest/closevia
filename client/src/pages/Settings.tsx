@@ -66,6 +66,15 @@ import {
   NotificationPreferences,
   parseNotificationPreferences,
 } from '../utils/notificationPreferences'
+import { isRunningStandalone } from '../serviceWorkerRegistration'
+import {
+  getCurrentPushSubscription,
+  getPushPermissionState,
+  isIosBrowser,
+  isPushSupported,
+  subscribeToPushNotifications,
+  unsubscribeFromPushNotifications,
+} from '../services/pushNotifications'
 import VerifiedAvatar from '../components/VerifiedAvatar'
 import FloatingTab from '../components/FloatingTab'
 import {
@@ -251,6 +260,11 @@ const SettingsPage: React.FC = () => {
   const [notificationPreferences, setNotificationPreferences] = useState<NotificationPreferences>(() =>
     parseNotificationPreferences((user as any)?.notification_preferences)
   )
+  const [pushPermission, setPushPermission] = useState<NotificationPermission | 'unsupported'>(() => getPushPermissionState())
+  const [pushSubscriptionActive, setPushSubscriptionActive] = useState(false)
+  const [pushBusy, setPushBusy] = useState(false)
+  const [pushStatusText, setPushStatusText] = useState('')
+  const isIosPushContext = useMemo(() => isIosBrowser() && !isRunningStandalone(), [])
   // School ID / COR verification state
   const [verificationStatus, setVerificationStatus] = useState<'not_verified' | 'pending' | 'verified' | 'rejected'>('not_verified')
   const [schoolName, setSchoolName] = useState<string>('')
@@ -341,6 +355,62 @@ const SettingsPage: React.FC = () => {
       [key]: key === 'account_security' ? true : enabled,
     }))
     markFieldDirty('notificationPreferences')
+  }
+
+  useEffect(() => {
+    let cancelled = false
+    const syncPushStatus = async () => {
+      setPushPermission(getPushPermissionState())
+      try {
+        const subscription = await getCurrentPushSubscription()
+        if (!cancelled) setPushSubscriptionActive(Boolean(subscription))
+      } catch {
+        if (!cancelled) setPushSubscriptionActive(false)
+      }
+    }
+    syncPushStatus()
+    return () => {
+      cancelled = true
+    }
+  }, [user?.id])
+
+  const handlePushNotificationsToggle = async (enabled: boolean) => {
+    setPushBusy(true)
+    setPushStatusText('')
+    try {
+      if (enabled) {
+        const result = await subscribeToPushNotifications()
+        setPushPermission(getPushPermissionState())
+        if (!result.ok) {
+          const message = result.reason === 'denied'
+            ? 'Notifications are blocked in this browser. Enable them in browser settings first.'
+            : result.reason === 'not_configured'
+              ? 'Push notifications are not configured on the server yet.'
+              : result.reason === 'unsupported'
+                ? 'This browser does not support web push notifications.'
+                : 'Push notifications could not be enabled right now.'
+          setPushStatusText(message)
+          toast({ title: 'Push notifications not enabled', description: message, status: 'warning', duration: 5000, isClosable: true })
+          return
+        }
+        setPushNotifications(true)
+        setPushSubscriptionActive(true)
+        markFieldDirty('pushNotifications')
+        setPushStatusText('Device notifications are enabled on this browser.')
+        toast({ title: 'Notifications enabled', description: 'CloviaPH can now send important alerts to this device.', status: 'success', duration: 3500, isClosable: true })
+      } else {
+        await unsubscribeFromPushNotifications()
+        setPushNotifications(false)
+        setPushSubscriptionActive(false)
+        markFieldDirty('pushNotifications')
+        setPushStatusText('Device notifications are off for this browser.')
+      }
+    } catch {
+      setPushStatusText('Push notifications could not be updated right now.')
+      toast({ title: 'Push notification error', description: 'Please try again in a moment.', status: 'error', duration: 4500, isClosable: true })
+    } finally {
+      setPushBusy(false)
+    }
   }
 
   const resetEditableStateFromUser = (nextUser: any, force = false) => {
@@ -2203,7 +2273,7 @@ const SettingsPage: React.FC = () => {
                         <SimpleGrid columns={{ base: 1, md: 2 }} spacing={4}>
                           <Flex
                             justify="space-between"
-                            align="center"
+                            align="flex-start"
                             gap={4}
                             p={4}
                             borderWidth="1px"
@@ -2251,18 +2321,38 @@ const SettingsPage: React.FC = () => {
                                 </HStack>
                               </FormLabel>
                               <Text fontSize="sm" color={useColorModeValue('gray.500', 'gray.400')}>
-                                Receive in-app and browser notices for education-related activity.
+                                Receive device alerts for offers, chats, schedule changes, and trade updates.
                               </Text>
+                              <HStack spacing={2} mt={2} flexWrap="wrap">
+                                <Badge colorScheme={pushSubscriptionActive ? 'green' : 'gray'} variant="subtle" borderRadius="full">
+                                  {pushSubscriptionActive ? 'Subscribed' : 'Not subscribed'}
+                                </Badge>
+                                <Badge colorScheme={pushPermission === 'granted' ? 'green' : pushPermission === 'denied' ? 'red' : 'gray'} variant="subtle" borderRadius="full">
+                                  {pushPermission === 'unsupported' ? 'Unsupported' : `Permission: ${pushPermission}`}
+                                </Badge>
+                              </HStack>
+                              {isIosPushContext && (
+                                <Text fontSize="xs" color={mutedTextColor} mt={2}>
+                                  Install CloviaPH to enable notifications on iPhone.
+                                </Text>
+                              )}
+                              {pushStatusText && (
+                                <Text fontSize="xs" color={pushSubscriptionActive ? 'green.600' : mutedTextColor} mt={2}>
+                                  {pushStatusText}
+                                </Text>
+                              )}
                             </Box>
-                            <Switch
-                              isChecked={pushNotifications}
-                              onChange={(e) => {
-                                setPushNotifications(e.target.checked)
-                                markFieldDirty('pushNotifications')
-                              }}
-                              colorScheme="brand"
-                              size="lg"
-                            />
+                            <HStack spacing={2} flexShrink={0} pt={1}>
+                              {pushBusy && <Spinner size="sm" color="brand.500" />}
+                              <Switch
+                                aria-label="Enable push notifications"
+                                isChecked={pushNotifications}
+                                isDisabled={pushBusy || !isPushSupported()}
+                                onChange={(e) => handlePushNotificationsToggle(e.target.checked)}
+                                colorScheme="brand"
+                                size="lg"
+                              />
+                            </HStack>
                           </Flex>
                         </SimpleGrid>
                       </VStack>

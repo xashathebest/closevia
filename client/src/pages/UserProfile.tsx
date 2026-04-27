@@ -124,6 +124,7 @@ type SellerStats = {
   completed_trades?: number
   cancelled_trades?: number
   pending_trades?: number
+  successful_trades?: number
   avg_response_time?: string
   trust_score?: number
   trust_level?: 'trusted' | 'new' | 'risky'
@@ -717,15 +718,16 @@ const UserProfile: React.FC<UserProfileProps> = ({ userId }) => {
     const total = products.length
     const active = products.filter(p => p.status === 'available').length
     const completed = products.filter(p => p.status === 'sold' || p.status === 'traded').length
-    const rating = sellerStats?.avg_rating ?? user?.rating ?? 4.6
+    const rating = sellerStats?.avg_rating ?? user?.rating ?? 0
     const tradesCompleted = sellerStats?.completed_trades ?? completed
-    const avgResponse = sellerStats?.avg_response_time ?? `${user?.response_time_minutes || 30} min`
+    const avgResponse = sellerStats?.avg_response_time ?? 'Not enough data'
     return { total, active, completed: tradesCompleted, rating, avgResponse }
   }, [products, user, sellerStats])
 
-  const displayRating = sellerStats?.avg_rating ?? user?.rating ?? 4.8
-  const displayTotalReviews = reviews.length || sellerStats?.total_feedback || user?.total_reviews || 0
-  const displayPositivePercent = sellerStats?.positive_percent ?? user?.positive_feedback ?? 98
+  const displayRating = sellerStats?.avg_rating ?? user?.rating ?? 0
+  const displayTotalReviews = sellerStats?.total_feedback ?? user?.total_reviews ?? reviews.length ?? 0
+  const displayPositivePercent = sellerStats?.positive_percent ?? user?.positive_feedback
+  const displayPositivePercentValue = typeof displayPositivePercent === 'number' ? displayPositivePercent : 0
 
   // Fetch real trade history from backend for this specific user
   const [userTrades, setUserTrades] = useState<any[]>([])
@@ -1263,7 +1265,7 @@ const UserProfile: React.FC<UserProfileProps> = ({ userId }) => {
                     <Text fontWeight="semibold" color="gray.800">{displayRating.toFixed(1)}</Text>
                     <Text color="gray.500">({displayTotalReviews} reviews)</Text>
                     <Text color="gray.300">•</Text>
-                    <Text fontWeight="semibold" color="green.500">Positive: {Math.round(displayPositivePercent)}%</Text>
+                    <Text fontWeight="semibold" color="green.500">Positive: {Math.round(displayPositivePercentValue)}%</Text>
                     <Text color="gray.800">({stats.completed} trades)</Text>
                   </>
                 )}
@@ -1367,10 +1369,10 @@ const UserProfile: React.FC<UserProfileProps> = ({ userId }) => {
                     conductSummary={sellerStats.conduct_summary}
                     isVerified={user.verification_status === 'verified' || user.verified}
                     listingCount={stats.total}
-                    tradeCount={sellerStats.completed_trades ?? sellerStats.total_trades}
+                    tradeCount={sellerStats.total_trades ?? sellerStats.completed_trades}
                     positivePercent={sellerStats.positive_percent}
                     tradeStats={{
-                      successful: sellerStats.completed_trades ?? 0,
+                      successful: sellerStats.successful_trades ?? sellerStats.completed_trades ?? 0,
                       cancelled: sellerStats.cancelled_trades ?? 0,
                       pending: sellerStats.pending_trades ?? 0,
                     }}
@@ -1690,7 +1692,7 @@ const UserProfile: React.FC<UserProfileProps> = ({ userId }) => {
                             </Text>
                           </HStack>
                           <Text color="green.600" fontSize="sm">
-                            {Math.round(displayPositivePercent)}% positive feedback
+                            {Math.round(displayPositivePercentValue)}% positive feedback
                           </Text>
                         </>
                       )}

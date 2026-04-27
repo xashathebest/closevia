@@ -880,6 +880,7 @@ type SellerStats struct {
 	ResponseMetric     string              `json:"response_metric,omitempty"`   // "excellent", "good", etc.
 	MemberSinceYear    int                 `json:"member_since_year,omitempty"` // Year user joined
 	CompletedTrades    int                 `json:"completed_trades,omitempty"`
+	SuccessfulTrades   int                 `json:"successful_trades,omitempty"`
 	CancelledTrades    int                 `json:"cancelled_trades,omitempty"`
 	PendingTrades      int                 `json:"pending_trades,omitempty"`
 	TrustScore         int                 `json:"trust_score"`               // 0-100 calculated trust score

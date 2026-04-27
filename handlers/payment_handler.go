@@ -26,6 +26,7 @@ type PaymentHandler struct {
 }
 
 const paymentProviderUnavailableMessage = "Online payments are temporarily unavailable. Please try again later."
+const xenditWebhookTokenHeader = "X-CALLBACK-TOKEN"
 
 func NewPaymentHandler(db *sql.DB) *PaymentHandler {
 	return &PaymentHandler{db: db}
@@ -45,6 +46,65 @@ func getAppSettingFloat(db *sql.DB, key string, def float64) float64 {
 
 func almostEqualMoney(a, b float64) bool {
 	return math.Abs(a-b) < 0.009
+}
+
+func isSuccessfulXenditPaymentStatus(status string) bool {
+	switch strings.ToUpper(strings.TrimSpace(status)) {
+	case "PAID", "SETTLED", "COMPLETED", "SUCCEEDED":
+		return true
+	default:
+		return false
+	}
+}
+
+func isTerminalFailedXenditStatus(status string) bool {
+	switch strings.ToUpper(strings.TrimSpace(status)) {
+	case "EXPIRED", "FAILED", "CANCELLED", "CANCELED", "VOIDED":
+		return true
+	default:
+		return false
+	}
+}
+
+func validateXenditWebhookToken(c *fiber.Ctx) bool {
+	expected := strings.TrimSpace(os.Getenv("XENDIT_WEBHOOK_TOKEN"))
+	if expected == "" {
+		// Keep local/dev compatible, but production must configure this env var.
+		return os.Getenv("APP_ENV") != "production"
+	}
+	return strings.TrimSpace(c.Get(xenditWebhookTokenHeader)) == expected
+}
+
+func getXenditSecretKey() (string, error) {
+	apiKey := strings.TrimSpace(os.Getenv("XENDIT_SECRET_KEY"))
+	if apiKey == "" {
+		return "", fmt.Errorf("missing XENDIT_SECRET_KEY")
+	}
+	if os.Getenv("APP_ENV") == "production" && strings.HasPrefix(apiKey, "xnd_test_") {
+		return "", fmt.Errorf("production is configured with a Xendit test secret key")
+	}
+	return apiKey, nil
+}
+
+func (h *PaymentHandler) recordEarningOnceTx(tx *sql.Tx, userID int, amount float64, sourceType string, sourceID int, externalID string) (bool, error) {
+	if strings.TrimSpace(externalID) == "" {
+		return false, fmt.Errorf("missing external_id")
+	}
+	var existing int
+	if err := tx.QueryRow("SELECT id FROM earnings WHERE source_type = ? AND external_id = ? LIMIT 1 FOR UPDATE", sourceType, externalID).Scan(&existing); err == nil && existing > 0 {
+		return false, nil
+	} else if err != nil && err != sql.ErrNoRows {
+		return false, err
+	}
+	res, err := tx.Exec(
+		"INSERT INTO earnings (user_id, amount, source_type, source_id, external_id) VALUES (?, ?, ?, ?, ?)",
+		userID, amount, sourceType, sourceID, externalID,
+	)
+	if err != nil {
+		return false, err
+	}
+	rows, _ := res.RowsAffected()
+	return rows > 0, nil
 }
 
 type paymentPremiumPlan struct {
@@ -310,6 +370,53 @@ func getBoostDurationHoursForTier(db *sql.DB, tier string) int {
 	return getCapInt(defaultPlan.Capabilities, "boost_duration_hours", 0)
 }
 
+func (h *PaymentHandler) applyUserPremiumPayment(userID int, tier, plan string, amount float64, externalID string) (time.Time, bool, error) {
+	tx, err := h.db.Begin()
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	var currentExpiry sql.NullTime
+	if err = tx.QueryRow("SELECT premium_expires_at FROM users WHERE id = ? FOR UPDATE", userID).Scan(&currentExpiry); err != nil {
+		return time.Time{}, false, err
+	}
+
+	var existing int
+	if scanErr := tx.QueryRow("SELECT id FROM earnings WHERE source_type = 'premium_upgrade' AND external_id = ? LIMIT 1 FOR UPDATE", externalID).Scan(&existing); scanErr == nil && existing > 0 {
+		if currentExpiry.Valid {
+			_ = tx.Commit()
+			return currentExpiry.Time, false, nil
+		}
+		_ = tx.Commit()
+		return time.Now(), false, nil
+	} else if scanErr != nil && scanErr != sql.ErrNoRows {
+		err = scanErr
+		return time.Time{}, false, err
+	}
+
+	start := time.Now()
+	if currentExpiry.Valid && currentExpiry.Time.After(start) {
+		start = currentExpiry.Time
+	}
+	newExpiry := start.AddDate(0, 0, getPremiumPlanDurationDays(h.db, tier, plan))
+
+	if _, err = tx.Exec("UPDATE users SET is_premium = true, premium_tier = ?, verified = true, premium_expires_at = ? WHERE id = ?", tier, newExpiry, userID); err != nil {
+		return time.Time{}, false, err
+	}
+	if _, err = h.recordEarningOnceTx(tx, userID, amount, "premium_upgrade", userID, externalID); err != nil {
+		return time.Time{}, false, err
+	}
+	if err = tx.Commit(); err != nil {
+		return time.Time{}, false, err
+	}
+	return newExpiry, true, nil
+}
+
 func parseRemittanceExternalID(externalID string) (paymentID int, riderID int, ok bool) {
 	// Expected: remittance_<paymentID>_<riderID>_<unix>
 	parts := strings.Split(externalID, "_")
@@ -437,9 +544,9 @@ func (h *PaymentHandler) CreateRemittanceInvoice(c *fiber.Ctx) error {
 	var name, email string
 	_ = h.db.QueryRow("SELECT COALESCE(name, ''), COALESCE(email, '') FROM users WHERE id = ?", userID).Scan(&name, &email)
 
-	apiKey := os.Getenv("XENDIT_SECRET_KEY")
-	if apiKey == "" {
-		log.Println("Payment provider unavailable: missing XENDIT_SECRET_KEY")
+	apiKey, keyErr := getXenditSecretKey()
+	if keyErr != nil {
+		log.Printf("Payment provider unavailable: %v", keyErr)
 		return c.Status(503).JSON(models.APIResponse{Success: false, Error: paymentProviderUnavailableMessage})
 	}
 	xenditClient := xendit.NewClient(apiKey)
@@ -554,11 +661,11 @@ func (h *PaymentHandler) CreateTradeInvoice(c *fiber.Ctx) error {
 		&trade.ID, &buyerID, &sellerID, &status, &offeredCashAmount, &deliveryType, &targetProductID,
 	)
 
-	fmt.Printf("🔍 Payment Debug: TradeID=%s, UserID=%d, BuyerID=%d, SellerID=%d, DeliveryType=%s\n",
+	fmt.Printf("Payment Debug: TradeID=%s, UserID=%d, BuyerID=%d, SellerID=%d, DeliveryType=%s\n",
 		tradeID, userID, buyerID, sellerID, deliveryType.String)
 
 	if err != nil {
-		fmt.Printf("❌ Payment Error (Fetch): %v\n", err)
+		fmt.Printf("Payment Error (Fetch): %v\n", err)
 		return c.Status(404).JSON(models.APIResponse{
 			Success: false,
 			Error:   "Trade not found",
@@ -567,7 +674,7 @@ func (h *PaymentHandler) CreateTradeInvoice(c *fiber.Ctx) error {
 
 	// Only Buyer can pay
 	if userID != buyerID {
-		fmt.Printf("🚫 Payment Forbidden: UserID %d is not BuyerID %d\n", userID, buyerID)
+		fmt.Printf("Payment Forbidden: UserID %d is not BuyerID %d\n", userID, buyerID)
 		return c.Status(403).JSON(models.APIResponse{
 			Success: false,
 			Error:   "Only the buyer can initiate payment",
@@ -576,7 +683,7 @@ func (h *PaymentHandler) CreateTradeInvoice(c *fiber.Ctx) error {
 
 	// Trade must be active or accepted
 	if status != "accepted" && status != "active" && status != "pending" {
-		fmt.Printf("🚫 Payment Rejected: Trade status is '%s' (expected 'accepted', 'active', or 'pending')\n", status)
+		fmt.Printf("Payment Rejected: Trade status is '%s' (expected 'accepted', 'active', or 'pending')\n", status)
 		return c.Status(400).JSON(models.APIResponse{
 			Success: false,
 			Error:   fmt.Sprintf("Trade is not in a payable state (current status: %s)", status),
@@ -598,7 +705,7 @@ func (h *PaymentHandler) CreateTradeInvoice(c *fiber.Ctx) error {
 		var productPrice float64
 		h.db.QueryRow("SELECT COALESCE(price, 0) FROM products WHERE id = ?", targetProductID).Scan(&productPrice)
 		amount += productPrice
-		fmt.Printf("🛒 Purchase detected (0 items offered). Added product price: %.2f\n", productPrice)
+		fmt.Printf("Purchase detected (0 items offered). Added product price: %.2f\n", productPrice)
 	}
 
 	// 3. Delivery Fee (Express is a Premium feature)
@@ -623,10 +730,10 @@ func (h *PaymentHandler) CreateTradeInvoice(c *fiber.Ctx) error {
 		}
 	}
 	amount += deliveryFee
-	fmt.Printf("🚚 Delivery fee for '%s': %.2f. Total Amount: %.2f\n", deliveryType.String, deliveryFee, amount)
+	fmt.Printf("Delivery fee for '%s': %.2f. Total Amount: %.2f\n", deliveryType.String, deliveryFee, amount)
 
 	if amount <= 0 {
-		fmt.Printf("🚫 Payment Rejected: Calculated amount is %.2f\n", amount)
+		fmt.Printf("Payment Rejected: Calculated amount is %.2f\n", amount)
 		return c.Status(400).JSON(models.APIResponse{
 			Success: false,
 			Error:   fmt.Sprintf("This trade does not require a cash payment (amount: %.2f)", amount),
@@ -638,9 +745,9 @@ func (h *PaymentHandler) CreateTradeInvoice(c *fiber.Ctx) error {
 	h.db.QueryRow("SELECT name, email FROM users WHERE id = ?", buyerID).Scan(&buyerName, &buyerEmail)
 
 	// Initialize Xendit Client
-	apiKey := os.Getenv("XENDIT_SECRET_KEY")
-	if apiKey == "" {
-		log.Println("Payment provider unavailable: missing XENDIT_SECRET_KEY")
+	apiKey, keyErr := getXenditSecretKey()
+	if keyErr != nil {
+		log.Printf("Payment provider unavailable: %v", keyErr)
 		return c.Status(503).JSON(models.APIResponse{
 			Success: false,
 			Error:   paymentProviderUnavailableMessage,
@@ -762,9 +869,9 @@ func (h *PaymentHandler) CreatePremiumInvoice(c *fiber.Ctx) error {
 	var buyerName, buyerEmail string
 	h.db.QueryRow("SELECT name, email FROM users WHERE id = ?", userID).Scan(&buyerName, &buyerEmail)
 
-	apiKey := os.Getenv("XENDIT_SECRET_KEY")
-	if apiKey == "" {
-		log.Println("Payment provider unavailable: missing XENDIT_SECRET_KEY")
+	apiKey, keyErr := getXenditSecretKey()
+	if keyErr != nil {
+		log.Printf("Payment provider unavailable: %v", keyErr)
 		return c.Status(503).JSON(models.APIResponse{Success: false, Error: paymentProviderUnavailableMessage})
 	}
 	xenditClient := xendit.NewClient(apiKey)
@@ -840,9 +947,9 @@ func (h *PaymentHandler) CreateBoostInvoice(c *fiber.Ctx) error {
 	var buyerName, buyerEmail string
 	h.db.QueryRow("SELECT name, email FROM users WHERE id = ?", userID).Scan(&buyerName, &buyerEmail)
 
-	apiKey := os.Getenv("XENDIT_SECRET_KEY")
-	if apiKey == "" {
-		log.Println("Payment provider unavailable: missing XENDIT_SECRET_KEY")
+	apiKey, keyErr := getXenditSecretKey()
+	if keyErr != nil {
+		log.Printf("Payment provider unavailable: %v", keyErr)
 		return c.Status(503).JSON(models.APIResponse{Success: false, Error: paymentProviderUnavailableMessage})
 	}
 	xenditClient := xendit.NewClient(apiKey)
@@ -923,12 +1030,12 @@ func (h *PaymentHandler) CreateUserPremiumInvoice(c *fiber.Ctx) error {
 		return c.Status(404).JSON(models.APIResponse{Success: false, Error: "User not found"})
 	}
 
-	// Check current premium status — allow Plus→Pro upgrades
+	// Check current premium status; allow Plus to Pro upgrades.
 	var isPremium bool
 	var currentTier string
 	h.db.QueryRow("SELECT COALESCE(is_premium, FALSE), COALESCE(premium_tier, 'free') FROM users WHERE id = ?", userID).Scan(&isPremium, &currentTier)
 	if isPremium && currentTier == "pro" {
-		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "You already have Pro — the highest tier"})
+		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "You already have Pro - the highest tier"})
 	}
 	if isPremium && currentTier == payload.Tier {
 		return c.Status(400).JSON(models.APIResponse{Success: false, Error: fmt.Sprintf("You are already a %s member", payload.Tier)})
@@ -957,9 +1064,9 @@ func (h *PaymentHandler) CreateUserPremiumInvoice(c *fiber.Ctx) error {
 	}
 	description := fmt.Sprintf("Clovia %s Subscription", selected.Name)
 
-	apiKey := os.Getenv("XENDIT_SECRET_KEY")
-	if apiKey == "" {
-		log.Println("Payment provider unavailable: missing XENDIT_SECRET_KEY")
+	apiKey, keyErr := getXenditSecretKey()
+	if keyErr != nil {
+		log.Printf("Payment provider unavailable: %v", keyErr)
 		return c.Status(503).JSON(models.APIResponse{Success: false, Error: paymentProviderUnavailableMessage})
 	}
 	xenditClient := xendit.NewClient(apiKey)
@@ -1145,9 +1252,9 @@ func (h *PaymentHandler) SyncUserPremiumPayment(c *fiber.Ctx) error {
 		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "Missing external_id"})
 	}
 
-	apiKey := os.Getenv("XENDIT_SECRET_KEY")
-	if apiKey == "" {
-		log.Println("Payment provider unavailable: missing XENDIT_SECRET_KEY")
+	apiKey, keyErr := getXenditSecretKey()
+	if keyErr != nil {
+		log.Printf("Payment provider unavailable: %v", keyErr)
 		return c.Status(503).JSON(models.APIResponse{Success: false, Error: paymentProviderUnavailableMessage})
 	}
 	status, amount, resolvedExternalID, err := fetchXenditInvoiceByExternalID(apiKey, payload.ExternalID)
@@ -1160,7 +1267,7 @@ func (h *PaymentHandler) SyncUserPremiumPayment(c *fiber.Ctx) error {
 	}
 
 	status = strings.ToUpper(status)
-	if status != "PAID" && status != "COMPLETED" && status != "SUCCEEDED" {
+	if !isSuccessfulXenditPaymentStatus(status) {
 		return c.JSON(models.APIResponse{Success: true, Data: fiber.Map{"paid": false, "status": status, "external_id": resolvedExternalID}})
 	}
 
@@ -1189,26 +1296,10 @@ func (h *PaymentHandler) SyncUserPremiumPayment(c *fiber.Ctx) error {
 		return c.Status(403).JSON(models.APIResponse{Success: false, Error: "Unauthorized to sync this payment"})
 	}
 
-	var currentExpiry sql.NullTime
-	_ = h.db.QueryRow("SELECT premium_expires_at FROM users WHERE id = ?", userID).Scan(&currentExpiry)
-	start := time.Now()
-	if currentExpiry.Valid && currentExpiry.Time.After(start) {
-		start = currentExpiry.Time
-	}
-	newExpiry := start.AddDate(0, 0, getPremiumPlanDurationDays(h.db, tier, plan))
-
-	_, err = h.db.Exec("UPDATE users SET is_premium = true, premium_tier = ?, verified = true, premium_expires_at = ? WHERE id = ?", tier, newExpiry, userID)
+	newExpiry, applied, err := h.applyUserPremiumPayment(userID, tier, plan, amount, resolvedExternalID)
 	if err != nil {
 		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to update subscription"})
 	}
-
-	_, _ = h.db.Exec(`
-		INSERT INTO earnings (user_id, amount, source_type, source_id, external_id)
-		SELECT ?, ?, 'premium_upgrade', ?, ?
-		WHERE NOT EXISTS (
-			SELECT 1 FROM earnings WHERE source_type = 'premium_upgrade' AND external_id = ?
-		)
-	`, userID, amount, userID, resolvedExternalID, resolvedExternalID)
 
 	return c.JSON(models.APIResponse{Success: true, Data: fiber.Map{
 		"paid":        true,
@@ -1216,6 +1307,7 @@ func (h *PaymentHandler) SyncUserPremiumPayment(c *fiber.Ctx) error {
 		"external_id": resolvedExternalID,
 		"tier":        tier,
 		"end_date":    newExpiry.Format("2006-01-02 15:04:05"),
+		"applied":     applied,
 	}})
 }
 
@@ -1264,9 +1356,9 @@ func (h *PaymentHandler) SyncTradePayment(c *fiber.Ctx) error {
 		return c.JSON(models.APIResponse{Success: true, Data: fiber.Map{"paid": true}})
 	}
 
-	apiKey := os.Getenv("XENDIT_SECRET_KEY")
-	if apiKey == "" {
-		log.Println("Payment provider unavailable: missing XENDIT_SECRET_KEY")
+	apiKey, keyErr := getXenditSecretKey()
+	if keyErr != nil {
+		log.Printf("Payment provider unavailable: %v", keyErr)
 		return c.Status(503).JSON(models.APIResponse{Success: false, Error: paymentProviderUnavailableMessage})
 	}
 
@@ -1306,8 +1398,7 @@ func (h *PaymentHandler) SyncTradePayment(c *fiber.Ctx) error {
 		xExternalID = payload.ExternalID
 	}
 
-	paid := status == "PAID" || status == "SETTLED" || status == "COMPLETED" || status == "SUCCEEDED"
-	if !paid {
+	if !isSuccessfulXenditPaymentStatus(status) {
 		return c.JSON(models.APIResponse{Success: true, Data: fiber.Map{"paid": false, "status": status}})
 	}
 
@@ -1346,9 +1437,9 @@ func (h *PaymentHandler) SyncRemittancePayment(c *fiber.Ctx) error {
 		return c.Status(404).JSON(models.APIResponse{Success: false, Error: "Rider not found"})
 	}
 
-	apiKey := os.Getenv("XENDIT_SECRET_KEY")
-	if apiKey == "" {
-		log.Println("Payment provider unavailable: missing XENDIT_SECRET_KEY")
+	apiKey, keyErr := getXenditSecretKey()
+	if keyErr != nil {
+		log.Printf("Payment provider unavailable: %v", keyErr)
 		return c.Status(503).JSON(models.APIResponse{Success: false, Error: paymentProviderUnavailableMessage})
 	}
 
@@ -1377,8 +1468,7 @@ func (h *PaymentHandler) SyncRemittancePayment(c *fiber.Ctx) error {
 		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to sync payment"})
 	}
 
-	paid := status == "PAID" || status == "SETTLED" || status == "COMPLETED" || status == "SUCCEEDED"
-	if !paid {
+	if !isSuccessfulXenditPaymentStatus(status) {
 		return c.JSON(models.APIResponse{Success: true, Data: fiber.Map{"paid": false, "status": status}})
 	}
 
@@ -1390,29 +1480,32 @@ func (h *PaymentHandler) SyncRemittancePayment(c *fiber.Ctx) error {
 	return c.JSON(models.APIResponse{Success: true, Data: fiber.Map{"paid": true, "status": status, "external_id": payload.ExternalID}})
 }
 
-// XenditWebhook handles asynchronous payment confirmations
+// XenditWebhook handles asynchronous payment confirmations.
 func (h *PaymentHandler) XenditWebhook(c *fiber.Ctx) error {
+	if !validateXenditWebhookToken(c) {
+		log.Printf("Webhook rejected: invalid or missing %s", xenditWebhookTokenHeader)
+		return c.SendStatus(401)
+	}
+
 	var payload map[string]interface{}
 	if err := c.BodyParser(&payload); err != nil {
-		log.Printf("❌ Webhook Error: Invalid payload: %v", err)
+		log.Printf("Webhook Error: invalid payload: %v", err)
 		return c.Status(400).SendString("Invalid payload")
 	}
 
 	var status, externalID string
 	var amount float64
 
-	// Try top-level structure (Invoices)
 	if s, ok := payload["status"].(string); ok {
 		status = s
 	}
 	if e, ok := payload["external_id"].(string); ok {
 		externalID = e
 	}
-	if a, ok := payload["amount"].(float64); ok {
+	if a, ok := toFloat64(payload["amount"]); ok {
 		amount = a
 	}
 
-	// Try nested structure (Recurring/Subscriptions)
 	if data, ok := payload["data"].(map[string]interface{}); ok {
 		if s, ok := data["status"].(string); ok {
 			status = s
@@ -1420,136 +1513,159 @@ func (h *PaymentHandler) XenditWebhook(c *fiber.Ctx) error {
 		if e, ok := data["external_id"].(string); ok {
 			externalID = e
 		}
-		if a, ok := data["amount"].(float64); ok {
+		if a, ok := toFloat64(data["amount"]); ok {
 			amount = a
 		}
 	}
 
-	status = strings.ToUpper(status)
-	log.Printf("🔔 Webhook Received: Status=%s, ExternalID=%s, Amount=%.2f", status, externalID, amount)
+	status = strings.ToUpper(strings.TrimSpace(status))
+	externalID = strings.TrimSpace(externalID)
+	log.Printf("Webhook Received: Status=%s, ExternalID=%s, Amount=%.2f", status, externalID, amount)
 
-	// Xendit uses "PAID" for invoices, but other methods might use "COMPLETED" or "SUCCEEDED"
-	if status != "PAID" && status != "COMPLETED" && status != "SUCCEEDED" {
-		log.Printf("⏭️  Webhook: Ignoring non-success status: %s", status)
+	if externalID == "" {
+		log.Printf("Webhook ignored: missing external_id")
 		return c.SendStatus(200)
 	}
 
-	if strings.HasPrefix(externalID, "trade_") {
+	if isTerminalFailedXenditStatus(status) {
+		if strings.HasPrefix(externalID, "remittance_") {
+			if paymentID, riderID, ok := parseRemittanceExternalID(externalID); ok {
+				_, _ = h.db.Exec("UPDATE rider_remittance_payments SET status = 'rejected' WHERE id = ? AND rider_id = ? AND status = 'pending'", paymentID, riderID)
+			}
+		}
+		log.Printf("Webhook ignored terminal non-success status: %s", status)
+		return c.SendStatus(200)
+	}
+
+	if !isSuccessfulXenditPaymentStatus(status) {
+		log.Printf("Webhook ignored non-success status: %s", status)
+		return c.SendStatus(200)
+	}
+
+	switch {
+	case strings.HasPrefix(externalID, "trade_"):
 		var tradeID int
 		fmt.Sscanf(externalID, "trade_%d", &tradeID)
-
-		if tradeID > 0 {
-			// Get buyer ID for earnings record
-			var buyerID int
-			h.db.QueryRow("SELECT buyer_id FROM trades WHERE id = ?", tradeID).Scan(&buyerID)
-
-			// Update trade
-			_, err := h.db.Exec("UPDATE trades SET payment_confirmed = true, payment_method = 'online', net_amount = ?, xendit_external_id = ? WHERE id = ?", amount, externalID, tradeID)
-			if err != nil {
-				fmt.Printf("Webhook Error: Failed to update trade %d: %v\n", tradeID, err)
-			}
-
-			// Record Earnings (guard against duplicates)
-			_, err = h.db.Exec(`
-				INSERT INTO earnings (user_id, amount, source_type, source_id, external_id)
-				SELECT ?, ?, 'trade_escrow', ?, ?
-				WHERE NOT EXISTS (
-					SELECT 1 FROM earnings WHERE source_type = 'trade_escrow' AND external_id = ?
-				)
-			`, buyerID, amount, tradeID, externalID, externalID)
-			if err != nil {
-				fmt.Printf("Earnings Error (Trade %d): %v\n", tradeID, err)
-			}
+		if tradeID <= 0 {
+			return c.SendStatus(200)
 		}
-	} else if strings.HasPrefix(externalID, "premium_") {
+
+		tx, err := h.db.Begin()
+		if err != nil {
+			log.Printf("Webhook Error: failed to begin trade tx %d: %v", tradeID, err)
+			return c.SendStatus(200)
+		}
+		var buyerID int
+		if err = tx.QueryRow("SELECT buyer_id FROM trades WHERE id = ? FOR UPDATE", tradeID).Scan(&buyerID); err != nil {
+			_ = tx.Rollback()
+			log.Printf("Webhook Error: trade not found %d: %v", tradeID, err)
+			return c.SendStatus(200)
+		}
+		if _, err = tx.Exec("UPDATE trades SET payment_confirmed = true, payment_method = 'online', net_amount = ?, xendit_external_id = ? WHERE id = ?", amount, externalID, tradeID); err != nil {
+			_ = tx.Rollback()
+			log.Printf("Webhook Error: failed to update trade %d: %v", tradeID, err)
+			return c.SendStatus(200)
+		}
+		if _, err = h.recordEarningOnceTx(tx, buyerID, amount, "trade_escrow", tradeID, externalID); err != nil {
+			_ = tx.Rollback()
+			log.Printf("Webhook Error: failed to record trade earning %d: %v", tradeID, err)
+			return c.SendStatus(200)
+		}
+		if err = tx.Commit(); err != nil {
+			log.Printf("Webhook Error: failed to commit trade tx %d: %v", tradeID, err)
+		}
+
+	case strings.HasPrefix(externalID, "premium_"):
 		var productID, userID int
 		fmt.Sscanf(externalID, "premium_%d_%d", &productID, &userID)
-
-		if productID > 0 {
-			// Update product to premium
-			_, err := h.db.Exec("UPDATE products SET premium = true WHERE id = ?", productID)
-			if err != nil {
-				fmt.Printf("Webhook Error: Premium upgrade failed for product %d: %v\n", productID, err)
-			}
-
-			// Record Earnings
-			_, err = h.db.Exec(`
-				INSERT INTO earnings (user_id, amount, source_type, source_id, external_id)
-				VALUES (?, ?, 'premium_upgrade', ?, ?)`,
-				userID, amount, productID, externalID)
+		if productID <= 0 || userID <= 0 {
+			return c.SendStatus(200)
 		}
-	} else if strings.HasPrefix(externalID, "boost_") {
+		tx, err := h.db.Begin()
+		if err != nil {
+			log.Printf("Webhook Error: failed to begin product premium tx %d: %v", productID, err)
+			return c.SendStatus(200)
+		}
+		var lockedProductID int
+		if err = tx.QueryRow("SELECT id FROM products WHERE id = ? FOR UPDATE", productID).Scan(&lockedProductID); err != nil {
+			_ = tx.Rollback()
+			return c.SendStatus(200)
+		}
+		if _, err = tx.Exec("UPDATE products SET premium = true WHERE id = ?", productID); err != nil {
+			_ = tx.Rollback()
+			log.Printf("Webhook Error: premium product update failed %d: %v", productID, err)
+			return c.SendStatus(200)
+		}
+		if _, err = h.recordEarningOnceTx(tx, userID, amount, "premium_upgrade", productID, externalID); err != nil {
+			_ = tx.Rollback()
+			log.Printf("Webhook Error: premium earning insert failed %d: %v", productID, err)
+			return c.SendStatus(200)
+		}
+		if err = tx.Commit(); err != nil {
+			log.Printf("Webhook Error: failed to commit premium product tx %d: %v", productID, err)
+		}
+
+	case strings.HasPrefix(externalID, "boost_"):
 		var productID, userID int
 		fmt.Sscanf(externalID, "boost_%d_%d", &productID, &userID)
-
-		if productID > 0 {
-			// Update product boosted_at
-			_, err := h.db.Exec("UPDATE products SET boosted_at = NOW() WHERE id = ?", productID)
-			if err != nil {
-				fmt.Printf("Webhook Error: Boost failed for product %d: %v\n", productID, err)
-			}
-
-			// Record Earnings
-			_, err = h.db.Exec(`
-				INSERT INTO earnings (user_id, amount, source_type, source_id, external_id)
-				VALUES (?, ?, 'product_boost', ?, ?)`,
-				userID, amount, productID, externalID)
+		if productID <= 0 || userID <= 0 {
+			return c.SendStatus(200)
 		}
-	} else if strings.HasPrefix(externalID, "user_premium_") {
+		tx, err := h.db.Begin()
+		if err != nil {
+			log.Printf("Webhook Error: failed to begin boost tx %d: %v", productID, err)
+			return c.SendStatus(200)
+		}
+		var lockedProductID int
+		if err = tx.QueryRow("SELECT id FROM products WHERE id = ? FOR UPDATE", productID).Scan(&lockedProductID); err != nil {
+			_ = tx.Rollback()
+			return c.SendStatus(200)
+		}
+		if _, err = h.recordEarningOnceTx(tx, userID, amount, "product_boost", productID, externalID); err != nil {
+			_ = tx.Rollback()
+			log.Printf("Webhook Error: boost earning insert failed %d: %v", productID, err)
+			return c.SendStatus(200)
+		}
+		if _, err = tx.Exec("UPDATE products SET boosted_at = NOW() WHERE id = ?", productID); err != nil {
+			_ = tx.Rollback()
+			log.Printf("Webhook Error: boost update failed %d: %v", productID, err)
+			return c.SendStatus(200)
+		}
+		if err = tx.Commit(); err != nil {
+			log.Printf("Webhook Error: failed to commit boost tx %d: %v", productID, err)
+		}
+
+	case strings.HasPrefix(externalID, "user_premium_"):
 		var userID int
 		var tier string
 		plan := "monthly"
-		if strings.Count(externalID, "_") >= 4 {
-			// user_premium_<tier>_<plan>_<userID> e.g. user_premium_plus_monthly_123
-			parts := strings.Split(externalID, "_")
+		parts := strings.Split(externalID, "_")
+		if len(parts) >= 5 {
 			tier = parts[2]
 			plan = parts[3]
 			fmt.Sscanf(parts[len(parts)-1], "%d", &userID)
-		} else if strings.Count(externalID, "_") >= 3 {
-			// user_premium_<tier>_<userID> e.g. user_premium_plus_123
-			parts := strings.Split(externalID, "_")
+		} else if len(parts) >= 4 {
 			tier = parts[2]
 			fmt.Sscanf(parts[len(parts)-1], "%d", &userID)
 		} else {
-			// user_premium_<userID> (legacy support)
 			fmt.Sscanf(externalID, "user_premium_%d", &userID)
-			tier = "plus" // Default to plus for legacy
+			tier = "plus"
 		}
-
 		if userID > 0 {
-			// Extend subscription end date (stacking) based on plan
-			var currentExpiry sql.NullTime
-			_ = h.db.QueryRow("SELECT premium_expires_at FROM users WHERE id = ?", userID).Scan(&currentExpiry)
-			start := time.Now()
-			if currentExpiry.Valid && currentExpiry.Time.After(start) {
-				start = currentExpiry.Time
-			}
-			newExpiry := start.AddDate(0, 0, getPremiumPlanDurationDays(h.db, tier, plan))
-
-			// Update user status
-			log.Printf("💎 Webhook: Granting %s premium to user %d (Amount: %.2f)", tier, userID, amount)
-			_, err := h.db.Exec("UPDATE users SET is_premium = true, premium_tier = ?, verified = true, premium_expires_at = ? WHERE id = ?", tier, newExpiry, userID)
-			if err != nil {
-				log.Printf("❌ Webhook Error: User premium update failed for user %d: %v\n", userID, err)
-				fmt.Printf("Webhook Error: User premium update failed for user %d: %v\n", userID, err)
-			} else {
-				log.Printf("✅ Webhook SUCCESS: Updated user %d to premium tier %s\n", userID, tier)
-			}
-
-			// Record Earnings
-			_, err = h.db.Exec(`
-				INSERT INTO earnings (user_id, amount, source_type, source_id, external_id)
-				VALUES (?, ?, 'premium_upgrade', ?, ?)`,
-				userID, amount, userID, externalID)
-			if err != nil {
-				log.Printf("❌ Earnings Error (User %d): %v\n", userID, err)
-				fmt.Printf("Earnings Error (User %d): %v\n", userID, err)
+			if _, applied, err := h.applyUserPremiumPayment(userID, tier, plan, amount, externalID); err != nil {
+				log.Printf("Webhook Error: user premium update failed for user %d: %v", userID, err)
+			} else if !applied {
+				log.Printf("Webhook idempotent replay ignored for user premium external_id=%s", externalID)
 			}
 		}
-	} else if strings.HasPrefix(externalID, "remittance_") {
+
+	case strings.HasPrefix(externalID, "remittance_"):
 		if err := h.handleRemittancePaid(externalID, amount); err != nil {
 			log.Printf("Webhook Error: remittance apply failed for external_id=%s: %v", externalID, err)
 		}
+
+	default:
+		log.Printf("Webhook ignored: unsupported external_id prefix: %s", externalID)
 	}
 
 	return c.SendStatus(200)

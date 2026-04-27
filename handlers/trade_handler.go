@@ -2382,6 +2382,7 @@ func (h *TradeHandler) UpdateTrade(c *fiber.Ctx) error {
 				msgToDeclinedBuyer := fmt.Sprintf("Your offer for %s was cancelled because one of its products is now committed to another trade.", productTitle)
 				_, _ = h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)", otherBuyerID, msgToDeclinedBuyer)
 				publishToUser(otherBuyerID, sseEvent{Type: "trade_updated", Data: fiber.Map{"trade_id": otherID, "status": "cancelled_due_to_conflict"}})
+				sendPushToUser(otherBuyerID, "Trade update", msgToDeclinedBuyer, "/offers", "trade_update")
 			}
 
 			convID, _ := ensureConversation(pid, buyerID, sellerID)
@@ -2392,6 +2393,8 @@ func (h *TradeHandler) UpdateTrade(c *fiber.Ctx) error {
 				publishToUser(sellerID, sseEvent{Type: "trade_updated", Data: fiber.Map{"trade_id": tradeID, "status": "active"}})
 				_, _ = h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)", buyerID, "Your trade is now ongoing: "+productTitle)
 				_, _ = h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)", sellerID, "Your trade is now ongoing: "+productTitle)
+				sendPushToUser(buyerID, "Offer accepted", "Your trade is now ongoing: "+productTitle, "/trades", "offer_accepted")
+				sendPushToUser(sellerID, "Offer accepted", "Your trade is now ongoing: "+productTitle, "/trades", "offer_accepted")
 			} else {
 				_, _, _ = saveMessage(convID, userID, "Trade accepted. Waiting for the other participant to accept "+productTitle+".")
 				_, _ = h.db.Exec("INSERT INTO trade_events (trade_id, actor_id, from_status, to_status, note) VALUES (?, ?, ?, 'accepted_by_one', ?)", tradeID, userID, currentStatus, payload.Message)
@@ -2403,6 +2406,7 @@ func (h *TradeHandler) UpdateTrade(c *fiber.Ctx) error {
 				}
 				_, _ = h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)", otherUserID, "The other participant accepted this trade. Please accept to move it to ongoing: "+productTitle)
 				_, _ = h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)", userID, "Your acceptance was recorded. Waiting for the other participant: "+productTitle)
+				sendPushToUser(otherUserID, "Offer accepted", "The other participant accepted this trade. Please accept to move it to ongoing: "+productTitle, "/offers", "offer_accepted")
 			}
 
 			if finalized && tradeOptionState == "delivery" {
@@ -2609,6 +2613,7 @@ func (h *TradeHandler) UpdateTrade(c *fiber.Ctx) error {
 		}
 		_, _ = h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)", buyerID, "Your trade offer was declined: "+productTitle)
 		_, _ = h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)", sellerID, "You declined a trade offer: "+productTitle)
+		sendPushToUser(buyerID, "Offer declined", "Your trade offer was declined: "+productTitle, "/offers", "offer_rejected")
 		_, _ = h.db.Exec("INSERT INTO trade_events (trade_id, actor_id, from_status, to_status, note) VALUES (?, ?, ?, 'declined', ?)", tradeID, userID, currentStatus, payload.Message)
 
 		// Record rejection signal so hybrid matching can avoid poor fits and suggest better loops.
@@ -4731,6 +4736,11 @@ func (h *TradeHandler) SendTradeMessage(c *fiber.Ctx) error {
 	}}
 	publishToUser(buyerID, evt)
 	publishToUser(sellerID, evt)
+	recipientID := sellerID
+	if userID == sellerID {
+		recipientID = buyerID
+	}
+	sendPushToUser(recipientID, "New trade chat message", payload.Content, "/trades", "chat_message")
 	return c.Status(201).JSON(models.APIResponse{Success: true})
 }
 
@@ -4823,6 +4833,9 @@ func (h *TradeHandler) SendTradeLoopMessage(c *fiber.Ctx) error {
 			var participantID int
 			if err := participantRows.Scan(&participantID); err == nil {
 				publishToUser(participantID, evt)
+				if participantID != userID {
+					sendPushToUser(participantID, "New multiway trade message", payload.Content, "/dashboard?tab=2", "chat_message")
+				}
 			}
 		}
 	}
@@ -5359,6 +5372,8 @@ func (h *TradeHandler) CompleteTrade(c *fiber.Ctx) error {
 		// Add notifications
 		_, _ = h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)", buyerID, "Trade completed successfully!")
 		_, _ = h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)", sellerID, "Trade completed successfully!")
+		sendPushToUser(buyerID, "Trade completed", "Trade completed successfully!", "/trades", "trade_update")
+		sendPushToUser(sellerID, "Trade completed", "Trade completed successfully!", "/trades", "trade_update")
 
 		return c.JSON(models.APIResponse{Success: true, Message: "Trade completed successfully"})
 	}
@@ -5434,6 +5449,8 @@ func (h *TradeHandler) CompleteTrade(c *fiber.Ctx) error {
 		// Add notifications
 		_, _ = h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)", buyerID, "Trade completed successfully!")
 		_, _ = h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)", sellerID, "Trade completed successfully!")
+		sendPushToUser(buyerID, "Trade completed", "Trade completed successfully!", "/trades", "trade_update")
+		sendPushToUser(sellerID, "Trade completed", "Trade completed successfully!", "/trades", "trade_update")
 	}
 
 	return c.JSON(models.APIResponse{Success: true, Message: "Trade completion submitted successfully"})

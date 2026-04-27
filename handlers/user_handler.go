@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"math"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -2413,12 +2414,12 @@ func (h *UserHandler) GetSellerStats(c *fiber.Ctx) error {
 	}
 
 	// Count each trade row once and keep lifecycle buckets mutually exclusive.
-	// Total trades is the sum of completed, pending/ongoing, and cancelled/closed attempts.
+	// Total trades is the sum of successful, pending/ongoing, and cancelled/closed attempts.
 	err = h.db.QueryRow(`
 		SELECT
 			COUNT(DISTINCT CASE WHEN status IN ('completed', 'auto_completed') THEN id END) AS completed_trades,
 			COUNT(DISTINCT CASE WHEN status IN ('pending', 'pending_multiway', 'accepted', 'accepted_by_one', 'accepted_by_both', 'countered', 'active', 'ongoing', 'awaiting_confirmation', 'multiway_active') THEN id END) AS pending_trades,
-			COUNT(DISTINCT CASE WHEN status IN ('cancelled', 'cancelled_due_to_conflict', 'declined', 'rejected', 'expired', 'broken') THEN id END) AS cancelled_trades
+			COUNT(DISTINCT CASE WHEN status IN ('cancelled', 'canceled', 'cancelled_due_to_conflict', 'declined', 'rejected', 'expired', 'broken') THEN id END) AS cancelled_trades
 		FROM trades
 		WHERE seller_id = ? OR buyer_id = ?
 	`, userID, userID).Scan(&stats.CompletedTrades, &stats.PendingTrades, &stats.CancelledTrades)
@@ -2427,10 +2428,12 @@ func (h *UserHandler) GetSellerStats(c *fiber.Ctx) error {
 		stats.PendingTrades = 0
 		stats.CancelledTrades = 0
 	}
+	stats.SuccessfulTrades = stats.CompletedTrades
 	stats.TotalTrades = stats.CompletedTrades + stats.PendingTrades + stats.CancelledTrades
 
-	// Calculate average rating and positive feedback percentage from actual user
-	// reviews, including the newer post-trade review records.
+	// Calculate average rating and positive feedback percentage from post-trade
+	// reviews only. General profile reviews are intentionally excluded so the
+	// trust score reflects ratings tied to completed trades.
 	var avgRating sql.NullFloat64
 	var totalReviews sql.NullInt64
 	var positivePercent sql.NullFloat64
@@ -2441,22 +2444,46 @@ func (h *UserHandler) GetSellerStats(c *fiber.Ctx) error {
 			COUNT(*) AS total_reviews,
 			SUM(CASE WHEN rating >= 4 THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*), 0) AS positive_feedback
 		FROM (
-			SELECT r.rating
-			FROM reviews r
-			WHERE r.reviewed_user_id = ?
-
-			UNION ALL
-
 			SELECT tr.rating
 			FROM trade_reviews tr
 			JOIN trades t ON t.id = tr.trade_id
 			WHERE tr.is_followup = FALSE
-			  AND tr.reviewer_id <> ?
-			  AND t.status IN ('completed', 'auto_completed', 'history')
+			  AND COALESCE(tr.is_auto_generated, FALSE) = FALSE
+			  AND t.status IN ('completed', 'auto_completed')
 			  AND (
 				(tr.reviewer_id = t.buyer_id AND t.seller_id = ?)
 				OR
 				(tr.reviewer_id = t.seller_id AND t.buyer_id = ?)
+			  )
+
+			UNION ALL
+
+			SELECT t.buyer_rating AS rating
+			FROM trades t
+			WHERE t.seller_id = ?
+			  AND t.status IN ('completed', 'auto_completed')
+			  AND t.buyer_rating IS NOT NULL
+			  AND NOT EXISTS (
+				SELECT 1
+				FROM trade_reviews tr
+				WHERE tr.trade_id = t.id
+				  AND tr.reviewer_id = t.buyer_id
+				  AND tr.is_followup = FALSE
+			  )
+
+			UNION ALL
+
+			SELECT t.seller_rating AS rating
+			FROM trades t
+			WHERE t.buyer_id = ?
+			  AND t.status IN ('completed', 'auto_completed')
+			  AND t.seller_rating IS NOT NULL
+			  AND NOT EXISTS (
+				SELECT 1
+				FROM trade_reviews tr
+				WHERE tr.trade_id = t.id
+				  AND tr.reviewer_id = t.seller_id
+				  AND tr.is_followup = FALSE
 			  )
 		) user_reviews
 	`, userID, userID, userID, userID).Scan(&avgRating, &totalReviews, &positivePercent)
@@ -2582,7 +2609,9 @@ func (h *UserHandler) GetSellerStats(c *fiber.Ctx) error {
 	}
 	trustFactors = append(trustFactors, models.TrustFactor{Label: "Positive ratings", Status: ratingStatus, Points: ratingPoints, Max: 25})
 
-	// 4. No reports: 20 points
+	// 4. Clean record: 20 points. Reports and cancelled/failed trade attempts
+	// both reduce this score, so users with repeated cancellations cannot show
+	// a perfect clean record.
 	var reportCount int
 	err = h.db.QueryRow("SELECT COUNT(*) FROM reports WHERE reported_user_id = ? AND status IN ('reviewed', 'resolved')", userID).Scan(&reportCount)
 	if err != nil {
@@ -2590,16 +2619,21 @@ func (h *UserHandler) GetSellerStats(c *fiber.Ctx) error {
 	}
 	reportPoints := 20
 	reportStatus := "pass"
+	cancelledAttemptCount := stats.CompletedTrades + stats.CancelledTrades
+	if cancelledAttemptCount > 0 && stats.CancelledTrades > 0 {
+		cancellationRate := float64(stats.CancelledTrades) / float64(cancelledAttemptCount)
+		reportPoints -= int(math.Round(cancellationRate * 20))
+	}
 	if reportCount > 0 {
 		reportPoints -= reportCount * 8
-		if reportPoints < 0 {
-			reportPoints = 0
-		}
-		if reportPoints < 10 {
-			reportStatus = "fail"
-		} else {
-			reportStatus = "warn"
-		}
+	}
+	if reportPoints < 0 {
+		reportPoints = 0
+	}
+	if reportPoints < 10 {
+		reportStatus = "fail"
+	} else if reportPoints < 20 {
+		reportStatus = "warn"
 	}
 	trustFactors = append(trustFactors, models.TrustFactor{Label: "Clean record", Status: reportStatus, Points: reportPoints, Max: 20})
 
@@ -2625,25 +2659,21 @@ func (h *UserHandler) GetSellerStats(c *fiber.Ctx) error {
 	}
 	trustFactors = append(trustFactors, models.TrustFactor{Label: "Response speed", Status: responseStatus, Points: responsePoints, Max: 15})
 
-	// 6. Trade Success Rate: 10 points
-	var totalAttempted int
-	totalAttempted = stats.CompletedTrades + stats.CancelledTrades
+	// 6. Trade Success Rate: completed successful trades divided by completed
+	// successful trades plus cancelled/failed attempts. Pending trades are not
+	// scored until they reach a terminal state.
+	totalAttempted := stats.CompletedTrades + stats.CancelledTrades
 
-	successPoints := 0 // New users start at 0 — earned only after trade attempts
+	successPoints := 0 // New users start at 0; earned only after terminal trade attempts.
 	successStatus := "warn"
 	if totalAttempted > 0 {
-		successStatus = "pass"
-		successRate := (float64(stats.CompletedTrades) / float64(totalAttempted)) * 100
-		if successRate >= 90 {
-			successPoints = 10
-		} else if successRate >= 70 {
-			successPoints = 8
-			successStatus = "warn"
-		} else if successRate >= 50 {
-			successPoints = 5
+		successRate := float64(stats.CompletedTrades) / float64(totalAttempted)
+		successPoints = int(math.Round(successRate * 10))
+		if successPoints >= 8 {
+			successStatus = "pass"
+		} else if successPoints >= 5 {
 			successStatus = "warn"
 		} else {
-			successPoints = 2
 			successStatus = "fail"
 		}
 	}

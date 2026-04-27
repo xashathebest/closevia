@@ -14,6 +14,7 @@ export default defineConfig({
       injectRegister: false,
       manifest: false,
       workbox: {
+        importScripts: ['/push-sw.js'],
         maximumFileSizeToCacheInBytes: 3 * 1024 * 1024,
         runtimeCaching: [
           {

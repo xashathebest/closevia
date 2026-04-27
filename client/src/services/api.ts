@@ -33,6 +33,7 @@ const protectedApiPrefixes = [
   '/api/auth/refresh-session',
   '/api/users/profile',
   '/api/notifications',
+  '/api/push',
   '/api/chat/stream',
   '/api/trades',
   '/api/dashboard',

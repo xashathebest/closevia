@@ -425,6 +425,7 @@ func main() {
 	chatHandler := handlers.NewChatHandler()
 	tradeHandler := handlers.NewTradeHandler()
 	notificationHandler := handlers.NewNotificationHandler()
+	pushHandler := handlers.NewPushHandler()
 	adminHandler := handlers.NewAdminHandler()
 	escalationHandler := handlers.NewEscalationHandler()
 	commentHandler := handlers.NewCommentHandler()
@@ -749,6 +750,11 @@ func main() {
 	notifs.Get("/", middleware.AuthMiddleware(), notificationHandler.GetNotifications)
 	notifs.Put("/:id/read", middleware.AuthMiddleware(), notificationHandler.MarkAsRead)
 	notifs.Put("/read-all", middleware.AuthMiddleware(), notificationHandler.MarkAllAsRead)
+
+	push := api.Group("/push")
+	push.Get("/public-key", middleware.AuthMiddleware(), pushHandler.GetPublicKey)
+	push.Post("/subscribe", middleware.AuthMiddleware(), pushHandler.Subscribe)
+	push.Post("/unsubscribe", middleware.AuthMiddleware(), pushHandler.Unsubscribe)
 
 	// Dashboard counts (unread notifications, pending offers)
 	api.Get("/dashboard/counts", middleware.AuthMiddleware(), notificationHandler.GetDashboardCounts)

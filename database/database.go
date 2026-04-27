@@ -641,6 +641,19 @@ func CreateTables() error {
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 		)`,
+		`CREATE TABLE IF NOT EXISTS push_subscriptions (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			user_id INT NOT NULL,
+			endpoint TEXT NOT NULL,
+			endpoint_hash CHAR(64) NOT NULL,
+			p256dh TEXT NOT NULL,
+			auth TEXT NOT NULL,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			UNIQUE KEY uniq_push_endpoint_hash (endpoint_hash),
+			INDEX idx_push_subscriptions_user (user_id),
+			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+		)`,
 		`CREATE TABLE IF NOT EXISTS organizations (
 			id INT AUTO_INCREMENT PRIMARY KEY,
 			creator_user_id INT NOT NULL,
@@ -1290,6 +1303,7 @@ func CreateTables() error {
 	}
 
 	EnsureNotificationColumns(DB)
+	EnsurePushSubscriptionTable(DB)
 	ensureIndexes()
 
 	ensureUserColumns()
@@ -1705,6 +1719,31 @@ func EnsureNotificationColumns(db *sql.DB) {
 			continue
 		}
 		log.Printf("Added missing column to notifications: %s", col.name)
+	}
+}
+
+func EnsurePushSubscriptionTable(db *sql.DB) {
+	if db == nil {
+		db = DB
+	}
+	if db == nil {
+		return
+	}
+	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS push_subscriptions (
+		id INT AUTO_INCREMENT PRIMARY KEY,
+		user_id INT NOT NULL,
+		endpoint TEXT NOT NULL,
+		endpoint_hash CHAR(64) NOT NULL,
+		p256dh TEXT NOT NULL,
+		auth TEXT NOT NULL,
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+		UNIQUE KEY uniq_push_endpoint_hash (endpoint_hash),
+		INDEX idx_push_subscriptions_user (user_id),
+		FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+	)`)
+	if err != nil {
+		log.Printf("Warning: failed to ensure push_subscriptions table: %v", err)
 	}
 }
 

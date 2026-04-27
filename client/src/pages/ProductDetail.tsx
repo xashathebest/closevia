@@ -40,6 +40,8 @@ import {
   useColorModeValue,
   Wrap,
   WrapItem,
+  Collapse,
+  Progress,
 } from '@chakra-ui/react'
 import {
   FiHeart,
@@ -117,6 +119,7 @@ const ProductDetail: React.FC = () => {
   const [isVoting, setIsVoting] = useState(false)
   const [isCopying, setIsCopying] = useState(false)
   const [isWishlisting, setIsWishlisting] = useState(false)
+  const [showTrustDetails, setShowTrustDetails] = useState(false)
   const [loadingProducts, setLoadingProducts] = useState(false)
   const [upgradingPremium, setUpgradingPremium] = useState(false)
   const [boosting, setBoosting] = useState(false)
@@ -1106,6 +1109,18 @@ const ProductDetail: React.FC = () => {
   const isSignificantlyBelowEstimate = hasListedPrice && hasFairRange && listedPrice < fairMin * belowEstimateThreshold
   const isOverpricedEstimate = hasListedPrice && hasFairRange && listedPrice > fairMax
   const isPricedRightEstimate = hasListedPrice && hasFairRange && listedPrice >= fairMin && listedPrice <= fairMax
+  const listedDateLabel = new Date(product.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+  const rawLocationLabel = String(product.location || '').trim()
+  const isPrivateLocationLabel = /private|saved home|home location/i.test(rawLocationLabel)
+  const approximateLocationLabel = rawLocationLabel && !isPrivateLocationLabel
+    ? `Around ${rawLocationLabel}`
+    : 'Approximate location'
+  const mapLat = Number((product as any).pickup_latitude ?? product.latitude)
+  const mapLng = Number((product as any).pickup_longitude ?? product.longitude)
+  const hasMapPreview = Number.isFinite(mapLat) && Number.isFinite(mapLng)
+  const mapPreviewSrc = hasMapPreview
+    ? `https://www.openstreetmap.org/export/embed.html?bbox=${mapLng - 0.01}%2C${mapLat - 0.01}%2C${mapLng + 0.01}%2C${mapLat + 0.01}&layer=mapnik&marker=${mapLat}%2C${mapLng}`
+    : ''
 
   let scaleMin = 0
   let scaleMax = 100
@@ -1134,12 +1149,19 @@ const ProductDetail: React.FC = () => {
       estimateGapNote = `Listed at ₱${formatPrice(listedPrice)} - within the estimated fair range.`
     }
   }
+  const estimateStatusLabel = isSignificantlyBelowEstimate
+    ? 'Below estimate'
+    : isOverpricedEstimate
+      ? 'Above estimate'
+      : isPricedRightEstimate
+        ? 'Priced right'
+        : 'Needs review'
 
   return (
-    <Box bg="#FFFDF1" minH="100vh" w="100%" pb={{ base: 20, lg: 6 }}>
-      <Container maxW="container.xl" py={{ base: 2, md: 8 }} px={{ base: 2.5, md: 4 }}>
+    <Box bg="#FFFDF1" minH="100vh" w="100%" pb={{ base: 32, lg: 6 }}>
+      <Container maxW="container.xl" py={{ base: 2, md: 8 }} px={{ base: 4, md: 4 }}>
         <VStack spacing={{ base: 3, md: 8 }} align="stretch">
-          <Box bg="white" borderRadius={{ base: 'xl', md: '3xl' }} overflow="hidden" shadow={{ base: 'sm', md: 'xl' }} p={{ base: 0, md: 4 }}>
+          <Box bg="white" borderRadius={{ base: 'lg', md: '3xl' }} overflow="hidden" shadow={{ base: 'none', md: 'xl' }} p={{ base: 0, md: 4 }} borderWidth={{ base: '1px', md: 0 }} borderColor="gray.100">
             <SimpleGrid columns={{ base: 1, lg: 2 }} spacing={{ base: 2, md: 6 }}>
               {/* Product Media Gallery */}
               <VStack spacing={{ base: 2, md: 3 }} align="stretch" p={{ base: 0, md: 4 }}>
@@ -1161,6 +1183,7 @@ const ProductDetail: React.FC = () => {
 
                   {!isOwner && (
                     <Box
+                      display={{ base: 'none', md: 'block' }}
                       position="absolute"
                       top={{ base: 'auto', md: 2 }}
                       bottom={{ base: 2, md: 'auto' }}
@@ -1221,19 +1244,35 @@ const ProductDetail: React.FC = () => {
                     </Box>
                   )}
                 </Box>
+                <HStack
+                  display={{ base: 'flex', md: 'none' }}
+                  px={3}
+                  color="gray.500"
+                  fontSize="xs"
+                  spacing={2}
+                  flexWrap="wrap"
+                >
+                  <Text>Listed {listedDateLabel}</Text>
+                  {typeof wishlistCount === 'number' && wishlistCount > 0 && (
+                    <>
+                      <Text color="gray.300">•</Text>
+                      <Text>{wishlistCount} saved</Text>
+                    </>
+                  )}
+                </HStack>
                 {product.id && user && <ProximityBadge type="product" targetId={product.id} />}
               </VStack>
 
               {/* Product Details */}
               <Box
-                p={{ base: 3, md: 5, lg: 6 }}
+                p={{ base: 4, md: 5, lg: 6 }}
                 display="flex"
                 flexDirection="column"
                 bg={detailBg}
-                borderRadius={{ base: 'xl', md: '3xl' }}
+                borderRadius={{ base: 'lg', md: '3xl' }}
                 borderWidth="0"
                 boxShadow={{ base: 'none', md: 'sm' }}
-                bgGradient="linear(to-br, gray.50, white)"
+                bgGradient={{ base: 'none', md: 'linear(to-br, gray.50, white)' }}
                 maxW="560px"
                 w="100%"
                 mx="auto"
@@ -1258,7 +1297,7 @@ const ProductDetail: React.FC = () => {
                             <Heading
                               mb={0}
                               color="var(--pd-text)"
-                              fontSize={{ base: 'lg', md: '2xl' }}
+                              fontSize={{ base: 'xl', md: '2xl' }}
                               lineHeight="1.25"
                               wordBreak="break-word"
                             >
@@ -1329,7 +1368,7 @@ const ProductDetail: React.FC = () => {
                           <Flex align="center" justify="space-between" gap={2} flexShrink={0} w={{ base: 'full', md: 'auto' }} direction={{ base: 'row', md: 'column' }}>
                             <Text
                               color="var(--pd-text)"
-                              fontSize={{ base: 'xl', md: '3xl' }}
+                              fontSize={{ base: '2xl', md: '3xl' }}
                               lineHeight="1"
                               fontWeight="800"
                               whiteSpace="nowrap"
@@ -1352,10 +1391,10 @@ const ProductDetail: React.FC = () => {
                                   bg="transparent"
                                   borderColor="var(--pd-border)"
                                   color={isSaved ? 'red.500' : 'var(--pd-text)'}
-                                  h={{ base: '30px', md: '34px' }}
-                                  w={{ base: '30px', md: '34px' }}
-                                  minW={{ base: '30px', md: '34px' }}
-                                  borderRadius="7px"
+                                  h={{ base: '34px', md: '34px' }}
+                                  w={{ base: '34px', md: '34px' }}
+                                  minW={{ base: '34px', md: '34px' }}
+                                  borderRadius="9px"
                                   _hover={{ bg: 'var(--pd-surface)' }}
                                 />
                               </Tooltip>
@@ -1369,10 +1408,10 @@ const ProductDetail: React.FC = () => {
                                   bg="transparent"
                                   borderColor="var(--pd-border)"
                                   color="var(--pd-text)"
-                                  h={{ base: '30px', md: '34px' }}
-                                  w={{ base: '30px', md: '34px' }}
-                                  minW={{ base: '30px', md: '34px' }}
-                                  borderRadius="7px"
+                                  h={{ base: '34px', md: '34px' }}
+                                  w={{ base: '34px', md: '34px' }}
+                                  minW={{ base: '34px', md: '34px' }}
+                                  borderRadius="9px"
                                   _hover={{ bg: 'var(--pd-surface)' }}
                                 />
                               </Tooltip>
@@ -1401,10 +1440,10 @@ const ProductDetail: React.FC = () => {
                                     bg="transparent"
                                     borderColor="red.300"
                                     color="red.600"
-                                    h={{ base: '30px', md: '34px' }}
-                                    w={{ base: '30px', md: '34px' }}
-                                    minW={{ base: '30px', md: '34px' }}
-                                    borderRadius="7px"
+                                    h={{ base: '34px', md: '34px' }}
+                                    w={{ base: '34px', md: '34px' }}
+                                    minW={{ base: '34px', md: '34px' }}
+                                    borderRadius="9px"
                                     _hover={{ bg: 'red.50' }}
                                   />
                                 </Tooltip>
@@ -1417,20 +1456,33 @@ const ProductDetail: React.FC = () => {
                       <Divider borderColor="var(--pd-border)" opacity={{ base: 0.6, md: 1 }} />
 
                       {/* Section 2: AI estimate bar */}
-                      <Box>
+                      <Box
+                        p={{ base: 3, md: 4 }}
+                        bg="white"
+                        borderRadius={{ base: 'lg', md: 'xl' }}
+                        borderWidth="1px"
+                        borderColor="gray.100"
+                        boxShadow="none"
+                      >
                         <VStack align="stretch" spacing={2}>
-                          <Text fontSize={{ base: 'xs', md: 'sm' }} fontWeight="700" color="var(--pd-text)">
-                            AI Estimate
-                          </Text>
+                          <HStack justify="space-between" align="center">
+                            <Text fontSize={{ base: 'sm', md: 'sm' }} fontWeight="800" color="var(--pd-text)">
+                              AI fair range
+                            </Text>
+                            {hasFairRange && (
+                              <Badge colorScheme={isPricedRightEstimate ? 'green' : isOverpricedEstimate ? 'orange' : 'gray'} variant="subtle" borderRadius="full">
+                                {estimateStatusLabel}
+                              </Badge>
+                            )}
+                          </HStack>
                           {hasFairRange ? (
                             <>
                               <Box
                                 position="relative"
-                                h="12px"
+                                h="7px"
                                 borderRadius="full"
-                                bg="var(--pd-surface)"
-                                borderWidth="1px"
-                                borderColor="var(--pd-border)"
+                                bg="gray.100"
+                                mt={1}
                               >
                                 <Box
                                   position="absolute"
@@ -1438,22 +1490,36 @@ const ProductDetail: React.FC = () => {
                                   w={`${fairWidth}%`}
                                   top={0}
                                   bottom={0}
-                                  bg="green.500"
+                                  bg="green.300"
                                   borderRadius="full"
                                 />
                                 <Box
                                   position="absolute"
-                                  top="-5px"
-                                  left={`calc(${listedPosition}% - 4px)`}
-                                  w="8px"
-                                  h="22px"
+                                  top="-4px"
+                                  left={`calc(${listedPosition}% - 3px)`}
+                                  w="6px"
+                                  h="15px"
                                   borderRadius="full"
-                                  bg={isSignificantlyBelowEstimate ? 'orange.500' : 'blue.500'}
+                                  bg={isSignificantlyBelowEstimate ? 'orange.400' : 'brand.500'}
                                 />
                               </Box>
-                              <Text fontSize="xs" color="green.600" fontWeight="600">
+                              <Text display="none" fontSize="xs" color="green.600" fontWeight="600">
                                 Fair range: ₱{formatPrice(fairMin)} - ₱{formatPrice(fairMax)}
                               </Text>
+                              <SimpleGrid columns={3} spacing={2} pt={2}>
+                                <Box>
+                                  <Text fontSize="2xs" color="gray.500" fontWeight="700">Fair range</Text>
+                                  <Text fontSize="xs" color="gray.800" fontWeight="800">₱{formatPrice(fairMin)} - ₱{formatPrice(fairMax)}</Text>
+                                </Box>
+                                <Box>
+                                  <Text fontSize="2xs" color="gray.500" fontWeight="700">Listed price</Text>
+                                  <Text fontSize="xs" color="gray.800" fontWeight="800">{hasListedPrice ? `₱${formatPrice(listedPrice)}` : 'Not listed'}</Text>
+                                </Box>
+                                <Box>
+                                  <Text fontSize="2xs" color="gray.500" fontWeight="700">Status</Text>
+                                  <Text fontSize="xs" color={isPricedRightEstimate ? 'green.600' : 'gray.700'} fontWeight="800">{estimateStatusLabel}</Text>
+                                </Box>
+                              </SimpleGrid>
                             </>
                           ) : (
                             <VStack align="start" spacing={1}>
@@ -1468,9 +1534,21 @@ const ProductDetail: React.FC = () => {
                             </VStack>
                           )}
                           {hasFairRange && (
-                            <Text fontSize={{ base: 'xs', md: 'sm' }} color="var(--pd-muted)">
-                              {estimateGapNote}
-                            </Text>
+                            <HStack spacing={2} justify="space-between" align="center" pt={1} flexWrap="wrap">
+                              <Text fontSize="2xs" color="gray.500" flex={1} minW="150px">
+                                {estimateGapNote}
+                              </Text>
+                              {!isOwner && (
+                                <HStack spacing={1}>
+                                  <Button size="xs" variant="ghost" colorScheme="green" leftIcon={<FiTrendingUp />} onClick={() => handleVote('under')} isLoading={isVoting}>
+                                    Too low
+                                  </Button>
+                                  <Button size="xs" variant="ghost" colorScheme="orange" leftIcon={<FiTrendingDown />} onClick={() => handleVote('over')} isLoading={isVoting}>
+                                    Too high
+                                  </Button>
+                                </HStack>
+                              )}
+                            </HStack>
                           )}
                         </VStack>
                       </Box>
@@ -1486,27 +1564,41 @@ const ProductDetail: React.FC = () => {
                     {product.location && (
                       <Box
                         mb={3}
-                        p={3}
+                        p={{ base: 3, md: 3 }}
                         bg="white"
-                        borderRadius="xl"
-                        shadow="sm"
+                        borderRadius={{ base: 'lg', md: 'xl' }}
+                        shadow="none"
                         borderWidth="1px"
                         borderColor="gray.100"
                       >
-                        <HStack spacing={3}>
+                        <HStack spacing={3} align="start">
                           <Box p={2} bg="brand.50" borderRadius="full" flexShrink={0}>
                             <Icon as={FaMapMarkerAlt} color="brand.500" boxSize={4} />
                           </Box>
-                          <VStack align="start" spacing={0}>
-                            <Text fontSize="2xs" fontWeight="700" color="gray.400" textTransform="uppercase" letterSpacing="wide">
-                              {product.location_type === 'pickup_location' ? 'Pickup Location' : 'Product Location'}
+                          <VStack align="start" spacing={1} flex={1} minW={0}>
+                            <Text fontSize="2xs" fontWeight="800" color="gray.400" textTransform="uppercase" letterSpacing="wide">
+                              Approximate location
                             </Text>
-                            <Text fontSize="sm" color={detailText} fontWeight="700">{product.location}</Text>
+                            <Text fontSize="sm" color={detailText} fontWeight="800" noOfLines={2}>{approximateLocationLabel}</Text>
+                            <Text fontSize="xs" color={detailMuted}>Exact location is shared only after an accepted trade.</Text>
                           </VStack>
                         </HStack>
+                        {hasMapPreview && (
+                          <Box
+                            as="iframe"
+                            title="Approximate product location map"
+                            src={mapPreviewSrc}
+                            mt={3}
+                            w="full"
+                            h={{ base: '110px', md: '140px' }}
+                            border="0"
+                            borderRadius="lg"
+                            overflow="hidden"
+                          />
+                        )}
                       </Box>
                     )}
-                    <Wrap spacing={2} align="center">
+                    <Wrap spacing={2} align="center" display={{ base: 'none', md: 'flex' }}>
                       {product.condition && (
                         <WrapItem>
                           <HStack spacing={1} px={3} py={1.5} borderRadius="full" bg="white" shadow="sm">
@@ -1584,7 +1676,7 @@ const ProductDetail: React.FC = () => {
                 {/* Action Buttons: full-width primary + compact Offers icon square */}
                 <VStack spacing={{ base: 2.5, md: 4 }} mt={{ base: 1, md: 3 }} pt={0}>
                   {!isOwner && product.status === 'available' && (
-                    <VStack spacing={{ base: 2, md: 3 }} w="full">
+                    <VStack spacing={{ base: 2, md: 3 }} w="full" display={{ base: 'none', md: 'flex' }}>
                         <HStack w="full" spacing={{ base: 2, md: 3 }} align="stretch">
                           <Tooltip label={hasPendingOfferOnProduct ? "You already have a pending offer on this product" : "Propose a trade"}>
                             <Button
@@ -1592,15 +1684,15 @@ const ProductDetail: React.FC = () => {
                               size={{ base: 'md', md: 'lg' }}
                               borderRadius={{ base: 'xl', md: '2xl' }}
                               fontWeight="800"
-                              bg={hasPendingOfferOnProduct ? 'gray.300' : 'brand.500'}
-                              color="white"
+                              bg={hasPendingOfferOnProduct ? 'gray.200' : 'brand.500'}
+                              color={hasPendingOfferOnProduct ? 'gray.700' : 'white'}
                               _hover={hasPendingOfferOnProduct ? { bg: 'gray.300' } : { bg: 'brand.600', transform: 'translateY(-2px)' }}
                               _active={{ transform: 'scale(0.98)' }}
                               boxShadow={hasPendingOfferOnProduct ? 'none' : 'md'}
                               transition="all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1)"
                               onClick={openTrade}
                               isDisabled={hasPendingOfferOnProduct}
-                              opacity={hasPendingOfferOnProduct ? 0.7 : 1}
+                              opacity={1}
                             >
                               {hasPendingOfferOnProduct ? "Pending Offer Sent" : "Trade"}
                             </Button>
@@ -1613,7 +1705,7 @@ const ProductDetail: React.FC = () => {
                               fontWeight="800"
                               variant="outline"
                               colorScheme="orange"
-                              borderWidth="2px"
+                              borderWidth="1px"
                               bg="white"
                               borderColor="orange.300"
                               color="orange.600"
@@ -1622,7 +1714,7 @@ const ProductDetail: React.FC = () => {
                               transition="all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1)"
                               onClick={openBuyout}
                               isDisabled={hasPendingOfferOnProduct}
-                              opacity={hasPendingOfferOnProduct ? 0.7 : 1}
+                              opacity={hasPendingOfferOnProduct ? 0.8 : 1}
                             >
                               Buyout
                             </Button>
@@ -1637,7 +1729,7 @@ const ProductDetail: React.FC = () => {
                               borderRadius={{ base: 'xl', md: '2xl' }}
                               variant="outline"
                               colorScheme="brand"
-                              borderWidth="2px"
+                              borderWidth="1px"
                               borderColor="brand.200"
                               color="brand.600"
                               bg="brand.50"
@@ -1808,7 +1900,7 @@ const ProductDetail: React.FC = () => {
           </Box>
 
           {/* Seller Information */}
-          <Box bg="white" p={{ base: 3, md: 6 }} rounded={{ base: 'xl', md: 'lg' }} shadow="sm">
+          <Box bg="white" p={{ base: 4, md: 6 }} rounded={{ base: 'lg', md: 'lg' }} shadow="none" borderWidth="1px" borderColor="gray.100">
             <Heading size={{ base: 'sm', md: 'md' }} mb={{ base: 3, md: 4 }}>
               About the Trader
             </Heading>
@@ -1875,7 +1967,7 @@ const ProductDetail: React.FC = () => {
                         {trustLevelLabel}
                       </Badge>
                     )}
-                    {sellerStats?.has_active_dispute && (
+                    {sellerStats?.has_active_dispute && sellerStats?.trust_level === 'risky' && (
                       <Badge
                         colorScheme="orange"
                         variant="subtle"
@@ -1910,7 +2002,7 @@ const ProductDetail: React.FC = () => {
                   {hasReviews ? (
                     <HStack spacing={1}>
                       <Icon as={FiStar} color="yellow.400" boxSize={{ base: 4, md: 5 }} />
-                      <Text fontSize={{ base: 'lg', md: 'xl', lg: '2xl' }} fontWeight="bold" color="brand.500">
+                      <Text fontSize={{ base: 'md', md: 'xl', lg: '2xl' }} fontWeight="bold" color="brand.500">
                         {averageRating.toFixed(1)}
                       </Text>
                     </HStack>
@@ -1927,7 +2019,7 @@ const ProductDetail: React.FC = () => {
                   </Text>
                 </VStack>
                 <VStack spacing={1} align="center" bg="gray.50" borderWidth="1px" borderColor="gray.100" borderRadius="lg" px={2.5} py={2}>
-                  <Text fontSize={hasReviews ? { base: 'lg', md: 'xl', lg: '2xl' } : { base: 'sm', md: 'md' }} fontWeight="bold" color={hasReviews ? 'green.500' : 'gray.400'} textAlign="center" lineHeight="short">
+                  <Text fontSize={hasReviews ? { base: 'md', md: 'xl', lg: '2xl' } : { base: 'sm', md: 'md' }} fontWeight="bold" color={hasReviews ? 'green.500' : 'gray.400'} textAlign="center" lineHeight="short">
                     {hasReviews ? `${positivePercent.toFixed(0)}%` : 'None'}
                   </Text>
                   <Text fontSize="2xs" color="gray.600" textAlign="center" fontWeight="700" textTransform="uppercase">
@@ -1935,15 +2027,15 @@ const ProductDetail: React.FC = () => {
                   </Text>
                 </VStack>
                 <VStack spacing={1} align="center" bg="gray.50" borderWidth="1px" borderColor="gray.100" borderRadius="lg" px={2.5} py={2}>
-                  <Text fontSize={totalTrades > 0 ? { base: 'lg', md: 'xl', lg: '2xl' } : { base: 'sm', md: 'md' }} fontWeight="bold" color={totalTrades > 0 ? 'blue.500' : 'gray.400'} textAlign="center" lineHeight="short">
-                    {totalTrades > 0 ? totalTrades : 'None'}
+                  <Text fontSize={completedTrades > 0 ? { base: 'md', md: 'xl', lg: '2xl' } : { base: 'sm', md: 'md' }} fontWeight="bold" color={completedTrades > 0 ? 'blue.500' : 'gray.400'} textAlign="center" lineHeight="short">
+                    {completedTrades > 0 ? completedTrades : 'None'}
                   </Text>
                   <Text fontSize="2xs" color="gray.600" textAlign="center" fontWeight="700" textTransform="uppercase">
-                    Trades
+                    Completed
                   </Text>
                 </VStack>
                 <VStack spacing={1} align="center" bg="gray.50" borderWidth="1px" borderColor="gray.100" borderRadius="lg" px={2.5} py={2}>
-                  <Text fontSize={responseLabel === 'Not enough data' ? { base: 'sm', md: 'md' } : { base: 'lg', md: 'xl', lg: '2xl' }} fontWeight="bold" color={responseLabel === 'Not enough data' ? 'gray.400' : 'purple.500'} textAlign="center" lineHeight="short">
+                  <Text fontSize={responseLabel === 'Not enough data' ? { base: 'sm', md: 'md' } : { base: 'md', md: 'xl', lg: '2xl' }} fontWeight="bold" color={responseLabel === 'Not enough data' ? 'gray.400' : 'purple.500'} textAlign="center" lineHeight="short">
                     {responseLabel}
                   </Text>
                   <Text fontSize="2xs" color="gray.600" textAlign="center" fontWeight="700" textTransform="uppercase">
@@ -1953,49 +2045,76 @@ const ProductDetail: React.FC = () => {
               </SimpleGrid>
             </Flex>
 
-            {/* Trust Score Breakdown */}
             {sellerStats?.trust_factors && sellerStats.trust_factors.length > 0 && (
-              <Box mt={4}>
-                <TrustScoreCard
-                  score={sellerStats.trust_score ?? 0}
-                  trustLevel={sellerStats.trust_level}
-                  factors={sellerStats.trust_factors}
-                  conductSummary={sellerStats.conduct_summary}
-                  compact
-                  isVerified={sellerProfile?.verification_status === 'verified' || sellerProfile?.verified || false}
-                  listingCount={sellerProducts.length}
-                  tradeCount={totalTrades}
-                  positivePercent={hasReviews ? positivePercent : undefined}
-                  responseTime={responseLabel}
+              <Box mt={4} p={3} bg="gray.50" borderRadius="lg" borderWidth="1px" borderColor="gray.100">
+                <HStack justify="space-between" align="center" mb={2}>
+                  <Text fontSize="sm" fontWeight="800" color="gray.800">
+                    Trust score: {sellerStats.trust_score ?? 0}/100
+                  </Text>
+                  <Text fontSize="xs" color={sellerStats.trust_level === 'risky' ? 'orange.600' : 'gray.600'} fontWeight="700">
+                    {trustLevelLabel || 'Needs improvement'}
+                  </Text>
+                </HStack>
+                <Progress
+                  value={sellerStats.trust_score ?? 0}
+                  size="xs"
+                  borderRadius="full"
+                  colorScheme={sellerStats.trust_level === 'trusted' ? 'green' : sellerStats.trust_level === 'new' ? 'yellow' : 'orange'}
+                  bg="gray.200"
                 />
+                <Button
+                  mt={2}
+                  size="xs"
+                  variant="ghost"
+                  colorScheme="brand"
+                  fontWeight="700"
+                  onClick={() => setShowTrustDetails(prev => !prev)}
+                >
+                  {showTrustDetails ? 'Hide trust details' : 'View trust details'}
+                </Button>
+                <Collapse in={showTrustDetails} animateOpacity>
+                  <Box pt={3}>
+                    <TrustScoreCard
+                      score={sellerStats.trust_score ?? 0}
+                      trustLevel={sellerStats.trust_level}
+                      factors={sellerStats.trust_factors}
+                      conductSummary={sellerStats.conduct_summary}
+                      compact
+                      isVerified={sellerProfile?.verification_status === 'verified' || sellerProfile?.verified || false}
+                      listingCount={sellerProducts.length}
+                      tradeCount={totalTrades}
+                      positivePercent={hasReviews ? positivePercent : undefined}
+                      responseTime={responseLabel}
+                    />
+                    <Box mt={3} p={3} bg="white" borderRadius="lg" borderWidth="1px" borderColor="gray.100">
+                      <Flex justify="space-between" align="center" mb={2}>
+                        <Heading size="xs">Trade activity</Heading>
+                        <Text fontSize="xs" color="gray.600">
+                          {totalTrades > 0 ? `${totalTrades} total` : 'No completed trades yet'}
+                        </Text>
+                      </Flex>
+                      {totalTrades > 0 ? (
+                        <SimpleGrid columns={{ base: 3, sm: 3 }} spacing={2}>
+                          {activityBreakdown.map((item) => (
+                            <Box key={item.label} bg={item.bg} borderRadius="md" px={2} py={2} textAlign="center">
+                              <Text fontSize="sm" fontWeight="900" color={item.color}>{item.value}</Text>
+                              <Text fontSize="2xs" color="gray.600" fontWeight="700">{item.label}</Text>
+                            </Box>
+                          ))}
+                        </SimpleGrid>
+                      ) : (
+                        <Text fontSize="sm" color="gray.500">
+                          This trader has no completed trades yet.
+                        </Text>
+                      )}
+                    </Box>
+                  </Box>
+                </Collapse>
               </Box>
             )}
 
-            <Box mt={{ base: 3, md: 4 }} p={{ base: 3, md: 4 }} bg="gray.50" borderRadius="lg" borderWidth="1px" borderColor="gray.100">
-              <Flex justify="space-between" align="center" mb={2}>
-                <Heading size="xs">Trade activity</Heading>
-                <Text fontSize="xs" color="gray.600">
-                  {totalTrades > 0 ? `${totalTrades} total` : 'No completed trades yet'}
-                </Text>
-              </Flex>
-              {totalTrades > 0 ? (
-                <SimpleGrid columns={{ base: 3, sm: 3 }} spacing={2}>
-                  {activityBreakdown.map((item) => (
-                    <Box key={item.label} bg={item.bg} borderRadius="md" px={2} py={2} textAlign="center">
-                      <Text fontSize="sm" fontWeight="900" color={item.color}>{item.value}</Text>
-                      <Text fontSize="2xs" color="gray.600" fontWeight="700">{item.label}</Text>
-                    </Box>
-                  ))}
-                </SimpleGrid>
-              ) : (
-                <Text fontSize="sm" color="gray.500">
-                  This trader has no completed trades yet.
-                </Text>
-              )}
-            </Box>
-
             {/* Report Warning Banner */}
-            {sellerStats?.has_reports && sellerStats.report_count > 0 && (
+            {sellerStats?.has_reports && sellerStats.report_count > 0 && sellerStats?.trust_level === 'risky' && (
               <Alert status="warning" borderRadius="md" mt={4}>
                 <AlertIcon />
                 <Box>
@@ -2110,6 +2229,54 @@ const ProductDetail: React.FC = () => {
             </SimpleGrid>
           </Box>
         </VStack>
+        {!isOwner && product.status === 'available' && (
+          <Box
+            display={{ base: 'block', md: 'none' }}
+            position="fixed"
+            left={0}
+            right={0}
+            bottom="64px"
+            zIndex={20}
+            px={4}
+            py={3}
+            bg="rgba(255, 253, 241, 0.96)"
+            borderTopWidth="1px"
+            borderColor="gray.200"
+            backdropFilter="blur(10px)"
+          >
+            <HStack spacing={2} maxW="container.xl" mx="auto">
+              <Button
+                flex={1}
+                h="44px"
+                borderRadius="lg"
+                fontWeight="800"
+                bg={hasPendingOfferOnProduct ? 'gray.200' : 'brand.500'}
+                color={hasPendingOfferOnProduct ? 'gray.700' : 'white'}
+                _hover={hasPendingOfferOnProduct ? { bg: 'gray.200' } : { bg: 'brand.600' }}
+                onClick={openTrade}
+                isDisabled={hasPendingOfferOnProduct}
+                opacity={1}
+              >
+                {hasPendingOfferOnProduct ? 'Pending Offer Sent' : 'Propose Trade'}
+              </Button>
+              <Button
+                flex={1}
+                h="44px"
+                borderRadius="lg"
+                fontWeight="800"
+                variant="solid"
+                bg="orange.500"
+                color="white"
+                _hover={{ bg: 'orange.600' }}
+                onClick={openBuyout}
+                isDisabled={hasPendingOfferOnProduct}
+                opacity={hasPendingOfferOnProduct ? 0.8 : 1}
+              >
+                Buyout
+              </Button>
+            </HStack>
+          </Box>
+        )}
         <TradeModal isOpen={isTradeOpen} onClose={() => setIsTradeOpen(false)} targetProductId={tradeTargetProductId} />
         <BuyoutModal isOpen={isBuyoutOpen} onClose={() => setIsBuyoutOpen(false)} targetProductId={product?.id ?? null} />
 

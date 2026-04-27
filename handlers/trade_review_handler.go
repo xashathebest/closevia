@@ -257,10 +257,12 @@ func (h *TradeHandler) SubmitTradeReview(c *fiber.Ctx) error {
 		msg := "Your trading partner has submitted their review. Please submit yours to finalize the trade!"
 		_, _ = h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)", otherUserID, msg)
 		publishToUser(otherUserID, sseEvent{Type: "trade_review_submitted", Data: fiber.Map{"trade_id": tradeID}})
+		sendPushToUser(otherUserID, "Review reminder", msg, "/trades", "review_reminder")
 	} else {
 		msg := "Your trading partner has updated their review."
 		_, _ = h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)", otherUserID, msg)
 		publishToUser(otherUserID, sseEvent{Type: "trade_review_updated", Data: fiber.Map{"trade_id": tradeID}})
+		sendPushToUser(otherUserID, "Review updated", msg, "/trades", "trade_update")
 	}
 
 	// Only auto-complete if both submitted initial reviews (not followups)

@@ -96,7 +96,7 @@ const getImprovementHint = (label: string, points: number, max: number) => {
   if (label.includes("Verified")) return "Verify your account in settings to gain +15 pts."
   if (label.includes("Completed trades")) return "Successfully complete more trades to increase this score."
   if (label.includes("Positive ratings")) return "Gather more positive 5-star ratings from your trade partners."
-  if (label.includes("Clean record") || label.includes("No reports")) return "Avoid user reports by following community guidelines."
+  if (label.includes("Clean record") || label.includes("No reports")) return "Avoid cancellations and user reports by following through on accepted trades."
   if (label.includes("Response")) return "Reply to offers and messages on the same day to improve."
   if (label.includes("success")) return "Avoid cancelling trades you have already accepted."
   return "Improve this metric to boost your trust score."
@@ -233,7 +233,7 @@ const TrustScoreCard: React.FC<TrustScoreCardProps> = ({ score, trustLevel, fact
             <Text fontSize={{ base: '10px', sm: 'xs' }} color="gray.600" textAlign="center">Rating</Text>
           </VStack>
         )}
-        {typeof positivePercent === 'number' && positivePercent > 0 && (
+        {typeof positivePercent === 'number' && (positivePercent > 0 || (reviewCount ?? 0) > 0) && (
           <VStack spacing={0.5} align="center" flex={{ base: '0 1 auto', sm: 1 }} minW="60px">
             <Text fontSize={{ base: 'md', sm: 'md' }} fontWeight="bold" color="gray.800">
               {Math.round(positivePercent)}%
