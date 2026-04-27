@@ -185,6 +185,9 @@ export interface ProductUpdate {
   latitude?: number
   longitude?: number
   location_type?: 'current_location' | 'pickup_location' | 'no_location'
+  availability_slots?: AvailabilitySlot[]
+  availability_type?: 'flexible' | 'strict'
+  collection_setup?: CollectionSetup | string
 }
 
 export interface OrderCreate {

@@ -2357,6 +2357,10 @@ func (h *ProductHandler) UpdateProduct(c *fiber.Ctx) error {
 		updateFields = append(updateFields, "availability_type = ?")
 		args = append(args, avType)
 	}
+	if collectionSetup := c.FormValue("collection_setup"); collectionSetup != "" {
+		updateFields = append(updateFields, "collection_setup = ?")
+		args = append(args, collectionSetup)
+	}
 
 	// Handle image updates
 	form, err := c.MultipartForm()

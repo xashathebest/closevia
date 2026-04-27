@@ -1966,7 +1966,7 @@ const MultiWayTradeModal: React.FC<MultiWayTradeModalProps> = ({
                   <Text color="gray.500" fontSize="sm" textAlign="center">No messages yet. Start the conversation!</Text>
                 </Flex>
               ) : (
-                <VStack spacing={12} align="stretch">
+                <VStack spacing={3} align="stretch">
                   {messages.map((msg) => {
                     const isOwnMessage = msg.sender_id === user?.id
                     const isPhotoMessage = typeof msg.content === 'string' && msg.content.startsWith('photo:')
@@ -1991,37 +1991,30 @@ const MultiWayTradeModal: React.FC<MultiWayTradeModalProps> = ({
                           />
                         )}
                         <Box
-                          maxW="70%"
-                          p={2.5}
-                          borderRadius="lg"
-                          bg={isOwnMessage ? 'brand.500' : 'white'}
+                          maxW="72%"
+                          px={3}
+                          py={2}
+                          borderRadius={isOwnMessage ? '18px 18px 4px 18px' : '18px 18px 18px 4px'}
+                          bg={isOwnMessage ? 'brand.500' : 'gray.100'}
                           color={isOwnMessage ? 'white' : 'gray.800'}
-                          borderWidth={isOwnMessage ? 0 : '1px'}
-                          borderColor={borderColor}
-                          shadow="sm"
                         >
-                          {!isOwnMessage && (
-                            <Text fontSize="xs" fontWeight="600" color={isOwnMessage ? 'white' : 'gray.700'} mb={1}>
-                              {msg.sender_name}
-                            </Text>
-                          )}
                           {isPhotoMessage ? (
                             <Image
                               src={getImageUrl(photoUrl)}
                               alt="Shared photo"
                               borderRadius="md"
-                              maxH="220px"
+                              maxH="200px"
                               objectFit="cover"
                             />
                           ) : (
-                            <Text fontSize="xs" whiteSpace="pre-wrap" wordBreak="break-word">
+                            <Text fontSize="sm" lineHeight="1.4" whiteSpace="pre-wrap" wordBreak="break-word">
                               {msg.content}
                             </Text>
                           )}
                           <Text
-                            fontSize="2xs"
-                            opacity={0.7}
-                            mt={1}
+                            fontSize="10px"
+                            color={isOwnMessage ? 'whiteAlpha.700' : 'gray.400'}
+                            mt={0.5}
                             textAlign={isOwnMessage ? 'right' : 'left'}
                           >
                             {new Date(msg.created_at).toLocaleTimeString([], {
@@ -2033,7 +2026,7 @@ const MultiWayTradeModal: React.FC<MultiWayTradeModalProps> = ({
                         {isOwnMessage && (
                           <Avatar
                             name={user?.name || 'You'}
-                            size="sm"
+                            size="xs"
                             bg="brand.500"
                             color="white"
                             src={senderAvatarSrc}
@@ -2048,32 +2041,14 @@ const MultiWayTradeModal: React.FC<MultiWayTradeModalProps> = ({
             </Box>
 
             {/* Message Input */}
-            <Box borderTopWidth="1px" borderColor={borderColor} pt={3}>
+            <Box flexShrink={0} borderTopWidth="1px" borderColor="gray.100">
               {chatPhotoPreview && (
-                <HStack spacing={2} mb={2} align="center">
-                  <Image src={chatPhotoPreview} alt="Photo preview" maxH="60px" borderRadius="md" />
-                  <Button size="xs" variant="ghost" onClick={clearChatPhoto}>Remove</Button>
+                <HStack spacing={2} px={[3, 4]} pt={2} align="center">
+                  <Image src={chatPhotoPreview} alt="Photo preview" maxH="52px" borderRadius="md" />
+                  <Button size="xs" variant="ghost" colorScheme="red" onClick={clearChatPhoto}>Remove</Button>
                 </HStack>
               )}
-              <HStack spacing={2} align="flex-end">
-                <Textarea
-                  value={newMessage}
-                  onChange={(e) => setNewMessage(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && !e.shiftKey) {
-                      e.preventDefault()
-                      handleSendMessage()
-                    }
-                  }}
-                  placeholder="Type a message... (Shift+Enter for new line)"
-                  minH="60px"
-                  maxH="120px"
-                  resize="none"
-                  isDisabled={sendingMessage || uploadingChatPhoto}
-                  fontSize="sm"
-                  borderRadius="md"
-                  flex={1}
-                />
+              <HStack spacing={2} px={[3, 4]} py={3}>
                 <input
                   ref={photoInputRef}
                   type="file"
@@ -2084,23 +2059,45 @@ const MultiWayTradeModal: React.FC<MultiWayTradeModalProps> = ({
                 <IconButton
                   aria-label="Attach photo"
                   icon={<FaCamera />}
-                  variant="outline"
+                  variant="ghost"
+                  size="sm"
+                  color="gray.500"
                   onClick={() => photoInputRef.current?.click()}
                   isDisabled={sendingMessage || uploadingChatPhoto}
+                  flexShrink={0}
                 />
-                <Button
+                <Textarea
+                  value={newMessage}
+                  onChange={(e) => setNewMessage(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault()
+                      handleSendMessage()
+                    }
+                  }}
+                  placeholder="Type a message..."
+                  rows={1}
+                  resize="none"
+                  isDisabled={sendingMessage || uploadingChatPhoto}
+                  fontSize="sm"
+                  borderRadius="full"
+                  bg="gray.50"
+                  border="1px solid"
+                  borderColor="gray.200"
+                  _focus={{ bg: 'white', borderColor: 'brand.400', boxShadow: 'none' }}
+                  flex={1}
+                />
+                <IconButton
+                  aria-label="Send message"
+                  icon={<FaPaperPlane />}
                   colorScheme="brand"
+                  borderRadius="full"
+                  size="sm"
                   onClick={handleSendMessage}
                   isLoading={sendingMessage || uploadingChatPhoto}
                   isDisabled={!newMessage.trim() && !chatPhotoFile}
-                  leftIcon={<FaPaperPlane />}
-                  h="48px"
-                  px={4}
                   flexShrink={0}
-                  whiteSpace="nowrap"
-                >
-                  Send
-                </Button>
+                />
               </HStack>
             </Box>
           </VStack>

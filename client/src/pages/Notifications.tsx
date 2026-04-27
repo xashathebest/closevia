@@ -394,8 +394,54 @@ const Notifications: React.FC = () => {
   const handleNotificationClick = useCallback(async (notification: Notification) => {
     if (!notification.read) await markAsRead(notification.id)
     const path = getRedirectPath(notification)
-    if (path) navigate(path)
-  }, [getRedirectPath, markAsRead, navigate])
+    if (!path) return
+
+    try {
+      const data = notification.data || {}
+      if (notification.type === 'similar_item') {
+        const productId = asPositiveNumber(data.product_id ?? data.target_id ?? data.product?.id)
+        if (productId) {
+          const res = await api.get(`/api/products/${productId}`)
+          const product = res.data?.data?.product || res.data?.data || res.data
+          if (['traded', 'sold', 'cancelled', 'canceled', 'deleted'].includes(String(product?.status || '').toLowerCase())) {
+            toast({ id: `notif-product-unavailable-${notification.id}`, title: 'Item no longer available', description: 'That matched item has already been traded or removed.', status: 'info', duration: 3500, isClosable: true })
+            navigate('/home')
+            return
+          }
+        }
+      }
+
+      if (notification.type === 'trade_offer' || notification.type === 'trade_update') {
+        const tradeId = asPositiveNumber(data.trade_id ?? data.target_id)
+        if (tradeId) {
+          const res = await api.get(`/api/trades/${tradeId}`)
+          const trade = res.data?.data || res.data
+          const status = String(trade?.status || '').toLowerCase()
+          if (['completed', 'cancelled', 'canceled'].includes(status) || (notification.type === 'trade_offer' && ['declined', 'rejected'].includes(status))) {
+            const isRejectedOffer = notification.type === 'trade_offer' && ['declined', 'rejected', 'cancelled', 'canceled'].includes(status)
+            toast({
+              id: `notif-trade-unavailable-${notification.id}`,
+              title: isRejectedOffer ? 'Offer no longer available' : 'Trade no longer active',
+              description: isRejectedOffer ? 'This trade offer was declined or canceled, so there is nothing to accept now.' : 'This trade has already been completed or canceled.',
+              status: 'info',
+              duration: 4500,
+              isClosable: true,
+            })
+            navigate(isRejectedOffer ? '/offers/buyout' : '/home')
+            return
+          }
+        }
+      }
+    } catch {
+      if (notification.type === 'trade_offer') {
+        toast({ id: `notif-offer-stale-${notification.id}`, title: 'Offer no longer available', description: 'This offer may have been declined, canceled, or removed.', status: 'info', duration: 4500, isClosable: true })
+        navigate('/offers/buyout')
+        return
+      }
+    }
+
+    navigate(path)
+  }, [getRedirectPath, markAsRead, navigate, toast])
 
   /* ------------------------------------------------------------------ */
   /*  Loading Skeleton                                                    */
@@ -659,6 +705,7 @@ const Notifications: React.FC = () => {
                             transform: 'translateY(-2px)',
                             borderColor: `${colorScheme}.300`,
                           }}
+                          _active={{ transform: redirectPath ? 'scale(0.99)' : undefined, bg: redirectPath ? subtleBg : undefined }}
                           cursor={redirectPath ? 'pointer' : 'default'}
                           onClick={redirectPath ? () => handleNotificationClick(notification) : undefined}
                           role="article"
@@ -729,6 +776,7 @@ const Notifications: React.FC = () => {
                                 <HStack spacing={2} mt={1}>
                                   {redirectPath && (
                                     <Button
+                                      display={{ base: 'none', md: 'inline-flex' }}
                                       size="xs"
                                       variant={notification.read ? 'ghost' : 'solid'}
                                       colorScheme="brand"

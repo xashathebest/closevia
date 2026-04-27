@@ -30,7 +30,6 @@ import { FaHome, FaPlus, FaStar, FaMotorcycle, FaCrown } from 'react-icons/fa'
 import { FiGrid, FiHeart, FiLogOut, FiBell, FiSettings, FiUser, FiDownload } from 'react-icons/fi'
 import { getImageUrl } from '../utils/imageUtils'
 import VerifiedAvatar from './VerifiedAvatar'
-import InstallAppPrompt from './InstallAppPrompt'
 import { api } from '../services/api'
 import { isRunningStandalone } from '../serviceWorkerRegistration'
 
@@ -388,7 +387,6 @@ const Sidebar: React.FC = () => {
                         </Flex>
                       </Button>
                     )}
-                    <InstallAppPrompt variant="mobile-menu" onInstalled={onClose} />
                     <Flex
                       px={4} py={3}
                       align="center" justify="center" gap={2}

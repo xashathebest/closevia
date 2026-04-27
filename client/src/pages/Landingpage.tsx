@@ -835,22 +835,6 @@ const LandingPage: React.FC = () => {
               </Button>
               <Button
                 size="lg"
-                variant="outline"
-                borderColor={C.accent2}
-                color={C.accent2}
-                borderRadius="full"
-                borderWidth="2px"
-                px={8}
-                fontWeight="700"
-                _hover={{ borderColor: `rgb(217, 119, 6)`, bg: `${C.accent2}08`, transform: 'translateY(-3px)' }}
-                transition="all 0.3s"
-                onClick={() => window.open('https://play.google.com/store/apps/details?id=com.cloviagh.clovia', '_blank')}
-                rightIcon={<Icon as={FiArrowRight} boxSize={5} />}
-              >
-                Download App
-              </Button>
-              <Button
-                size="lg"
                 variant="ghost"
                 color={C.accentDark}
                 borderRadius="full"

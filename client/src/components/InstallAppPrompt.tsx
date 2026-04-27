@@ -2,12 +2,9 @@ import React from 'react'
 import { Box, Button, HStack, Text, VStack, Icon } from '@chakra-ui/react'
 import { FiDownload, FiSmartphone } from 'react-icons/fi'
 import {
-  canShowInstallPrompt,
-  initializeInstallPrompt,
   isAppInstalled,
   isRunningStandalone,
   markInstallDismissed,
-  promptInstall,
   wasInstallDismissed,
 } from '../serviceWorkerRegistration'
 
@@ -21,7 +18,6 @@ const InstallAppPrompt: React.FC<InstallAppPromptProps> = ({
   onInstalled,
 }) => {
   const [visible, setVisible] = React.useState(false)
-  const [installing, setInstalling] = React.useState(false)
   const [isAndroid, setIsAndroid] = React.useState(false)
 
   React.useEffect(() => {
@@ -34,35 +30,19 @@ const InstallAppPrompt: React.FC<InstallAppPromptProps> = ({
     const userAgent = navigator.userAgent.toLowerCase()
     setIsAndroid(/android/.test(userAgent))
 
-    const cleanup = initializeInstallPrompt((isAvailable) => {
-      setVisible(isAvailable && !isAppInstalled() && !wasInstallDismissed())
-    })
     const hideAfterInstall = () => setVisible(false)
     window.addEventListener('clovia:pwa-installed', hideAfterInstall)
 
-    setVisible(canShowInstallPrompt())
+    setVisible(/android/.test(userAgent))
 
     return () => {
-      cleanup()
       window.removeEventListener('clovia:pwa-installed', hideAfterInstall)
     }
   }, [])
 
-  const handleInstall = async () => {
-    setInstalling(true)
-    try {
-      const accepted = await promptInstall()
-      if (accepted) {
-        setVisible(false)
-        onInstalled?.()
-      }
-    } finally {
-      setInstalling(false)
-    }
-  }
-
   const handleDownloadAPK = () => {
     window.location.href = '/clovia.apk'
+    onInstalled?.()
   }
 
   const handleDismiss = () => {
@@ -77,31 +57,16 @@ const InstallAppPrompt: React.FC<InstallAppPromptProps> = ({
   if (variant === 'mobile-menu') {
     return (
       <VStack align="stretch" spacing={2} w="full">
-        {isAndroid && (
-          <Button
-            colorScheme="teal"
-            variant="ghost"
-            justifyContent="flex-start"
-            onClick={handleDownloadAPK}
-            leftIcon={<FiDownload />}
-            minH="48px"
-            w="full"
-          >
-            Download APK (2 MB)
-          </Button>
-        )}
         <Button
           colorScheme="teal"
           variant="ghost"
           justifyContent="flex-start"
-          onClick={handleInstall}
-          isLoading={installing}
-          loadingText="Installing"
-          leftIcon={<FiSmartphone />}
+          onClick={handleDownloadAPK}
+          leftIcon={<FiDownload />}
           minH="48px"
           w="full"
         >
-          Install Web App
+          Download APK (2 MB)
         </Button>
       </VStack>
     )
@@ -110,42 +75,21 @@ const InstallAppPrompt: React.FC<InstallAppPromptProps> = ({
   if (variant === 'profile-menu') {
     return (
       <VStack align="stretch" spacing={1} w="full">
-        {isAndroid && (
-          <Button
-            size="sm"
-            w="full"
-            variant="ghost"
-            justifyContent="flex-start"
-            onClick={handleDownloadAPK}
-            leftIcon={<FiDownload />}
-            whiteSpace="normal"
-            h="auto"
-            py={2}
-            textAlign="left"
-          >
-            <VStack align="start" spacing={0}>
-              <Text fontSize="sm" fontWeight="medium">Download APK</Text>
-              <Text fontSize="xs" color="gray.500">Native app (2 MB)</Text>
-            </VStack>
-          </Button>
-        )}
         <Button
           size="sm"
           w="full"
           variant="ghost"
           justifyContent="flex-start"
-          onClick={handleInstall}
-          isLoading={installing}
-          loadingText="Installing"
-          leftIcon={<FiSmartphone />}
+          onClick={handleDownloadAPK}
+          leftIcon={<FiDownload />}
           whiteSpace="normal"
           h="auto"
           py={2}
           textAlign="left"
         >
           <VStack align="start" spacing={0}>
-            <Text fontSize="sm" fontWeight="medium">Install Clovia</Text>
-            <Text fontSize="xs" color="gray.500">as web app</Text>
+            <Text fontSize="sm" fontWeight="medium">Download APK</Text>
+            <Text fontSize="xs" color="gray.500">Native app (2 MB)</Text>
           </VStack>
         </Button>
       </VStack>
@@ -183,27 +127,14 @@ const InstallAppPrompt: React.FC<InstallAppPromptProps> = ({
         </HStack>
 
         <HStack spacing={2}>
-          {isAndroid && (
-            <Button
-              size="sm"
-              colorScheme="teal"
-              leftIcon={<FiDownload />}
-              onClick={handleDownloadAPK}
-              flex={1}
-            >
-              APK (2 MB)
-            </Button>
-          )}
           <Button
             size="sm"
-            variant="outline"
             colorScheme="teal"
-            onClick={handleInstall}
-            isLoading={installing}
-            loadingText="Installing"
+            leftIcon={<FiDownload />}
+            onClick={handleDownloadAPK}
             flex={1}
           >
-            Install Web
+            APK (2 MB)
           </Button>
         </HStack>
       </VStack>

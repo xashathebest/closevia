@@ -300,6 +300,10 @@ const Premium: React.FC = () => {
   }
 
   const handleUpgrade = async (tier: 'plus' | 'pro') => {
+    if (currentTier === 'pro' && tier === 'pro') {
+      setShowCurrentPlanDetails(true)
+      return
+    }
     if (!premiumConfig?.enabled) {
       toast({ id: 'premium-disabled', title: 'Premium unavailable', description: 'Premium subscriptions are temporarily disabled.', status: 'info', duration: 4000, isClosable: true })
       return

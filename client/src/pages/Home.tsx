@@ -74,7 +74,6 @@ import ProductCard from '../components/ProductCard'
 import { ProductGridSkeleton } from '../components/ProductSkeleton'
 import ActivityFeed from '../components/ActivityFeed'
 import { useTradeMatchScores } from '../hooks/useTradeMatchScore'
-import InstallAppPrompt from '../components/InstallAppPrompt'
 import AdvertisementCarousel from '../components/AdvertisementCarousel'
 import AppDownloadBanner from '../components/AppDownloadBanner'
 import { getBoostStatus } from '../utils/boostUtils'
@@ -1248,10 +1247,6 @@ const Home: React.FC = () => {
                       >
                         Install Clovia (Android)
                       </Button>
-
-                      <Box display={{ base: 'block', md: 'none' }} w="full">
-                        <InstallAppPrompt variant="profile-menu" />
-                      </Box>
 
                       <Divider />
                       <Button

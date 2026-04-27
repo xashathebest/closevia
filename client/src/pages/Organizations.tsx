@@ -158,9 +158,14 @@ const Organizations: React.FC = () => {
         {loading ? <Spinner size="md" color="brand.500" mt={4} /> : null}
         {!loading && items.length === 0 ? <Text color="gray.500" fontSize={{ base: 'sm', md: 'md' }} fontWeight="500">No organizations found based on your search.</Text> : null}
 
-        <Grid templateColumns={{ base: '1fr', md: 'repeat(2, 1fr)' }} gap={{ base: 4, md: 6 }} pt={2}>
+        <Grid
+          templateColumns={{ base: 'minmax(0, 1fr)', md: 'repeat(2, minmax(0, 1fr))' }}
+          gap={{ base: 4, md: 6 }}
+          pt={2}
+          justifyItems="center"
+        >
           {items.map((org) => (
-            <GridItem key={org.id}>
+            <GridItem key={org.id} w="full" maxW={{ base: '420px', md: 'none' }}>
               <Box 
                 bg="white" 
                 borderWidth="0" 

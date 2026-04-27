@@ -26,16 +26,18 @@ import {
   Wrap,
   WrapItem,
   Radio,
+  IconButton,
 } from '@chakra-ui/react'
-import { CloseIcon } from '@chakra-ui/icons'
+import { AddIcon, CloseIcon } from '@chakra-ui/icons'
 import { MapContainer, TileLayer, Marker, useMap } from 'react-leaflet'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
-import { ProductUpdate } from '../types'
+import { AvailabilitySlot, ProductUpdate } from '../types'
 import { api } from '../services/api'
 import { useCustomLocations } from '../hooks/useCustomLocations'
 import { SavedLocationsUI } from '../components/SavedLocationsUI'
 import { PRODUCT_CATEGORIES } from '../utils/categories'
+import { getBackupPriceEstimate } from '../utils/priceEstimator'
 
 // Fix leaflet icon issues
 // @ts-ignore
@@ -102,6 +104,9 @@ const EditProduct: React.FC = () => {
   const [showLocationMap, setShowLocationMap] = useState(false)
   const [locationSet, setLocationSet] = useState(false)
   const [locationTypeSelected, setLocationTypeSelected] = useState<'current_location' | 'pickup_location' | 'no_location'>('no_location')
+  const [avNewDate, setAvNewDate] = useState('')
+  const [avNewStart, setAvNewStart] = useState('')
+  const [avNewEnd, setAvNewEnd] = useState('')
 
   const useCurrentLocation = () => {
     if (!navigator.geolocation) {
@@ -230,6 +235,15 @@ const EditProduct: React.FC = () => {
         }
       } catch { /* ignore parse errors */ }
 
+      let parsedAvailabilitySlots: AvailabilitySlot[] = []
+      try {
+        if (Array.isArray(product.availability_slots)) {
+          parsedAvailabilitySlots = product.availability_slots
+        } else if (typeof product.availability_slots === 'string' && product.availability_slots) {
+          parsedAvailabilitySlots = JSON.parse(product.availability_slots)
+        }
+      } catch { /* ignore parse errors */ }
+
       setFormData({
         title: product.title || '',
         description: product.description || '',
@@ -247,6 +261,9 @@ const EditProduct: React.FC = () => {
         latitude: product.latitude,
         longitude: product.longitude,
         location_type: product.location_type || 'no_location',
+        availability_slots: parsedAvailabilitySlots,
+        availability_type: product.availability_type === 'strict' ? 'strict' : 'flexible',
+        collection_setup: product.collection_setup,
       })
 
       // Set location type selector
@@ -388,6 +405,26 @@ const EditProduct: React.FC = () => {
       if (formData.wants !== undefined) form.append('wants', formData.wants)
       form.append('wanted_categories', JSON.stringify(formData.wanted_categories || []))
       form.append('show_estimated_value', formData.show_estimated_value !== false ? 'true' : 'false')
+      const hasAiEstimate =
+        formData.estimated_value_min !== undefined &&
+        formData.estimated_value_max !== undefined &&
+        formData.estimated_value_min > 0 &&
+        formData.estimated_value_max > 0
+      const fallbackEstimate = !hasAiEstimate && formData.category && formData.condition
+        ? getBackupPriceEstimate(formData.category, formData.condition)
+        : null
+      const submitEstimate = hasAiEstimate
+        ? { min: formData.estimated_value_min as number, max: formData.estimated_value_max as number }
+        : fallbackEstimate
+      if (submitEstimate) {
+        form.append('estimated_value_min', String(submitEstimate.min))
+        form.append('estimated_value_max', String(submitEstimate.max))
+      }
+      form.append('availability_slots', JSON.stringify(formData.availability_slots || []))
+      form.append('availability_type', formData.availability_type || 'flexible')
+      if (formData.collection_setup) {
+        form.append('collection_setup', typeof formData.collection_setup === 'string' ? formData.collection_setup : JSON.stringify(formData.collection_setup))
+      }
 
       // Add image files from previews that are data URLs (newly uploaded)
       // For existing server URLs, we keep them via image_urls field
@@ -598,6 +635,102 @@ const EditProduct: React.FC = () => {
                       </Button>
                     </HStack>
                   </HStack>
+                </Box>
+
+                {/* Availability Schedule */}
+                <Box
+                  p={3}
+                  bg="teal.50"
+                  borderRadius="lg"
+                  borderWidth="1px"
+                  borderColor="teal.100"
+                >
+                  <HStack justify="space-between" align={{ base: 'start', sm: 'center' }} gap={3} mb={2} flexWrap="wrap">
+                    <Box>
+                      <HStack spacing={2}>
+                        <Text fontSize="xs" fontWeight="bold" color="teal.900">Availability Schedule</Text>
+                        <Badge colorScheme="teal" fontSize="8px">Optional</Badge>
+                      </HStack>
+                      <Text fontSize="10px" color="gray.600" mt={1}>
+                        {formData.availability_type === 'strict'
+                          ? 'Offerers must choose one of your listed time slots.'
+                          : 'Offerers can pick these slots or suggest another time.'}
+                      </Text>
+                    </Box>
+                    <HStack spacing={1}>
+                      {(['flexible', 'strict'] as const).map((type) => (
+                        <Button
+                          key={type}
+                          type="button"
+                          size="xs"
+                          fontSize="10px"
+                          h="24px"
+                          colorScheme={formData.availability_type === type ? (type === 'strict' ? 'orange' : 'teal') : 'gray'}
+                          variant={formData.availability_type === type ? 'solid' : 'outline'}
+                          onClick={() => handleInputChange('availability_type', type)}
+                        >
+                          {type === 'flexible' ? 'Flexible' : 'Strict'}
+                        </Button>
+                      ))}
+                    </HStack>
+                  </HStack>
+
+                  {(formData.availability_slots || []).length > 0 && (
+                    <VStack align="stretch" spacing={1.5} mb={3}>
+                      {(formData.availability_slots || []).map((slot) => {
+                        const d = new Date(`${slot.date}T00:00:00`)
+                        const dateStr = Number.isNaN(d.getTime()) ? slot.date : d.toLocaleDateString('en-PH', { weekday: 'short', month: 'short', day: 'numeric' })
+                        return (
+                          <HStack key={slot.id} p={2} bg="white" borderRadius="md" borderLeft="3px solid" borderLeftColor="teal.400" justify="space-between">
+                            <Text fontSize="11px" color="teal.900" fontWeight="600">
+                              {dateStr} - {slot.start_time}-{slot.end_time}
+                            </Text>
+                            <IconButton
+                              aria-label="Remove slot"
+                              icon={<CloseIcon boxSize={2} />}
+                              size="xs"
+                              variant="ghost"
+                              colorScheme="red"
+                              onClick={() => handleInputChange('availability_slots', (formData.availability_slots || []).filter((s) => s.id !== slot.id))}
+                            />
+                          </HStack>
+                        )
+                      })}
+                    </VStack>
+                  )}
+
+                  <VStack align="stretch" spacing={2} p={2} bg="white" borderRadius="md" borderWidth="1px" borderColor="teal.100">
+                    <Text fontSize="10px" fontWeight="semibold" color="gray.600">Add a time slot</Text>
+                    <HStack spacing={1.5} align="center" flexWrap={{ base: 'wrap', sm: 'nowrap' }}>
+                      <Input type="date" value={avNewDate} onChange={(e) => setAvNewDate(e.target.value)} min={new Date().toISOString().split('T')[0]} size="sm" fontSize="11px" bg="white" flex={{ base: '1 1 100%', sm: 1.5 }} />
+                      <Input type="time" value={avNewStart} onChange={(e) => setAvNewStart(e.target.value)} size="sm" fontSize="11px" bg="white" flex={1} />
+                      <Text fontSize="10px" color="gray.400">to</Text>
+                      <Input type="time" value={avNewEnd} onChange={(e) => setAvNewEnd(e.target.value)} size="sm" fontSize="11px" bg="white" flex={1} />
+                      <IconButton
+                        aria-label="Add availability slot"
+                        icon={<AddIcon boxSize={2.5} />}
+                        size="sm"
+                        colorScheme="teal"
+                        isDisabled={!avNewDate || !avNewStart || !avNewEnd || avNewEnd <= avNewStart}
+                        onClick={() => {
+                          if (!avNewDate || !avNewStart || !avNewEnd || avNewEnd <= avNewStart) return
+                          const newSlot: AvailabilitySlot = {
+                            id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+                            date: avNewDate,
+                            start_time: avNewStart,
+                            end_time: avNewEnd,
+                          }
+                          handleInputChange('availability_slots', [...(formData.availability_slots || []), newSlot])
+                          setAvNewDate('')
+                          setAvNewStart('')
+                          setAvNewEnd('')
+                        }}
+                      />
+                    </HStack>
+                    {avNewEnd && avNewStart && avNewEnd <= avNewStart && (
+                      <Text fontSize="9px" color="red.500">End time must be after start time.</Text>
+                    )}
+                  </VStack>
                 </Box>
 
                 {/* Category & Condition */}

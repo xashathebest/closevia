@@ -2,12 +2,9 @@ import React from 'react'
 import { Box, Button, HStack, VStack, Text, CloseButton, Icon } from '@chakra-ui/react'
 import { FiDownload, FiSmartphone } from 'react-icons/fi'
 import {
-  canShowInstallPrompt,
-  initializeInstallPrompt,
   isAppInstalled,
   isRunningStandalone,
   markInstallDismissed,
-  promptInstall,
   wasInstallDismissed,
 } from '../serviceWorkerRegistration'
 
@@ -22,8 +19,6 @@ const AppDownloadBanner: React.FC<AppDownloadBannerProps> = ({
 }) => {
   const [dismissed, setDismissed] = React.useState(false)
   const [isAndroid, setIsAndroid] = React.useState(false)
-  const [installAvailable, setInstallAvailable] = React.useState(false)
-  const [installing, setInstalling] = React.useState(false)
 
   React.useEffect(() => {
     if (isAppInstalled() || isRunningStandalone() || wasInstallDismissed()) {
@@ -41,15 +36,10 @@ const AppDownloadBanner: React.FC<AppDownloadBannerProps> = ({
     const userAgent = navigator.userAgent.toLowerCase()
     setIsAndroid(/android/.test(userAgent))
 
-    const cleanupPrompt = initializeInstallPrompt((isAvailable) => {
-      setInstallAvailable(isAvailable && !isAppInstalled() && !wasInstallDismissed())
-    })
     const hideAfterInstall = () => setDismissed(true)
     window.addEventListener('clovia:pwa-installed', hideAfterInstall)
-    setInstallAvailable(canShowInstallPrompt())
 
     return () => {
-      cleanupPrompt()
       window.removeEventListener('clovia:pwa-installed', hideAfterInstall)
     }
   }, [])
@@ -64,17 +54,7 @@ const AppDownloadBanner: React.FC<AppDownloadBannerProps> = ({
     window.location.href = '/clovia.apk'
   }
 
-  const handleInstall = async () => {
-    setInstalling(true)
-    try {
-      const accepted = await promptInstall()
-      if (accepted) setDismissed(true)
-    } finally {
-      setInstalling(false)
-    }
-  }
-
-  if (dismissed || isAppInstalled() || !installAvailable) {
+  if (dismissed || isAppInstalled() || !isAndroid) {
     return null
   }
 
@@ -106,8 +86,8 @@ const AppDownloadBanner: React.FC<AppDownloadBannerProps> = ({
             </HStack>
             <Text fontSize="sm" opacity={0.9}>
               {isAndroid 
-                ? 'Install CloviaPH for a fullscreen app experience with offline support and faster loading.'
-                : 'Install CloviaPH for a fullscreen app experience that works offline and loads faster.'}
+                ? 'Download the Android APK for the most reliable app install.'
+                : 'The Android APK is the supported app download right now.'}
             </Text>
           </VStack>
           <CloseButton 
@@ -119,34 +99,17 @@ const AppDownloadBanner: React.FC<AppDownloadBannerProps> = ({
         </HStack>
         
         <HStack spacing={3} mt={4}>
-          {installAvailable && (
-            <Button
-              size="sm"
-              bg="white"
-              color="teal.600"
-              fontWeight="bold"
-              leftIcon={<FiSmartphone />}
-              onClick={handleInstall}
-              isLoading={installing}
-              loadingText="Installing"
-              _hover={{ bg: 'gray.100' }}
-            >
-              Install CloviaPH
-            </Button>
-          )}
-          {isAndroid && (
-            <Button
-              size="sm"
-              bg="white"
-              color="teal.600"
-              fontWeight="bold"
-              leftIcon={<FiDownload />}
-              onClick={handleDownloadAPK}
-              _hover={{ bg: 'gray.100' }}
-            >
-              Download APK (2 MB)
-            </Button>
-          )}
+          <Button
+            size="sm"
+            bg="white"
+            color="teal.600"
+            fontWeight="bold"
+            leftIcon={<FiDownload />}
+            onClick={handleDownloadAPK}
+            _hover={{ bg: 'gray.100' }}
+          >
+            Download APK (2 MB)
+          </Button>
           <Button
             size="sm"
             variant="outline"
@@ -177,44 +140,27 @@ const AppDownloadBanner: React.FC<AppDownloadBannerProps> = ({
         <HStack spacing={2} flex={1}>
           <Icon as={FiSmartphone} />
           <VStack align="start" spacing={0}>
-            <Text fontWeight="bold" fontSize="sm">Install CloviaPH</Text>
+            <Text fontWeight="bold" fontSize="sm">Download CloviaPH</Text>
             <Text fontSize="xs" opacity={0.85}>
               {isAndroid 
-                ? 'Get native app features - offline, faster, push notifications'
-                : 'Install as app for full screen experience'}
+                ? 'Android APK - direct install'
+                : 'Android APK download'}
             </Text>
           </VStack>
         </HStack>
 
         <HStack spacing={2} flexShrink={0}>
-          {isAndroid && (
-            <Button
-              size="xs"
-              bg="white"
-              color="teal.600"
-              fontWeight="bold"
-              leftIcon={<FiDownload />}
-              onClick={handleDownloadAPK}
-              _hover={{ bg: 'gray.100' }}
-            >
-              APK
-            </Button>
-          )}
-          {installAvailable && (
-            <Button
-              size="xs"
-              bg="white"
-              color="teal.600"
-              fontWeight="bold"
-              leftIcon={<FiSmartphone />}
-              onClick={handleInstall}
-              isLoading={installing}
-              loadingText="Installing"
-              _hover={{ bg: 'gray.100' }}
-            >
-              Install
-            </Button>
-          )}
+          <Button
+            size="xs"
+            bg="white"
+            color="teal.600"
+            fontWeight="bold"
+            leftIcon={<FiDownload />}
+            onClick={handleDownloadAPK}
+            _hover={{ bg: 'gray.100' }}
+          >
+            APK
+          </Button>
           <CloseButton 
             size="sm"
             onClick={handleDismiss}
