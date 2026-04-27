@@ -27,7 +27,7 @@ export const isIosBrowser = (): boolean => {
   return /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
 }
 
-const urlBase64ToUint8Array = (base64String: string): Uint8Array => {
+const urlBase64ToUint8Array = (base64String: string): ArrayBuffer => {
   const padding = '='.repeat((4 - (base64String.length % 4)) % 4)
   const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/')
   const rawData = window.atob(base64)
@@ -35,7 +35,7 @@ const urlBase64ToUint8Array = (base64String: string): Uint8Array => {
   for (let i = 0; i < rawData.length; i += 1) {
     outputArray[i] = rawData.charCodeAt(i)
   }
-  return outputArray
+  return outputArray.buffer as ArrayBuffer
 }
 
 const getPublicKey = async (): Promise<string | null> => {
