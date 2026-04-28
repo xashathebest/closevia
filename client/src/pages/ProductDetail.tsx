@@ -80,6 +80,7 @@ import VerifiedAvatar from '../components/VerifiedAvatar'
 import MediaGallery from '../components/MediaGallery'
 import TrustScoreCard from '../components/TrustScoreCard'
 import { formatEstimatedValueRange } from '../utils/currency'
+import { getCategoryLabel, normalizeWantedCategories } from '../utils/categories'
 import axios from 'axios';
 import { CloseIcon } from '@chakra-ui/icons'
 
@@ -89,6 +90,7 @@ const ProductDetail: React.FC = () => {
   const { getProduct, getUserProducts, recordProductView, markProductBoosted } = useProducts()
   const [product, setProduct] = useState<Product | null>(null)
   const [sellerProducts, setSellerProducts] = useState<Product[]>([])
+  const [sellerProductStatusFilter, setSellerProductStatusFilter] = useState<'available' | 'pending' | 'traded' | 'all'>('available')
   const [sellerStats, setSellerStats] = useState<any | null>(null)
   const [sellerProfile, setSellerProfile] = useState<User | null>(null)
   const [loading, setLoading] = useState(true)
@@ -168,6 +170,9 @@ const ProductDetail: React.FC = () => {
 
   useEffect(() => {
     if (id) {
+      window.scrollTo({ top: 0, left: 0, behavior: 'auto' })
+      document.documentElement.scrollTop = 0
+      document.body.scrollTop = 0
       fetchProduct()
     }
   }, [id])
@@ -921,19 +926,22 @@ const ProductDetail: React.FC = () => {
   }
 
   const handleViewOffers = async () => {
+    if (!product) return
+    setOffersForProduct([])
+    setOffersModalOpen(true)
     try {
       setLoadingOffers(true)
       const response = await api.get(`/api/trades`, {
         params: {
           direction: 'incoming',
           status: 'pending',
+          target_product_id: product.id,
           limit: 100
         }
       })
       // Filter for this specific product
-      const filteredOffers = (response.data?.data || []).filter((trade: any) => trade.target_product_id === product?.id)
+      const filteredOffers = (response.data?.data || []).filter((trade: any) => trade.target_product_id === product.id)
       setOffersForProduct(filteredOffers)
-      setOffersModalOpen(true)
     } catch (error) {
       toast({
         id: "productdetail-error",
@@ -1142,11 +1150,11 @@ const ProductDetail: React.FC = () => {
   let estimateGapNote = 'AI estimate is not available for this listing yet.'
   if (hasListedPrice && hasFairRange) {
     if (listedPrice < fairMin) {
-      estimateGapNote = `Listed at ₱${formatPrice(listedPrice)} - significantly below the estimated fair range. Verify item condition.`
+      estimateGapNote = 'Significantly below the estimated fair range. Verify item condition.'
     } else if (listedPrice > fairMax) {
-      estimateGapNote = `Listed at ₱${formatPrice(listedPrice)} - above the estimated fair range. Compare against similar listings.`
+      estimateGapNote = 'Above the estimated fair range. Compare against similar listings.'
     } else {
-      estimateGapNote = `Listed at ₱${formatPrice(listedPrice)} - within the estimated fair range.`
+      estimateGapNote = 'Within the estimated fair range.'
     }
   }
   const estimateStatusLabel = isSignificantlyBelowEstimate
@@ -1156,10 +1164,19 @@ const ProductDetail: React.FC = () => {
       : isPricedRightEstimate
         ? 'Priced right'
         : 'Needs review'
+  const wantedCategories = normalizeWantedCategories(product.wanted_categories)
+  const displayedSellerProducts = sellerProducts.filter((p) => {
+    if (p.id === product.id) return false
+    const status = String(p.status || '').toLowerCase()
+    if (sellerProductStatusFilter === 'all') return status !== 'deleted'
+    if (sellerProductStatusFilter === 'pending') return status === 'pending' || status === 'locked'
+    if (sellerProductStatusFilter === 'traded') return status === 'traded' || status === 'sold'
+    return status === 'available'
+  })
 
   return (
-    <Box bg="#FFFDF1" minH="100vh" w="100%" pb={{ base: 32, lg: 6 }}>
-      <Container maxW="container.xl" py={{ base: 2, md: 8 }} px={{ base: 4, md: 4 }}>
+    <Box bg="#FFFDF1" minH="100vh" w="100%" pb={{ base: '150px', md: '120px', lg: '100px' }}>
+      <Container maxW="container.xl" pt={{ base: 2, md: 8 }} pb={{ base: 6, md: 10 }} px={{ base: 4, md: 4 }}>
         <VStack spacing={{ base: 3, md: 8 }} align="stretch">
           <Box bg="white" borderRadius={{ base: 'lg', md: '3xl' }} overflow="hidden" shadow={{ base: 'none', md: 'xl' }} p={{ base: 0, md: 4 }} borderWidth={{ base: '1px', md: 0 }} borderColor="gray.100">
             <SimpleGrid columns={{ base: 1, lg: 2 }} spacing={{ base: 2, md: 6 }}>
@@ -1506,14 +1523,10 @@ const ProductDetail: React.FC = () => {
                               <Text display="none" fontSize="xs" color="green.600" fontWeight="600">
                                 Fair range: ₱{formatPrice(fairMin)} - ₱{formatPrice(fairMax)}
                               </Text>
-                              <SimpleGrid columns={3} spacing={2} pt={2}>
+                              <SimpleGrid columns={2} spacing={2} pt={2}>
                                 <Box>
                                   <Text fontSize="2xs" color="gray.500" fontWeight="700">Fair range</Text>
                                   <Text fontSize="xs" color="gray.800" fontWeight="800">₱{formatPrice(fairMin)} - ₱{formatPrice(fairMax)}</Text>
-                                </Box>
-                                <Box>
-                                  <Text fontSize="2xs" color="gray.500" fontWeight="700">Listed price</Text>
-                                  <Text fontSize="xs" color="gray.800" fontWeight="800">{hasListedPrice ? `₱${formatPrice(listedPrice)}` : 'Not listed'}</Text>
                                 </Box>
                                 <Box>
                                   <Text fontSize="2xs" color="gray.500" fontWeight="700">Status</Text>
@@ -1656,6 +1669,139 @@ const ProductDetail: React.FC = () => {
                     )}
                   </Box>
 
+                  {(wantedCategories.length > 0 || product.wants || product.desired_product) && (
+                    <Box
+                      p={{ base: 3, md: 5 }}
+                      borderRadius={{ base: 'xl', md: '2xl' }}
+                      bg="white"
+                      shadow="sm"
+                    >
+                      <Heading size="sm" mb={3} color={detailText} fontWeight="700">
+                        What They Are Looking For
+                      </Heading>
+                      <VStack align="stretch" spacing={3}>
+                        {wantedCategories.length > 0 && (
+                          <Wrap spacing={2}>
+                            {wantedCategories.map(category => (
+                              <WrapItem key={category}>
+                                <Badge colorScheme="brand" variant="subtle" borderRadius="full" px={3} py={1}>
+                                  {getCategoryLabel(category)}
+                                </Badge>
+                              </WrapItem>
+                            ))}
+                          </Wrap>
+                        )}
+                        {product.desired_product && (
+                          <Text fontSize="sm" color={detailMuted}>
+                            Desired item: <Text as="span" color={detailText} fontWeight="700">{product.desired_product}</Text>
+                          </Text>
+                        )}
+                        {product.wants && (
+                          <Text fontSize="sm" color={detailMuted} whiteSpace="pre-line">
+                            {product.wants}
+                          </Text>
+                        )}
+                      </VStack>
+                    </Box>
+                  )}
+
+                  {!isOwner && product.status === 'available' && (
+                    <Box
+                      mt={{ base: 1, md: 2 }}
+                      mb={{ base: 3, md: 4 }}
+                      p={{ base: 3, md: 4 }}
+                      bg="white"
+                      borderRadius={{ base: 'xl', md: '2xl' }}
+                      borderWidth="1px"
+                      borderColor="gray.100"
+                      shadow="sm"
+                    >
+                      <VStack align="stretch" spacing={3}>
+                        <Text fontSize="xs" color="gray.500" fontWeight="800" textTransform="uppercase" letterSpacing="wide">
+                          Make an offer
+                        </Text>
+                        <HStack w="full" spacing={{ base: 2, md: 3 }} align="stretch">
+                          <Tooltip label={hasPendingOfferOnProduct ? "You already have a pending offer on this product" : "Propose a trade"}>
+                            <Button
+                              flex={1}
+                              h={{ base: '48px', md: '52px' }}
+                              borderRadius={{ base: 'xl', md: '2xl' }}
+                              fontWeight="800"
+                              bg={hasPendingOfferOnProduct ? 'gray.200' : 'brand.500'}
+                              color={hasPendingOfferOnProduct ? 'gray.700' : 'white'}
+                              _hover={hasPendingOfferOnProduct ? { bg: 'gray.300' } : { bg: 'brand.600', transform: 'translateY(-2px)' }}
+                              _active={{ transform: 'scale(0.98)' }}
+                              boxShadow={hasPendingOfferOnProduct ? 'none' : 'md'}
+                              transition="all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1)"
+                              onClick={openTrade}
+                              isDisabled={hasPendingOfferOnProduct}
+                            >
+                              {hasPendingOfferOnProduct ? 'Pending Offer Sent' : 'Propose Trade'}
+                            </Button>
+                          </Tooltip>
+                          <Tooltip label="Offer to buy this item with cash">
+                            <Button
+                              flex={1}
+                              h={{ base: '48px', md: '52px' }}
+                              borderRadius={{ base: 'xl', md: '2xl' }}
+                              fontWeight="800"
+                              variant="outline"
+                              colorScheme="orange"
+                              bg="white"
+                              borderColor="orange.300"
+                              color="orange.600"
+                              _hover={{ bg: 'orange.50', borderColor: 'orange.500', transform: 'translateY(-2px)', shadow: 'sm' }}
+                              _active={{ transform: 'scale(0.98)' }}
+                              transition="all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1)"
+                              onClick={openBuyout}
+                              isDisabled={hasPendingOfferOnProduct}
+                              opacity={hasPendingOfferOnProduct ? 0.8 : 1}
+                            >
+                              Buyout
+                            </Button>
+                          </Tooltip>
+                          <Box position="relative" flexShrink={0}>
+                            <IconButton
+                              aria-label="View offers"
+                              icon={<FaHandshake />}
+                              h={{ base: '48px', md: '52px' }}
+                              w={{ base: '48px', md: '52px' }}
+                              minW={{ base: '48px', md: '52px' }}
+                              borderRadius={{ base: 'xl', md: '2xl' }}
+                              variant="outline"
+                              colorScheme="brand"
+                              bg="brand.50"
+                              borderColor="brand.200"
+                              color="brand.600"
+                              onClick={handleViewOffers}
+                              _hover={{ bg: 'brand.100', borderColor: 'brand.400', transform: 'translateY(-2px)', shadow: 'sm' }}
+                              _active={{ transform: 'scale(0.98)' }}
+                              transition="all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1)"
+                            />
+                            {Number((product as any).offer_count || 0) > 0 && (
+                              <Badge
+                                position="absolute"
+                                top="-7px"
+                                right="-7px"
+                                minW="18px"
+                                h="18px"
+                                px={1}
+                                borderRadius="full"
+                                colorScheme="brand"
+                                fontSize="9px"
+                                display="grid"
+                                placeItems="center"
+                                pointerEvents="none"
+                              >
+                                {(product as any).offer_count}
+                              </Badge>
+                            )}
+                          </Box>
+                        </HStack>
+                      </VStack>
+                    </Box>
+                  )}
+
                   {/* Availability Schedule */}
                   {(() => {
                     const raw = (product as any).availability_slots
@@ -1675,74 +1821,6 @@ const ProductDetail: React.FC = () => {
 
                 {/* Action Buttons: full-width primary + compact Offers icon square */}
                 <VStack spacing={{ base: 2.5, md: 4 }} mt={{ base: 1, md: 3 }} pt={0}>
-                  {!isOwner && product.status === 'available' && (
-                    <VStack spacing={{ base: 2, md: 3 }} w="full" display={{ base: 'none', md: 'flex' }}>
-                        <HStack w="full" spacing={{ base: 2, md: 3 }} align="stretch">
-                          <Tooltip label={hasPendingOfferOnProduct ? "You already have a pending offer on this product" : "Propose a trade"}>
-                            <Button
-                              flex={1}
-                              size={{ base: 'md', md: 'lg' }}
-                              borderRadius={{ base: 'xl', md: '2xl' }}
-                              fontWeight="800"
-                              bg={hasPendingOfferOnProduct ? 'gray.200' : 'brand.500'}
-                              color={hasPendingOfferOnProduct ? 'gray.700' : 'white'}
-                              _hover={hasPendingOfferOnProduct ? { bg: 'gray.300' } : { bg: 'brand.600', transform: 'translateY(-2px)' }}
-                              _active={{ transform: 'scale(0.98)' }}
-                              boxShadow={hasPendingOfferOnProduct ? 'none' : 'md'}
-                              transition="all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1)"
-                              onClick={openTrade}
-                              isDisabled={hasPendingOfferOnProduct}
-                              opacity={1}
-                            >
-                              {hasPendingOfferOnProduct ? "Pending Offer Sent" : "Trade"}
-                            </Button>
-                          </Tooltip>
-                          <Tooltip label="Offer to buy this item with cash">
-                            <Button
-                              flex={1}
-                              size={{ base: 'md', md: 'lg' }}
-                              borderRadius={{ base: 'xl', md: '2xl' }}
-                              fontWeight="800"
-                              variant="outline"
-                              colorScheme="orange"
-                              borderWidth="1px"
-                              bg="white"
-                              borderColor="orange.300"
-                              color="orange.600"
-                              _hover={{ bg: 'orange.50', borderColor: 'orange.500', transform: 'translateY(-2px)', shadow: 'sm' }}
-                              _active={{ transform: 'scale(0.98)' }}
-                              transition="all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1)"
-                              onClick={openBuyout}
-                              isDisabled={hasPendingOfferOnProduct}
-                              opacity={hasPendingOfferOnProduct ? 0.8 : 1}
-                            >
-                              Buyout
-                            </Button>
-                          </Tooltip>
-                          <Tooltip label={`Offers (${(product as any).offer_count || 0})`}>
-                            <IconButton
-                              aria-label="View offers"
-                              icon={<FaHandshake />}
-                              w={{ base: "40px", md: "52px" }}
-                              h={{ base: "40px", md: "52px" }}
-                              minW={{ base: "40px", md: "52px" }}
-                              borderRadius={{ base: 'xl', md: '2xl' }}
-                              variant="outline"
-                              colorScheme="brand"
-                              borderWidth="1px"
-                              borderColor="brand.200"
-                              color="brand.600"
-                              bg="brand.50"
-                              onClick={handleViewOffers}
-                              _hover={{ bg: 'brand.100', borderColor: 'brand.400', transform: 'translateY(-2px)', shadow: 'sm' }}
-                              _active={{ transform: 'scale(0.98)' }}
-                              transition="all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1)"
-                            />
-                          </Tooltip>
-                        </HStack>
-                    </VStack>
-                  )}
-
                   {isOwner && (
                     <VStack spacing={{ base: 2.5, md: 4 }} w="full" align="stretch">
                       <HStack spacing={{ base: 2, md: 4 }} w="full" align="stretch">
@@ -1988,7 +2066,7 @@ const ProductDetail: React.FC = () => {
                     {product.seller_id && <ResponseMetricsBadge userId={product.seller_id} />}
                     {product.seller_id && user && (
                       <HStack spacing={1} align="center">
-                        <Text fontSize="xs" color="gray.500">Distance from you:</Text>
+                        <Text fontSize="xs" color="gray.500">Trader area:</Text>
                         <ProximityBadge type="user" targetId={product.seller_id} />
                       </HStack>
                     )}
@@ -2171,12 +2249,25 @@ const ProductDetail: React.FC = () => {
 
           {/* Seller Products Section */}
           <Box bg="white" p={6} rounded="lg" shadow="sm">
-            <Heading size="md" mb={6}>
-              Trader Products
-            </Heading>
+            <Flex justify="space-between" align={{ base: 'stretch', sm: 'center' }} direction={{ base: 'column', sm: 'row' }} gap={3} mb={6}>
+              <Heading size="md">
+                Trader Products
+              </Heading>
+              <Select
+                size="sm"
+                w={{ base: 'full', sm: '180px' }}
+                value={sellerProductStatusFilter}
+                onChange={(e) => setSellerProductStatusFilter(e.target.value as typeof sellerProductStatusFilter)}
+              >
+                <option value="available">Available</option>
+                <option value="pending">Pending</option>
+                <option value="traded">Traded</option>
+                <option value="all">All</option>
+              </Select>
+            </Flex>
             <SimpleGrid columns={{ base: 1, sm: 2, md: 3, lg: 4 }} spacing={4}>
-              {sellerProducts && sellerProducts.length > 0 ? (
-                sellerProducts.map((p) => (
+              {displayedSellerProducts.length > 0 ? (
+                displayedSellerProducts.map((p) => (
                   <Box
                     key={p.id}
                     borderWidth="1px"
@@ -2223,60 +2314,14 @@ const ProductDetail: React.FC = () => {
                 ))
               ) : (
                 <Box p={4} w="full">
-                  <Text color="gray.600">No other products from this trader.</Text>
+                  <Text color="gray.600">
+                    {loadingProducts ? 'Loading products...' : `No ${sellerProductStatusFilter === 'all' ? 'other' : sellerProductStatusFilter} products from this trader.`}
+                  </Text>
                 </Box>
               )}
             </SimpleGrid>
           </Box>
         </VStack>
-        {!isOwner && product.status === 'available' && (
-          <Box
-            display={{ base: 'block', md: 'none' }}
-            position="fixed"
-            left={0}
-            right={0}
-            bottom="64px"
-            zIndex={20}
-            px={4}
-            py={3}
-            bg="rgba(255, 253, 241, 0.96)"
-            borderTopWidth="1px"
-            borderColor="gray.200"
-            backdropFilter="blur(10px)"
-          >
-            <HStack spacing={2} maxW="container.xl" mx="auto">
-              <Button
-                flex={1}
-                h="44px"
-                borderRadius="lg"
-                fontWeight="800"
-                bg={hasPendingOfferOnProduct ? 'gray.200' : 'brand.500'}
-                color={hasPendingOfferOnProduct ? 'gray.700' : 'white'}
-                _hover={hasPendingOfferOnProduct ? { bg: 'gray.200' } : { bg: 'brand.600' }}
-                onClick={openTrade}
-                isDisabled={hasPendingOfferOnProduct}
-                opacity={1}
-              >
-                {hasPendingOfferOnProduct ? 'Pending Offer Sent' : 'Propose Trade'}
-              </Button>
-              <Button
-                flex={1}
-                h="44px"
-                borderRadius="lg"
-                fontWeight="800"
-                variant="solid"
-                bg="orange.500"
-                color="white"
-                _hover={{ bg: 'orange.600' }}
-                onClick={openBuyout}
-                isDisabled={hasPendingOfferOnProduct}
-                opacity={hasPendingOfferOnProduct ? 0.8 : 1}
-              >
-                Buyout
-              </Button>
-            </HStack>
-          </Box>
-        )}
         <TradeModal isOpen={isTradeOpen} onClose={() => setIsTradeOpen(false)} targetProductId={tradeTargetProductId} />
         <BuyoutModal isOpen={isBuyoutOpen} onClose={() => setIsBuyoutOpen(false)} targetProductId={product?.id ?? null} />
 
@@ -2600,17 +2645,10 @@ const ProductDetail: React.FC = () => {
                       {product.title}
                     </Text>
                     <Text fontWeight="800" fontSize="xl" color="gray.800" mt={1}>
-                      {canShowEstimate && product.estimated_value_min && product.estimated_value_max
-                        ? `₱${(product.estimated_value_min).toLocaleString()}–₱${(product.estimated_value_max).toLocaleString()}`
-                        : product.price && product.price > 0
-                          ? `₱${product.price.toFixed(2)}`
-                          : 'Est. Value Unavailable'}
+                      {product.price && product.price > 0
+                        ? `₱${product.price.toFixed(2)}`
+                        : 'Price unavailable'}
                     </Text>
-                    {canShowEstimate && product.estimated_value_min && product.estimated_value_max && (
-                      <Text fontSize="xs" color="purple.600" fontWeight="600" mt={0.5}>
-                        📊 Market Range Estimate
-                      </Text>
-                    )}
                   </VStack>
                 </HStack>
               )}

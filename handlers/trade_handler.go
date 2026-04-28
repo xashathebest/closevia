@@ -1540,8 +1540,8 @@ func (h *TradeHandler) CreateTrade(c *fiber.Ctx) error {
 	if autoConfirmed {
 		autoMsgBuyer := "Your trade was automatically confirmed because both sides sent matching offers for " + productTitle
 		autoMsgSeller := buyerName + " sent the exact reverse offer for " + productTitle + ", so the trade was automatically confirmed."
-		_, _ = h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)", userID, autoMsgBuyer)
-		_, _ = h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)", sellerID, autoMsgSeller)
+		insertTradeNotification(h.db, userID, "trade_update", autoMsgBuyer, tradeID)
+		insertTradeNotification(h.db, sellerID, "trade_update", autoMsgSeller, reverseTradeID)
 		publishNotification(userID, autoMsgBuyer, "trade_update")
 		publishNotification(sellerID, autoMsgSeller, "trade_update")
 		publishToUser(userID, sseEvent{Type: "trade_updated", Data: fiber.Map{"trade_id": tradeID, "status": "active", "auto_confirmed": true}})
@@ -1565,8 +1565,8 @@ func (h *TradeHandler) CreateTrade(c *fiber.Ctx) error {
 		}
 		mismatchMsgToBuyer := fmt.Sprintf("A reverse offer for %s was found, but it stayed pending because the trade methods do not match: your %s vs their %s.", productTitle, formatMeetingType(currentMeetingType), formatMeetingType(reverseMeetingMismatchType))
 		mismatchMsgToSeller := fmt.Sprintf("%s sent a reverse offer for %s, but it stayed pending because the trade methods do not match: your %s vs their %s.", buyerName, productTitle, formatMeetingType(reverseMeetingMismatchType), formatMeetingType(currentMeetingType))
-		_, _ = h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)", userID, mismatchMsgToBuyer)
-		_, _ = h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)", sellerID, mismatchMsgToSeller)
+		insertTradeNotification(h.db, userID, "trade_update", mismatchMsgToBuyer, tradeID)
+		insertTradeNotification(h.db, sellerID, "trade_update", mismatchMsgToSeller, reverseMeetingMismatchTradeID)
 		publishNotification(userID, mismatchMsgToBuyer, "trade_update")
 		publishNotification(sellerID, mismatchMsgToSeller, "trade_update")
 	} else {
@@ -1913,6 +1913,12 @@ func (h *TradeHandler) GetTrades(c *fiber.Ctx) error {
 		} else {
 			where += " AND t.status = ?"
 			args = append(args, status)
+		}
+	}
+	if targetProductID := strings.TrimSpace(c.Query("target_product_id", "")); targetProductID != "" {
+		if pid, err := strconv.Atoi(targetProductID); err == nil && pid > 0 {
+			where += " AND t.target_product_id = ?"
+			args = append(args, pid)
 		}
 	}
 
@@ -2380,9 +2386,9 @@ func (h *TradeHandler) UpdateTrade(c *fiber.Ctx) error {
 				var otherBuyerID int
 				_ = h.db.QueryRow("SELECT buyer_id FROM trades WHERE id = ?", otherID).Scan(&otherBuyerID)
 				msgToDeclinedBuyer := fmt.Sprintf("Your offer for %s was cancelled because one of its products is now committed to another trade.", productTitle)
-				_, _ = h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)", otherBuyerID, msgToDeclinedBuyer)
+				insertTradeNotification(h.db, otherBuyerID, "trade_update", msgToDeclinedBuyer, otherID)
 				publishToUser(otherBuyerID, sseEvent{Type: "trade_updated", Data: fiber.Map{"trade_id": otherID, "status": "cancelled_due_to_conflict"}})
-				sendPushToUser(otherBuyerID, "Trade update", msgToDeclinedBuyer, "/offers", "trade_update")
+				sendPushToUser(otherBuyerID, "Trade update", msgToDeclinedBuyer, tradeDeepLink(otherID), "trade_update")
 			}
 
 			convID, _ := ensureConversation(pid, buyerID, sellerID)
@@ -2391,10 +2397,10 @@ func (h *TradeHandler) UpdateTrade(c *fiber.Ctx) error {
 				_, _ = h.db.Exec("INSERT INTO trade_events (trade_id, actor_id, from_status, to_status, note) VALUES (?, ?, ?, 'active', ?)", tradeID, userID, currentStatus, payload.Message)
 				publishToUser(buyerID, sseEvent{Type: "trade_updated", Data: fiber.Map{"trade_id": tradeID, "status": "active"}})
 				publishToUser(sellerID, sseEvent{Type: "trade_updated", Data: fiber.Map{"trade_id": tradeID, "status": "active"}})
-				_, _ = h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)", buyerID, "Your trade is now ongoing: "+productTitle)
-				_, _ = h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)", sellerID, "Your trade is now ongoing: "+productTitle)
-				sendPushToUser(buyerID, "Offer accepted", "Your trade is now ongoing: "+productTitle, "/trades", "offer_accepted")
-				sendPushToUser(sellerID, "Offer accepted", "Your trade is now ongoing: "+productTitle, "/trades", "offer_accepted")
+				insertTradeNotification(h.db, buyerID, "trade_update", "Your trade is now ongoing: "+productTitle, tradeID)
+				insertTradeNotification(h.db, sellerID, "trade_update", "Your trade is now ongoing: "+productTitle, tradeID)
+				sendPushToUser(buyerID, "Offer accepted", "Your trade is now ongoing: "+productTitle, tradeDeepLink(tradeID), "offer_accepted")
+				sendPushToUser(sellerID, "Offer accepted", "Your trade is now ongoing: "+productTitle, tradeDeepLink(tradeID), "offer_accepted")
 			} else {
 				_, _, _ = saveMessage(convID, userID, "Trade accepted. Waiting for the other participant to accept "+productTitle+".")
 				_, _ = h.db.Exec("INSERT INTO trade_events (trade_id, actor_id, from_status, to_status, note) VALUES (?, ?, ?, 'accepted_by_one', ?)", tradeID, userID, currentStatus, payload.Message)
@@ -2404,9 +2410,9 @@ func (h *TradeHandler) UpdateTrade(c *fiber.Ctx) error {
 				if userID == buyerID {
 					otherUserID = sellerID
 				}
-				_, _ = h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)", otherUserID, "The other participant accepted this trade. Please accept to move it to ongoing: "+productTitle)
-				_, _ = h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)", userID, "Your acceptance was recorded. Waiting for the other participant: "+productTitle)
-				sendPushToUser(otherUserID, "Offer accepted", "The other participant accepted this trade. Please accept to move it to ongoing: "+productTitle, "/offers", "offer_accepted")
+				insertTradeNotification(h.db, otherUserID, "trade_update", "The other participant accepted this trade. Please accept to move it to ongoing: "+productTitle, tradeID)
+				insertTradeNotification(h.db, userID, "trade_update", "Your acceptance was recorded. Waiting for the other participant: "+productTitle, tradeID)
+				sendPushToUser(otherUserID, "Offer accepted", "The other participant accepted this trade. Please accept to move it to ongoing: "+productTitle, tradeDeepLink(tradeID), "offer_accepted")
 			}
 
 			if finalized && tradeOptionState == "delivery" {
@@ -2530,7 +2536,7 @@ func (h *TradeHandler) UpdateTrade(c *fiber.Ctx) error {
 			var otherBuyerID int
 			_ = h.db.QueryRow("SELECT buyer_id FROM trades WHERE id = ?", otherID).Scan(&otherBuyerID)
 			msgToDeclinedBuyer := fmt.Sprintf("Your offer for %s has been automatically declined because another offer was accepted for this item.", productTitle)
-			_, _ = h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)", otherBuyerID, msgToDeclinedBuyer)
+			insertTradeNotification(h.db, otherBuyerID, "trade_update", msgToDeclinedBuyer, otherID)
 			publishToUser(otherBuyerID, sseEvent{Type: "trade_updated", Data: fiber.Map{"trade_id": otherID, "status": "declined"}})
 		}
 
@@ -2539,8 +2545,8 @@ func (h *TradeHandler) UpdateTrade(c *fiber.Ctx) error {
 		_, _ = h.db.Exec("INSERT INTO trade_events (trade_id, actor_id, from_status, to_status, note) VALUES (?, ?, ?, 'accepted', ?)", tradeID, userID, currentStatus, payload.Message)
 		publishToUser(buyerID, sseEvent{Type: "trade_updated", Data: fiber.Map{"trade_id": tradeID, "status": "accepted"}})
 		publishToUser(sellerID, sseEvent{Type: "trade_updated", Data: fiber.Map{"trade_id": tradeID, "status": "accepted"}})
-		_, _ = h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)", buyerID, "Your trade offer was accepted: "+productTitle)
-		_, _ = h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)", sellerID, "You accepted a trade offer: "+productTitle)
+		insertTradeNotification(h.db, buyerID, "trade_update", "Your trade offer was accepted: "+productTitle, tradeID)
+		insertTradeNotification(h.db, sellerID, "trade_update", "You accepted a trade offer: "+productTitle, tradeID)
 
 		// Auto-create delivery record for delivery trades
 		if tradeOption == "delivery" {
@@ -2611,9 +2617,9 @@ func (h *TradeHandler) UpdateTrade(c *fiber.Ctx) error {
 		if strings.TrimSpace(productTitle) != "" {
 			_, _ = h.db.Exec("UPDATE notifications SET type = 'trade_update', message = ?, is_read = FALSE WHERE user_id = ? AND type = 'trade_offer' AND message LIKE ?", "Offer no longer available: "+productTitle, sellerID, "%"+productTitle+"%")
 		}
-		_, _ = h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)", buyerID, "Your trade offer was declined: "+productTitle)
-		_, _ = h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)", sellerID, "You declined a trade offer: "+productTitle)
-		sendPushToUser(buyerID, "Offer declined", "Your trade offer was declined: "+productTitle, "/offers", "offer_rejected")
+		insertTradeNotification(h.db, buyerID, "trade_update", "Your trade offer was declined: "+productTitle, tradeID)
+		insertTradeNotification(h.db, sellerID, "trade_update", "You declined a trade offer: "+productTitle, tradeID)
+		sendPushToUser(buyerID, "Offer declined", "Your trade offer was declined: "+productTitle, tradeDeepLink(tradeID), "offer_rejected")
 		_, _ = h.db.Exec("INSERT INTO trade_events (trade_id, actor_id, from_status, to_status, note) VALUES (?, ?, ?, 'declined', ?)", tradeID, userID, currentStatus, payload.Message)
 
 		// Record rejection signal so hybrid matching can avoid poor fits and suggest better loops.
@@ -2875,14 +2881,14 @@ func (h *TradeHandler) UpdateTrade(c *fiber.Ctx) error {
 		if autoConfirmed {
 			publishToUser(buyerID, sseEvent{Type: "trade_updated", Data: fiber.Map{"trade_id": tradeID, "status": "active", "auto_confirmed": true}})
 			publishToUser(sellerID, sseEvent{Type: "trade_updated", Data: fiber.Map{"trade_id": tradeID, "status": "active", "auto_confirmed": true}})
-			_, _ = h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)", buyerID, "Your updated offer matched an exact reverse offer and is now ongoing: "+productTitle)
-			_, _ = h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)", sellerID, "A reciprocal match was found after the offer update. Your trade is now ongoing: "+productTitle)
+			insertTradeNotification(h.db, buyerID, "trade_update", "Your updated offer matched an exact reverse offer and is now ongoing: "+productTitle, tradeID)
+			insertTradeNotification(h.db, sellerID, "trade_update", "A reciprocal match was found after the offer update. Your trade is now ongoing: "+productTitle, tradeID)
 			_, _ = h.db.Exec("INSERT INTO trade_events (trade_id, actor_id, from_status, to_status, note) VALUES (?, ?, ?, 'active', ?)", tradeID, userID, currentStatus, "Offer edited and auto-confirmed")
 		} else {
 			publishToUser(buyerID, sseEvent{Type: "trade_updated", Data: fiber.Map{"trade_id": tradeID, "status": "pending", "edited": true}})
 			publishToUser(sellerID, sseEvent{Type: "trade_updated", Data: fiber.Map{"trade_id": tradeID, "status": "pending", "edited": true}})
-			_, _ = h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)", sellerID, sellerEditMessage)
-			_, _ = h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)", buyerID, "Your offer changes were saved: "+productTitle)
+			insertTradeNotification(h.db, sellerID, "trade_update", sellerEditMessage, tradeID)
+			insertTradeNotification(h.db, buyerID, "trade_update", "Your offer changes were saved: "+productTitle, tradeID)
 			_, _ = h.db.Exec("INSERT INTO trade_events (trade_id, actor_id, from_status, to_status, note) VALUES (?, ?, ?, ?, ?)", tradeID, userID, currentStatus, currentStatus, "Offer edited")
 		}
 	case "counter":
@@ -2992,7 +2998,7 @@ func (h *TradeHandler) UpdateTrade(c *fiber.Ctx) error {
 		if userID == buyerID {
 			recipientID = sellerID
 		}
-		_, _ = h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)", recipientID, "Your trade offer was countered: "+productTitle)
+		insertTradeNotification(h.db, recipientID, "trade_update", "Your trade offer was countered: "+productTitle, tradeID)
 		_, _ = h.db.Exec("INSERT INTO trade_events (trade_id, actor_id, from_status, to_status, note) VALUES (?, ?, ?, 'countered', ?)", tradeID, userID, currentStatus, payload.Message)
 
 	case "complete":
@@ -3056,8 +3062,8 @@ func (h *TradeHandler) UpdateTrade(c *fiber.Ctx) error {
 				publishToUser(buyerID, sseEvent{Type: "trade_updated", Data: fiber.Map{"trade_id": tradeID, "status": "completed"}})
 				publishToUser(sellerID, sseEvent{Type: "trade_updated", Data: fiber.Map{"trade_id": tradeID, "status": "completed"}})
 				_, _ = h.db.Exec("INSERT INTO trade_events (trade_id, actor_id, from_status, to_status, note) VALUES (?, ?, 'active', 'completed', ?)", tradeID, userID, payload.Message)
-				_, _ = h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)", buyerID, "Trade completed")
-				_, _ = h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)", sellerID, "Trade completed")
+				insertTradeNotification(h.db, buyerID, "trade_update", "Trade completed", tradeID)
+				insertTradeNotification(h.db, sellerID, "trade_update", "Trade completed", tradeID)
 			} else {
 				// First completion: set first_completion_at if not set
 				_, _ = h.db.Exec("UPDATE trades SET first_completion_at = COALESCE(first_completion_at, CURRENT_TIMESTAMP) WHERE id = ?", tradeID)
@@ -3065,8 +3071,8 @@ func (h *TradeHandler) UpdateTrade(c *fiber.Ctx) error {
 				publishToUser(sellerID, sseEvent{Type: "trade_updated", Data: fiber.Map{"trade_id": tradeID, "status": "awaiting_other_party"}})
 				_, _ = h.db.Exec("INSERT INTO trade_events (trade_id, actor_id, from_status, to_status, note) VALUES (?, ?, 'active', 'awaiting_other_party', ?)", tradeID, userID, payload.Message)
 				// Soft reminders
-				_, _ = h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)", buyerID, "One party marked the trade completed. Please confirm within 24 hours.")
-				_, _ = h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)", sellerID, "One party marked the trade completed. Please confirm within 24 hours.")
+				insertTradeNotification(h.db, buyerID, "trade_update", "One party marked the trade completed. Please confirm within 24 hours.", tradeID)
+				insertTradeNotification(h.db, sellerID, "trade_update", "One party marked the trade completed. Please confirm within 24 hours.", tradeID)
 			}
 		}
 	case "cancel":
@@ -3269,7 +3275,7 @@ func (h *TradeHandler) UpdateTrade(c *fiber.Ctx) error {
 		}
 
 		notifMsg := fmt.Sprintf("The %s has selected meetup: %s at %s", confirmerName, payload.MeetupLocation, meetupTimeValue)
-		_, _ = h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)", otherUserID, notifMsg)
+		insertTradeNotification(h.db, otherUserID, "trade_update", notifMsg, tradeID)
 
 		// Check if both parties have confirmed and if their selections MATCH
 		var buyerConfirmed, sellerConfirmed bool
@@ -3336,10 +3342,8 @@ func (h *TradeHandler) UpdateTrade(c *fiber.Ctx) error {
 					publishToUser(sellerID, sseEvent{Type: "trade_updated", Data: fiber.Map{"trade_id": tradeID, "status": "active", "meetup_agreed": true}})
 
 					// Send agreement notifications
-					_, _ = h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)",
-						buyerID, fmt.Sprintf("Meetup agreed! %s at %s. Trade is now active.", buyerLocation.String, buyerTime.String))
-					_, _ = h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)",
-						sellerID, fmt.Sprintf("Meetup agreed! %s at %s. Trade is now active.", buyerLocation.String, buyerTime.String))
+					insertTradeNotification(h.db, buyerID, "trade_update", fmt.Sprintf("Meetup agreed! %s at %s. Trade is now active.", buyerLocation.String, buyerTime.String), tradeID)
+					insertTradeNotification(h.db, sellerID, "trade_update", fmt.Sprintf("Meetup agreed! %s at %s. Trade is now active.", buyerLocation.String, buyerTime.String), tradeID)
 				} else {
 					// Important: do not fail the whole request here.
 					// The user's selection has already been stored above; activation may race with the other party's request.
@@ -3367,7 +3371,7 @@ func (h *TradeHandler) UpdateTrade(c *fiber.Ctx) error {
 						}
 						return buyerTime.String
 					}())
-				_, _ = h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)", userID, mismatchMsg)
+				insertTradeNotification(h.db, userID, "trade_update", mismatchMsg, tradeID)
 			}
 		} else {
 			// Only one party confirmed, notify both about the confirmation
@@ -3406,7 +3410,7 @@ func (h *TradeHandler) UpdateTrade(c *fiber.Ctx) error {
 			otherUserID = buyerID
 		}
 		notifMsg := "The other party has changed their meetup selection. Please wait for them to submit a new choice."
-		_, _ = h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)", otherUserID, notifMsg)
+		insertTradeNotification(h.db, otherUserID, "trade_update", notifMsg, tradeID)
 
 		// Publish event to notify both parties
 		publishToUser(buyerID, sseEvent{Type: "trade_updated", Data: fiber.Map{"trade_id": tradeID}})
@@ -3571,7 +3575,7 @@ func (h *TradeHandler) UpdateTrade(c *fiber.Ctx) error {
 			otherUserID = sellerID
 			confirmerName = "buyer"
 		}
-		_, _ = h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)", otherUserID, fmt.Sprintf("The %s confirmed they met you for the meetup trade.", confirmerName))
+		insertTradeNotification(h.db, otherUserID, "trade_update", fmt.Sprintf("The %s confirmed they met you for the meetup trade.", confirmerName), tradeID)
 		_, _ = h.db.Exec("INSERT INTO trade_events (trade_id, actor_id, from_status, to_status, note) VALUES (?, ?, ?, 'meetup_done', ?)", tradeID, userID, currentStatus, "Confirmed met")
 
 		// If both confirmed, let both clients know reviews can proceed
@@ -3580,8 +3584,8 @@ func (h *TradeHandler) UpdateTrade(c *fiber.Ctx) error {
 		if bm && sm {
 			publishToUser(buyerID, sseEvent{Type: "trade_updated", Data: fiber.Map{"trade_id": tradeID, "met_confirmed": true}})
 			publishToUser(sellerID, sseEvent{Type: "trade_updated", Data: fiber.Map{"trade_id": tradeID, "met_confirmed": true}})
-			_, _ = h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)", buyerID, "Both parties confirmed they met. You can now leave a review.")
-			_, _ = h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)", sellerID, "Both parties confirmed they met. You can now leave a review.")
+			insertTradeNotification(h.db, buyerID, "trade_update", "Both parties confirmed they met. You can now leave a review.", tradeID)
+			insertTradeNotification(h.db, sellerID, "trade_update", "Both parties confirmed they met. You can now leave a review.", tradeID)
 		}
 
 		return c.JSON(models.APIResponse{Success: true, Data: fiber.Map{"buyer_met": bm, "seller_met": sm}})
@@ -3739,7 +3743,7 @@ func (h *TradeHandler) UpdateTrade(c *fiber.Ctx) error {
 		}
 
 		notifMsg := "Trade delivery status has been updated"
-		_, _ = h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)", otherUserID, notifMsg)
+		insertTradeNotification(h.db, otherUserID, "trade_update", notifMsg, tradeID)
 		publishToUser(otherUserID, sseEvent{Type: "trade_delivery_state_updated", Data: fiber.Map{"trade_id": tradeID}})
 
 		log.Printf("Delivery state updated successfully for trade %d", tradeID)
@@ -3759,7 +3763,7 @@ func (h *TradeHandler) UpdateTrade(c *fiber.Ctx) error {
 		} else {
 			notifyID = buyerID
 		}
-		_, _ = h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)", notifyID, fmt.Sprintf("Trade option change requested to %s", requestedOption))
+		insertTradeNotification(h.db, notifyID, "trade_update", fmt.Sprintf("Trade option change requested to %s", requestedOption), tradeID)
 		publishToUser(notifyID, sseEvent{Type: "trade_updated", Data: fiber.Map{"trade_id": tradeID}})
 
 	case "approve_option_change":
@@ -3780,7 +3784,7 @@ func (h *TradeHandler) UpdateTrade(c *fiber.Ctx) error {
 		} else {
 			notifyID2 = buyerID
 		}
-		_, _ = h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)", notifyID2, "Trade option change approved")
+		insertTradeNotification(h.db, notifyID2, "trade_update", "Trade option change approved", tradeID)
 		publishToUser(notifyID2, sseEvent{Type: "trade_updated", Data: fiber.Map{"trade_id": tradeID}})
 
 	case "reject_option_change":
@@ -3794,7 +3798,7 @@ func (h *TradeHandler) UpdateTrade(c *fiber.Ctx) error {
 		} else {
 			notifyID3 = buyerID
 		}
-		_, _ = h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)", notifyID3, "Trade option change rejected")
+		insertTradeNotification(h.db, notifyID3, "trade_update", "Trade option change rejected", tradeID)
 		publishToUser(notifyID3, sseEvent{Type: "trade_updated", Data: fiber.Map{"trade_id": tradeID}})
 
 	case "convert_to_multiway":
@@ -5370,10 +5374,10 @@ func (h *TradeHandler) CompleteTrade(c *fiber.Ctx) error {
 		publishToUser(sellerID, sseEvent{Type: "trade_completed", Data: fiber.Map{"trade_id": tradeID}})
 
 		// Add notifications
-		_, _ = h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)", buyerID, "Trade completed successfully!")
-		_, _ = h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)", sellerID, "Trade completed successfully!")
-		sendPushToUser(buyerID, "Trade completed", "Trade completed successfully!", "/trades", "trade_update")
-		sendPushToUser(sellerID, "Trade completed", "Trade completed successfully!", "/trades", "trade_update")
+		insertTradeNotification(h.db, buyerID, "trade_update", "Trade completed successfully!", tradeID)
+		insertTradeNotification(h.db, sellerID, "trade_update", "Trade completed successfully!", tradeID)
+		sendPushToUser(buyerID, "Trade completed", "Trade completed successfully!", tradeDeepLink(tradeID), "trade_update")
+		sendPushToUser(sellerID, "Trade completed", "Trade completed successfully!", tradeDeepLink(tradeID), "trade_update")
 
 		return c.JSON(models.APIResponse{Success: true, Message: "Trade completed successfully"})
 	}
@@ -5447,10 +5451,10 @@ func (h *TradeHandler) CompleteTrade(c *fiber.Ctx) error {
 		publishToUser(sellerID, sseEvent{Type: "trade_completed", Data: fiber.Map{"trade_id": tradeID}})
 
 		// Add notifications
-		_, _ = h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)", buyerID, "Trade completed successfully!")
-		_, _ = h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)", sellerID, "Trade completed successfully!")
-		sendPushToUser(buyerID, "Trade completed", "Trade completed successfully!", "/trades", "trade_update")
-		sendPushToUser(sellerID, "Trade completed", "Trade completed successfully!", "/trades", "trade_update")
+		insertTradeNotification(h.db, buyerID, "trade_update", "Trade completed successfully!", tradeID)
+		insertTradeNotification(h.db, sellerID, "trade_update", "Trade completed successfully!", tradeID)
+		sendPushToUser(buyerID, "Trade completed", "Trade completed successfully!", tradeDeepLink(tradeID), "trade_update")
+		sendPushToUser(sellerID, "Trade completed", "Trade completed successfully!", tradeDeepLink(tradeID), "trade_update")
 	}
 
 	return c.JSON(models.APIResponse{Success: true, Message: "Trade completion submitted successfully"})

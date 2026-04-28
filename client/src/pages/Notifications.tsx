@@ -385,7 +385,13 @@ const Notifications: React.FC = () => {
     }
 
     if (notification.type === 'trade_offer' || notification.type === 'trade_update') {
-      return data.trade_id ? `/offers/buyout/${data.trade_id}` : '/offers/buyout'
+      const tradeId = asPositiveNumber(data.trade_id ?? data.target_id)
+      if (tradeId) {
+        return notification.type === 'trade_update'
+          ? `/dashboard?tab=ongoing&trade_id=${tradeId}`
+          : `/offers/buyout/${tradeId}`
+      }
+      return notification.type === 'trade_update' ? '/dashboard?tab=ongoing' : '/offers/buyout'
     }
     if (notification.type === 'trade_loop') return '/dashboard?tab=2'
     return null
@@ -427,7 +433,7 @@ const Notifications: React.FC = () => {
               duration: 4500,
               isClosable: true,
             })
-            navigate(isRejectedOffer ? '/offers/buyout' : '/home')
+            navigate(isRejectedOffer ? '/offers/buyout' : '/dashboard?tab=history')
             return
           }
         }

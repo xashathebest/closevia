@@ -255,14 +255,14 @@ func (h *TradeHandler) SubmitTradeReview(c *fiber.Ctx) error {
 	// Notify the other user about the review
 	if !payload.IsFollowup {
 		msg := "Your trading partner has submitted their review. Please submit yours to finalize the trade!"
-		_, _ = h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)", otherUserID, msg)
+		insertTradeNotification(h.db, otherUserID, "trade_update", msg, tradeID)
 		publishToUser(otherUserID, sseEvent{Type: "trade_review_submitted", Data: fiber.Map{"trade_id": tradeID}})
-		sendPushToUser(otherUserID, "Review reminder", msg, "/trades", "review_reminder")
+		sendPushToUser(otherUserID, "Review reminder", msg, tradeDeepLink(tradeID), "review_reminder")
 	} else {
 		msg := "Your trading partner has updated their review."
-		_, _ = h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)", otherUserID, msg)
+		insertTradeNotification(h.db, otherUserID, "trade_update", msg, tradeID)
 		publishToUser(otherUserID, sseEvent{Type: "trade_review_updated", Data: fiber.Map{"trade_id": tradeID}})
-		sendPushToUser(otherUserID, "Review updated", msg, "/trades", "trade_update")
+		sendPushToUser(otherUserID, "Review updated", msg, tradeDeepLink(tradeID), "trade_update")
 	}
 
 	// Only auto-complete if both submitted initial reviews (not followups)

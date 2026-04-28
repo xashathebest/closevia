@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react'
-import { Badge, Tooltip, HStack, Icon, Spinner } from '@chakra-ui/react'
+import React, { useEffect, useState } from 'react'
+import { Badge, HStack, Icon, Tooltip } from '@chakra-ui/react'
 import { FaClock } from 'react-icons/fa'
 import { api } from '../services/api'
 import { ResponseMetrics } from '../types'
@@ -18,13 +18,13 @@ const ResponseMetricsBadge: React.FC<ResponseMetricsBadgeProps> = ({ userId, sho
       try {
         setLoading(true)
         const response = await api.get('/api/ai/response-metrics', {
-          params: { user_id: userId }
+          params: { user_id: userId },
         })
         if (response.data.success) {
           setMetrics(response.data.data)
         }
-      } catch (err) {
-        // Silently fail - metrics are optional
+      } catch {
+        // Metrics are optional.
       } finally {
         setLoading(false)
       }
@@ -43,32 +43,42 @@ const ResponseMetricsBadge: React.FC<ResponseMetricsBadgeProps> = ({ userId, sho
     switch (metrics.rating) {
       case 'excellent': return 'green'
       case 'good': return 'blue'
-      case 'average': return 'orange'
-      case 'poor': return 'red'
+      case 'average': return 'gray'
+      case 'poor': return 'gray'
       default: return 'gray'
+    }
+  }
+
+  const getLabel = () => {
+    switch (metrics.rating) {
+      case 'excellent': return 'Quick responder'
+      case 'good': return 'Responsive trader'
+      case 'average': return 'Usually responds'
+      case 'poor': return 'Response varies'
+      default: return 'Response info'
     }
   }
 
   const formatResponseTime = () => {
     if (metrics.average_response_time_hours < 1) {
       return `${Math.round(metrics.average_response_time_mins)}m`
-    } else if (metrics.average_response_time_hours < 24) {
-      return `${Math.round(metrics.average_response_time_hours)}h`
-    } else {
-      return `${Math.round(metrics.average_response_time_hours / 24)}d`
     }
+    if (metrics.average_response_time_hours < 24) {
+      return `${Math.round(metrics.average_response_time_hours)}h`
+    }
+    return `${Math.round(metrics.average_response_time_hours / 24)}d`
   }
 
   const tooltipText = showDetails
-    ? `Response Rate: ${(metrics.response_rate * 100).toFixed(0)}% | Avg Response: ${formatResponseTime()} | Rating: ${metrics.rating}`
-    : `${metrics.rating} responder • ${formatResponseTime()} avg response`
+    ? `Response rate: ${(metrics.response_rate * 100).toFixed(0)}% | Avg response: ${formatResponseTime()}`
+    : `${getLabel()} - ${formatResponseTime()} avg response`
 
   return (
     <Tooltip label={tooltipText}>
-      <Badge colorScheme={getColorScheme()} variant="subtle" fontSize="xs" textTransform="capitalize">
+      <Badge colorScheme={getColorScheme()} variant="subtle" fontSize="xs" textTransform="none">
         <HStack spacing={1}>
           <Icon as={FaClock} />
-          <span>{metrics.rating} responder</span>
+          <span>{getLabel()}</span>
         </HStack>
       </Badge>
     </Tooltip>
@@ -76,6 +86,3 @@ const ResponseMetricsBadge: React.FC<ResponseMetricsBadgeProps> = ({ userId, sho
 }
 
 export default ResponseMetricsBadge
-
-
-

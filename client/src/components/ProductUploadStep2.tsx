@@ -409,6 +409,7 @@ const ProductUploadStep2: React.FC<ProductUploadStep2Props> = ({
                     const value = typeof cat === 'string' ? cat : cat.value
                     const label = typeof cat === 'string' ? cat : cat.label
                     const isSelected = details.wanted_categories.includes(value)
+                    const hasReachedWantedLimit = !isSelected && details.wanted_categories.length >= 3
                     
                     return (
                       <Button
@@ -416,7 +417,9 @@ const ProductUploadStep2: React.FC<ProductUploadStep2Props> = ({
                         size="xs"
                         variant={isSelected ? 'solid' : 'outline'}
                         colorScheme={isSelected ? 'brand' : 'gray'}
+                        isDisabled={hasReachedWantedLimit}
                         onClick={() => {
+                          if (!isSelected && details.wanted_categories.length >= 3) return
                           const next = isSelected 
                             ? details.wanted_categories.filter(v => v !== value)
                             : [...details.wanted_categories, value]
@@ -429,7 +432,7 @@ const ProductUploadStep2: React.FC<ProductUploadStep2Props> = ({
                     )
                   })}
                 </SimpleGrid>
-                <FormHelperText fontSize="2xs">Select categories you'd be interested in trading for</FormHelperText>
+                <FormHelperText fontSize="2xs">Choose up to 3.</FormHelperText>
               </FormControl>
 
               <FormControl>

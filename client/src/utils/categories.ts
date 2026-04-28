@@ -52,3 +52,34 @@ export const FILTER_CATEGORIES: CategoryConfig[] = [ALL_CATEGORY, ...PRODUCT_CAT
 
 /** Just the category values for validation */
 export const CATEGORY_VALUES = PRODUCT_CATEGORIES.map(c => c.value)
+
+export const normalizeWantedCategories = (value: unknown): string[] => {
+  let raw: unknown = value
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim()
+    if (!trimmed) return []
+    try {
+      raw = JSON.parse(trimmed)
+    } catch {
+      raw = trimmed.split(',')
+    }
+  }
+
+  if (!Array.isArray(raw)) return []
+
+  const seen = new Set<string>()
+  return raw
+    .map(item => String(item).trim())
+    .filter(item => {
+      if (!item) return false
+      const key = item.toLowerCase()
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+    .slice(0, 3)
+}
+
+export const getCategoryLabel = (value: string): string => (
+  PRODUCT_CATEGORIES.find(category => category.value === value || category.label === value)?.label || value
+)

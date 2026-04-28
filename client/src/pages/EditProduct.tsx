@@ -36,7 +36,7 @@ import { AvailabilitySlot, ProductUpdate } from '../types'
 import { api } from '../services/api'
 import { useCustomLocations } from '../hooks/useCustomLocations'
 import { SavedLocationsUI } from '../components/SavedLocationsUI'
-import { PRODUCT_CATEGORIES } from '../utils/categories'
+import { PRODUCT_CATEGORIES, normalizeWantedCategories } from '../utils/categories'
 import { getBackupPriceEstimate } from '../utils/priceEstimator'
 
 // Fix leaflet icon issues
@@ -254,7 +254,7 @@ const EditProduct: React.FC = () => {
         location: product.location || '',
         max_items_per_offer: product.max_items_per_offer ?? 0,
         wants: product.wants || '',
-        wanted_categories: parsedWantedCats,
+        wanted_categories: normalizeWantedCategories(parsedWantedCats),
         estimated_value_min: product.estimated_value_min,
         estimated_value_max: product.estimated_value_max,
         show_estimated_value: product.show_estimated_value !== false,
@@ -1048,14 +1048,17 @@ const EditProduct: React.FC = () => {
                       <SimpleGrid columns={{ base: 2, sm: 3 }} spacing={1}>
                         {PRODUCT_CATEGORIES.map((cat) => {
                           const isSelected = (formData.wanted_categories || []).includes(cat.value)
+                          const hasReachedWantedLimit = !isSelected && (formData.wanted_categories || []).length >= 3
                           return (
                             <Button
                               key={cat.value}
                               size="xs"
                               variant={isSelected ? 'solid' : 'outline'}
                               colorScheme={isSelected ? 'brand' : 'gray'}
+                              isDisabled={hasReachedWantedLimit}
                               onClick={() => {
                                 const current = formData.wanted_categories || []
+                                if (!isSelected && current.length >= 3) return
                                 const next = isSelected
                                   ? current.filter(v => v !== cat.value)
                                   : [...current, cat.value]
@@ -1084,7 +1087,7 @@ const EditProduct: React.FC = () => {
                         </Wrap>
                       )}
                       <FormHelperText fontSize="7px" color="gray.500">
-                        Select categories you'd be interested in trading for
+                        Choose up to 3.
                       </FormHelperText>
                     </FormControl>
 

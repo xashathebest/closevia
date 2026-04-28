@@ -10,31 +10,31 @@
   "background_color": "#FFFDF1",
   "icons": [
     {
-      "src": "/icons/CloviaLogo.svg",
+      "src": "/icons/CloviaLogo.svg?v=2",
       "sizes": "any",
       "type": "image/svg+xml",
       "purpose": "any"
     },
     {
-      "src": "/icon-192.png",
+      "src": "/icons/clovia-logo-192-v2.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/icon-512.png",
+      "src": "/icons/clovia-logo-512-v2.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/icon-192-maskable.png",
+      "src": "/icons/clovia-logo-maskable-192-v2.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "maskable"
     },
     {
-      "src": "/icon-512-maskable.png",
+      "src": "/icons/clovia-logo-maskable-512-v2.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any maskable"
@@ -42,7 +42,7 @@
   ],
   "screenshots": [
     {
-      "src": "/icon-192.png",
+      "src": "/icons/clovia-logo-192-v2.png",
       "sizes": "192x192",
       "type": "image/png"
     }

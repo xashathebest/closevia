@@ -526,6 +526,7 @@ const Home: React.FC = () => {
     try {
       const response = await api.get(`/api/trades`, {
         params: {
+          target_product_id: productId,
           limit: 100
         }
       })
@@ -1657,20 +1658,35 @@ const Home: React.FC = () => {
 
           <ModalBody pb={6}>
             {loadingOffers ? (
-              <Center py={8}>
-                <Spinner color="brand.500" />
-              </Center>
+              <VStack spacing={3} align="stretch" py={2}>
+                {[0, 1, 2].map((idx) => (
+                  <Box key={idx} p={3} borderWidth="1px" borderColor="gray.200" borderRadius="lg" bg="gray.50">
+                    <HStack spacing={3}>
+                      <Box boxSize="38px" borderRadius="full" bg="gray.200" />
+                      <VStack align="stretch" spacing={2} flex={1}>
+                        <Box h="10px" w="45%" bg="gray.200" borderRadius="full" />
+                        <Box h="10px" w="70%" bg="gray.100" borderRadius="full" />
+                      </VStack>
+                    </HStack>
+                  </Box>
+                ))}
+              </VStack>
             ) : rankedOffers.length === 0 ? (
-              <VStack py={8} spacing={4}>
-                <Icon as={FaHandshake} color="gray.300" boxSize={12} />
-                <Text color="gray.500" fontWeight="medium">No offers yet</Text>
-                <Text color="gray.400" fontSize="sm" textAlign="center">
-                  Be the first to make an offer on this product!
-                </Text>
+              <VStack py={6} spacing={3} px={4} textAlign="center">
+                <Box boxSize="52px" borderRadius="full" bg="brand.50" display="grid" placeItems="center">
+                  <Icon as={FaHandshake} color="brand.500" boxSize={6} />
+                </Box>
+                <VStack spacing={1}>
+                  <Text color="gray.700" fontWeight="800">No offers yet</Text>
+                  <Text color="gray.500" fontSize="sm">
+                    Be the first to send a trade offer for this item.
+                  </Text>
+                </VStack>
                 {selectedProductForOffers && (
                   <Button
                     colorScheme="brand"
-                    size="sm"
+                    size="md"
+                    borderRadius="xl"
                     onClick={() => {
                       setOffersModalOpen(false)
                       handleTradeClick(selectedProductForOffers)

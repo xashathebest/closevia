@@ -185,18 +185,55 @@ func parseWantedCategories(raw string) models.StringArray {
 
 	var parsed []string
 	if err := json.Unmarshal([]byte(raw), &parsed); err == nil {
-		return models.StringArray(parsed)
+		return normalizeWantedCategoryList(parsed)
+	}
+
+	var quoted string
+	if err := json.Unmarshal([]byte(raw), &quoted); err == nil {
+		if err := json.Unmarshal([]byte(strings.TrimSpace(quoted)), &parsed); err == nil {
+			return normalizeWantedCategoryList(parsed)
+		}
+		raw = quoted
 	}
 
 	parts := strings.Split(raw, ",")
 	fallback := make([]string, 0, len(parts))
 	for _, part := range parts {
-		clean := strings.TrimSpace(strings.Trim(part, `"`))
+		clean := strings.TrimSpace(strings.Trim(part, `"'[]`))
 		if clean != "" {
 			fallback = append(fallback, clean)
 		}
 	}
-	return models.StringArray(fallback)
+	return normalizeWantedCategoryList(fallback)
+}
+
+func normalizeWantedCategoryList(values []string) models.StringArray {
+	seen := map[string]bool{}
+	normalized := make([]string, 0, 3)
+	for _, value := range values {
+		clean := strings.TrimSpace(value)
+		if clean == "" || seen[strings.ToLower(clean)] {
+			continue
+		}
+		seen[strings.ToLower(clean)] = true
+		normalized = append(normalized, clean)
+		if len(normalized) == 3 {
+			break
+		}
+	}
+	return models.StringArray(normalized)
+}
+
+func normalizeWantedCategoriesForStorage(raw string) string {
+	categories := parseWantedCategories(raw)
+	if len(categories) == 0 {
+		return "[]"
+	}
+	bytes, err := json.Marshal([]string(categories))
+	if err != nil {
+		return "[]"
+	}
+	return string(bytes)
 }
 
 func parseAskingPrice(raw string) (float64, error) {
@@ -380,7 +417,7 @@ func (h *ProductHandler) CreateProduct(c *fiber.Ctx) error {
 	}
 
 	wants := c.FormValue("wants")
-	wantedCategories := c.FormValue("wanted_categories")
+	wantedCategories := normalizeWantedCategoriesForStorage(c.FormValue("wanted_categories"))
 
 	desiredPriceStr := c.FormValue("desired_price")
 	var desiredPrice *float64
@@ -2346,7 +2383,7 @@ func (h *ProductHandler) UpdateProduct(c *fiber.Ctx) error {
 	wantedCategories := c.FormValue("wanted_categories")
 	if wantedCategories != "" {
 		updateFields = append(updateFields, "wanted_categories = ?")
-		args = append(args, wantedCategories)
+		args = append(args, normalizeWantedCategoriesForStorage(wantedCategories))
 	}
 
 	if avSlots := c.FormValue("availability_slots"); avSlots != "" {
@@ -2775,7 +2812,7 @@ func (h *ProductHandler) GetUserProducts(c *fiber.Ctx) error {
 	queryArgs := append(args, limit, offset)
 	rows, err := h.db.Query(`
 		SELECT p.id, p.slug, p.title, p.description, p.price, p.image_urls, p.seller_id, 
-		       p.premium, p.status, p.allow_buying, p.barter_only, p.category, p.created_at, p.updated_at, p.boosted_at,
+		       p.premium, p.status, p.allow_buying, p.barter_only, p.category, p.wants, p.wanted_categories, p.desired_product, p.created_at, p.updated_at, p.boosted_at,
 		       p.featured_order,
 		       u.name as seller_name, u.profile_picture as seller_profile_picture,
 		       (SELECT COUNT(*) FROM trades t WHERE t.target_product_id = p.id AND t.status = 'pending') as offer_count,
@@ -2806,9 +2843,10 @@ func (h *ProductHandler) GetUserProducts(c *fiber.Ctx) error {
 		var imageURLsJSONStr string
 		var boostedAtNull sql.NullTime
 		var featuredOrderNull sql.NullInt64
+		var wantsNull, wantedCategoriesRaw, desiredProductNull sql.NullString
 		err := rows.Scan(&product.ID, &slugNull, &product.Title, &product.Description, &priceNull,
 			&imageURLsJSONStr, &product.SellerID, &product.Premium, &product.Status,
-			&product.AllowBuying, &product.BarterOnly, &product.Category, &product.CreatedAt, &product.UpdatedAt, &boostedAtNull, &featuredOrderNull,
+			&product.AllowBuying, &product.BarterOnly, &product.Category, &wantsNull, &wantedCategoriesRaw, &desiredProductNull, &product.CreatedAt, &product.UpdatedAt, &boostedAtNull, &featuredOrderNull,
 			&product.SellerName, &sellerProfile, &product.OfferCount, &product.IsSaved)
 		if slugNull.Valid {
 			product.Slug = slugNull.String
@@ -2822,6 +2860,15 @@ func (h *ProductHandler) GetUserProducts(c *fiber.Ctx) error {
 		if featuredOrderNull.Valid {
 			order := int(featuredOrderNull.Int64)
 			product.FeaturedOrder = &order
+		}
+		if wantsNull.Valid {
+			product.Wants = wantsNull.String
+		}
+		if wantedCategoriesRaw.Valid {
+			product.WantedCategories = parseWantedCategories(wantedCategoriesRaw.String)
+		}
+		if desiredProductNull.Valid {
+			product.DesiredProduct = desiredProductNull.String
 		}
 		if priceNull.Valid {
 			p := priceNull.Float64

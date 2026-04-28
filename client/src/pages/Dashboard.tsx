@@ -66,7 +66,8 @@ import { FaCrown, FaHandshake, FaTimes, FaCheckCircle, FaClock, FaHistory, FaSho
 import { FiShoppingBag, FiRefreshCw, FiMessageCircle, FiGrid, FiList, FiSend, FiInbox, FiArchive, FiSliders, FiMoreVertical } from 'react-icons/fi'
 import { formatPHP } from '../utils/currency'
 import { getFirstImage, getImageUrl } from '../utils/imageUtils'
-import { PRODUCT_CATEGORIES } from '../utils/categories'
+import { getProductUrl } from '../utils/productUtils'
+import { PRODUCT_CATEGORIES, getCategoryLabel, normalizeWantedCategories } from '../utils/categories'
 import VerifiedAvatar from '../components/VerifiedAvatar'
 import OptimizedImage from '../components/OptimizedImage'
 import OfferDetailsModal from '../components/OfferDetailsModal'
@@ -92,6 +93,26 @@ import {
   useInvalidateDashboard,
 } from '../hooks/useDashboard'
 
+const getDashboardTabIndex = (value: string | null): number | null => {
+  if (!value) return null
+  const normalized = value.trim().toLowerCase()
+  if (normalized === 'inventory' || normalized === 'my-items' || normalized === 'products') return 0
+  if (normalized === 'offers') return 1
+  if (normalized === 'ongoing' || normalized === 'ongoing-trades' || normalized === 'active') return 1
+  if (normalized === 'trade-connect' || normalized === 'matches') return 2
+  if (normalized === 'multiway' || normalized === 'multi-way') return 3
+  if (normalized === 'history' || normalized === 'trade-history') return 4
+
+  const numeric = parseInt(normalized, 10)
+  return Number.isNaN(numeric) ? null : numeric
+}
+
+const shouldOpenOngoingFromTab = (value: string | null): boolean => {
+  if (!value) return false
+  const normalized = value.trim().toLowerCase()
+  return normalized === 'ongoing' || normalized === 'ongoing-trades' || normalized === 'active'
+}
+
 const Dashboard: React.FC = () => {
   const { user, loading, isAuthenticated, restoreAuthentication } = useAuth()
   const { deleteProduct, updateProduct, markProductBoosted } = useProducts()
@@ -101,10 +122,11 @@ const Dashboard: React.FC = () => {
 
   // Initialize from URL ?tab= param immediately so the correct tab is active on first render
   const [activeTab, setActiveTab] = useState(() => {
-    const p = new URLSearchParams(window.location.search).get('tab')
-    return p ? parseInt(p, 10) || 0 : 0
+    return getDashboardTabIndex(new URLSearchParams(window.location.search).get('tab')) ?? 0
   })
-  const [offersSubTab, setOffersSubTab] = useState(0) // 0: Inbox, 1: Sent, 2: Active, 3: Archive
+  const [offersSubTab, setOffersSubTab] = useState(() => (
+    shouldOpenOngoingFromTab(new URLSearchParams(window.location.search).get('tab')) ? 2 : 0
+  )) // 0: Inbox, 1: Sent, 2: Active, 3: Archive
 
   const shouldLoadProducts = activeTab === 0
   const shouldLoadOffersTab = activeTab === 1
@@ -358,11 +380,12 @@ const Dashboard: React.FC = () => {
   // Change tab based on URL param
   useEffect(() => {
     const tabParam = searchParams.get('tab')
-    if (tabParam) {
-      const tabIndex = parseInt(tabParam, 10)
-      if (!isNaN(tabIndex)) {
-        setActiveTab(tabIndex)
-      }
+    const tabIndex = getDashboardTabIndex(tabParam)
+    if (tabIndex !== null) {
+      setActiveTab(tabIndex)
+    }
+    if (shouldOpenOngoingFromTab(tabParam)) {
+      setOffersSubTab(2)
     }
   }, [searchParams])
 
@@ -372,6 +395,7 @@ const Dashboard: React.FC = () => {
     const paymentStatus = searchParams.get('payment')
     const xenditExternalIDParam = searchParams.get('xendit_external_id')
     if (!tradeIdParam) return
+    if (!paymentStatus && !xenditExternalIDParam) return
 
     const tradeId = parseInt(tradeIdParam, 10)
     if (isNaN(tradeId)) return
@@ -430,15 +454,14 @@ const Dashboard: React.FC = () => {
 
       // Handle tab parameter
       const tabParam = searchParams.get('tab')
-      if (tabParam) {
-        const tabIndex = parseInt(tabParam, 10)
-        if (!isNaN(tabIndex)) {
-          setActiveTab(tabIndex)
-        }
+      const tabIndex = getDashboardTabIndex(tabParam)
+      if (tabIndex !== null) {
+        setActiveTab(tabIndex)
       }
 
       // Switch to the Offers tab (tab index 1)
       setActiveTab(1)
+      setOffersSubTab(2)
 
       // Fetch the trade fresh (so payment_confirmed updates immediately)
       try {
@@ -463,6 +486,52 @@ const Dashboard: React.FC = () => {
     })()
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, ongoingTradesData, sentOffersData, receivedOffersData])
+
+  // Open a trade directly from notifications/deep links:
+  // /dashboard?tab=ongoing&trade_id=123
+  useEffect(() => {
+    const tradeIdParam = searchParams.get('trade_id') || searchParams.get('tradeId') || searchParams.get('openTradeId')
+    const paymentStatus = searchParams.get('payment')
+    const xenditExternalIDParam = searchParams.get('xendit_external_id')
+    if (!tradeIdParam || paymentStatus || xenditExternalIDParam) return
+
+    const tradeId = parseInt(tradeIdParam, 10)
+    if (isNaN(tradeId) || tradeId <= 0) return
+
+    const tabParam = searchParams.get('tab')
+    if (shouldOpenOngoingFromTab(tabParam) || searchParams.get('open') === 'trade') {
+      setActiveTab(1)
+      setOffersSubTab(2)
+    }
+
+    let cancelled = false
+    ;(async () => {
+      try {
+        const res = await api.get(`/api/trades/${tradeId}`)
+        if (cancelled) return
+        const tradeData = res.data?.data || res.data
+        if (tradeData) {
+          setSelectedTrade(tradeData)
+          setDetailsOpen(false)
+          setViewTradeModalOpen(true)
+          return
+        }
+      } catch {
+        // Fall through to local cached data.
+      }
+
+      if (cancelled) return
+      const allTrades = [...ongoingTradesData, ...sentOffersData, ...receivedOffersData]
+      const matchedTrade = allTrades.find(t => t.id === tradeId)
+      if (matchedTrade) {
+        setSelectedTrade(matchedTrade)
+        setDetailsOpen(false)
+        setViewTradeModalOpen(true)
+      }
+    })()
+
+    return () => { cancelled = true }
   }, [searchParams, ongoingTradesData, sentOffersData, receivedOffersData])
 
   // Computed dashboard stats - optimized to minimize recalculations
@@ -2444,7 +2513,7 @@ const Dashboard: React.FC = () => {
               loading="lazy"
               fallbackSrc="/no-image.svg"
               cursor="pointer"
-              onClick={() => navigate(`/products/${product.id}`)}
+              onClick={() => navigate(getProductUrl(product))}
             />
             {/* Boost indicator overlay - top right */}
             {boostRemaining && (
@@ -2725,6 +2794,14 @@ const Dashboard: React.FC = () => {
             borderRadius="md"
             overflow="hidden"
             bg="gray.100"
+            cursor="pointer"
+            role="button"
+            aria-label={`Open ${product.title}`}
+            onClick={(e) => {
+              e.stopPropagation()
+              navigate(getProductUrl(product))
+            }}
+            onPointerDown={(e) => e.stopPropagation()}
           >
             <OptimizedImage
               src={getFirstImage(product.image_urls)}
@@ -5338,9 +5415,8 @@ const Dashboard: React.FC = () => {
                                       ? participants[(yourParticipantIndex + 1) % participants.length]
                                       : participants[0];
 
-                                  const desiredCategory = nextParticipant?.wanted_categories 
-                                      ? (Array.isArray(nextParticipant.wanted_categories) ? nextParticipant.wanted_categories.join(', ') : nextParticipant.wanted_categories)
-                                      : 'Any'
+                                  const desiredCategories = normalizeWantedCategories(nextParticipant?.wanted_categories).map(getCategoryLabel)
+                                  const desiredCategory = desiredCategories.length > 0 ? desiredCategories.join(', ') : 'Any'
                                   const desiredItems = nextParticipant?.desired_product || 'Open to offers'
                                   const matchScore = trade.match_score || trade.score || 0
                                   

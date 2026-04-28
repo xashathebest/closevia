@@ -85,9 +85,6 @@ export interface ProductFormData {
   wants?: string
   desired_product?: string
 
-  // Availability schedule
-  availability_slots?: AvailabilitySlot[]
-  availability_type?: 'flexible' | 'strict'
   collection_setup: {
     methods: Array<'pickup' | 'meetup'>
     pickup: {
@@ -110,11 +107,10 @@ export interface ProductFormData {
 import { useAuth } from '../contexts/AuthContext'
 import { useProducts } from '../contexts/ProductContext'
 import { api } from '../services/api'
-import { AvailabilitySlot } from '../types'
 import { DASHBOARD_QUERY_KEYS } from '../hooks/useDashboard'
 import FloatingTab from '../components/FloatingTab'
 import { prepareImageForAIAnalysis, prepareImageForUpload } from '../utils/imageConverter'
-import { PRODUCT_CATEGORIES } from '../utils/categories'
+import { PRODUCT_CATEGORIES, getCategoryLabel } from '../utils/categories'
 import { checkMultipleImageQuality, getQualityLabel, getQualityColorScheme, type ImageQualityResult as ClientQualityResult } from '../utils/imageQualityChecker'
 import { getBackupPriceEstimate } from '../utils/priceEstimator'
 import { formatEstimatedValueRange } from '../utils/currency'
@@ -326,8 +322,6 @@ const AddProduct: React.FC = () => {
     wanted_categories: [],
     wants: '',
     desired_product: '',
-    availability_slots: [],
-    availability_type: 'flexible',
     collection_setup: {
       methods: ['pickup'],
       pickup: { days: ['weekdays'], time_start: '09:00', time_end: '17:00', notes: '' },
@@ -335,10 +329,6 @@ const AddProduct: React.FC = () => {
     },
   })
 
-  // Availability slot editor state
-  const [avNewDate, setAvNewDate] = useState('')
-  const [avNewStart, setAvNewStart] = useState('')
-  const [avNewEnd, setAvNewEnd] = useState('')
   const dayOptions = [
     { value: 'weekdays', label: 'Weekdays' },
     { value: 'weekends', label: 'Weekends' },
@@ -1110,10 +1100,6 @@ const AddProduct: React.FC = () => {
       }
       if (formData.wants) fd.append('wants', formData.wants)
       if (formData.desired_product) fd.append('desired_product', formData.desired_product)
-      if (formData.availability_slots && formData.availability_slots.length > 0) {
-        fd.append('availability_slots', JSON.stringify(formData.availability_slots))
-      }
-      fd.append('availability_type', formData.availability_type || 'flexible')
       fd.append('collection_setup', JSON.stringify(formData.collection_setup))
       
       // Add organization IDs for tagging
@@ -2352,137 +2338,6 @@ const AddProduct: React.FC = () => {
               </VStack>
             )}
           </Box>
-
-          {/* ──────── AVAILABILITY SCHEDULE ──────── */}
-          <Box pt={2} borderTopWidth="1px" borderTopColor="gray.100">
-            <HStack justify="space-between" mb={2}>
-              <HStack spacing={2}>
-                <Text fontSize="xs" fontWeight="bold" color="gray.700">Availability Schedule</Text>
-                <Badge colorScheme="teal" fontSize="8px">Optional</Badge>
-              </HStack>
-              <HStack spacing={2}>
-                <Text fontSize="10px" color="gray.500">Schedule type:</Text>
-                <HStack spacing={1}>
-                  {(['flexible', 'strict'] as const).map(t => (
-                    <Button
-                      key={t}
-                      size="xs"
-                      fontSize="10px"
-                      h="22px"
-                      colorScheme={formData.availability_type === t ? (t === 'strict' ? 'orange' : 'teal') : 'gray'}
-                      variant={formData.availability_type === t ? 'solid' : 'outline'}
-                      onClick={() => handleField('availability_type', t)}
-                    >
-                      {t === 'flexible' ? 'Flexible' : 'Strict'}
-                    </Button>
-                  ))}
-                </HStack>
-              </HStack>
-            </HStack>
-            <Text fontSize="10px" color="gray.500" mb={2}>
-              {formData.availability_type === 'strict'
-                ? 'Offerers must choose one of your listed time slots.'
-                : 'Offerers can pick your slots or suggest a different time.'}
-            </Text>
-
-            {/* Existing slots */}
-            {(formData.availability_slots || []).length > 0 && (
-              <VStack align="stretch" spacing={1} mb={2}>
-                {(formData.availability_slots || []).map(slot => {
-                  const fmt = (t: string) => {
-                    const [h, m] = t.split(':').map(Number)
-                    const ampm = h >= 12 ? 'PM' : 'AM'
-                    const hour = h % 12 || 12
-                    return m === 0 ? `${hour}${ampm}` : `${hour}:${String(m).padStart(2, '0')}${ampm}`
-                  }
-                  const d = new Date(`${slot.date}T00:00:00`)
-                  const dateStr = d.toLocaleDateString('en-PH', { weekday: 'short', month: 'short', day: 'numeric' })
-                  return (
-                    <HStack key={slot.id} p={1.5} bg="teal.50" borderRadius="md" borderLeft="3px solid" borderLeftColor="teal.400" justify="space-between">
-                      <Text fontSize="11px" color="teal.800" fontWeight="medium">
-                        {dateStr} · {fmt(slot.start_time)}–{fmt(slot.end_time)}
-                      </Text>
-                      <IconButton
-                        aria-label="Remove slot"
-                        icon={<CloseIcon boxSize={2} />}
-                        size="xs"
-                        variant="ghost"
-                        colorScheme="red"
-                        h="18px"
-                        minW="18px"
-                        onClick={() => handleField('availability_slots', (formData.availability_slots || []).filter(s => s.id !== slot.id))}
-                      />
-                    </HStack>
-                  )
-                })}
-              </VStack>
-            )}
-
-            {/* Add slot row */}
-            <VStack align="stretch" spacing={1.5} p={2} bg="gray.50" borderRadius="md" borderWidth="1px" borderColor="gray.200">
-              <Text fontSize="10px" fontWeight="semibold" color="gray.600">Add a time slot</Text>
-              <HStack spacing={1.5}>
-                <Input
-                  type="date"
-                  value={avNewDate}
-                  onChange={e => setAvNewDate(e.target.value)}
-                  min={new Date().toISOString().split('T')[0]}
-                  size="sm"
-                  fontSize="11px"
-                  flex={1.5}
-                  bg="white"
-                />
-                <Input
-                  type="time"
-                  value={avNewStart}
-                  onChange={e => setAvNewStart(e.target.value)}
-                  size="sm"
-                  fontSize="11px"
-                  flex={1}
-                  bg="white"
-                  placeholder="From"
-                />
-                <Text fontSize="10px" color="gray.400" flexShrink={0}>–</Text>
-                <Input
-                  type="time"
-                  value={avNewEnd}
-                  onChange={e => setAvNewEnd(e.target.value)}
-                  size="sm"
-                  fontSize="11px"
-                  flex={1}
-                  bg="white"
-                  placeholder="To"
-                />
-                <Button
-                  size="sm"
-                  colorScheme="teal"
-                  fontSize="11px"
-                  h="32px"
-                  px={3}
-                  flexShrink={0}
-                  isDisabled={!avNewDate || !avNewStart || !avNewEnd || avNewEnd <= avNewStart}
-                  onClick={() => {
-                    if (!avNewDate || !avNewStart || !avNewEnd || avNewEnd <= avNewStart) return
-                    const newSlot: AvailabilitySlot = {
-                      id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-                      date: avNewDate,
-                      start_time: avNewStart,
-                      end_time: avNewEnd,
-                    }
-                    handleField('availability_slots', [...(formData.availability_slots || []), newSlot])
-                    setAvNewDate('')
-                    setAvNewStart('')
-                    setAvNewEnd('')
-                  }}
-                >
-                  Add
-                </Button>
-              </HStack>
-              {avNewEnd && avNewStart && avNewEnd <= avNewStart && (
-                <Text fontSize="9px" color="red.500">End time must be after start time.</Text>
-              )}
-            </VStack>
-          </Box>
         </VStack>
       </Box>
     </VStack>
@@ -2654,39 +2509,6 @@ const AddProduct: React.FC = () => {
               )}
             </SimpleGrid>
 
-            {/* Availability slots summary */}
-            {(formData.availability_slots || []).length > 0 && (
-              <>
-                <Box borderBottomWidth="1px" borderBottomColor="gray.200" />
-                <Box>
-                  <HStack mb={1.5} spacing={2}>
-                    <Text fontSize="xs" color="gray.500" fontWeight="bold" textTransform="uppercase">
-                      Availability
-                    </Text>
-                    <Badge colorScheme={formData.availability_type === 'strict' ? 'orange' : 'teal'} fontSize="8px">
-                      {formData.availability_type === 'strict' ? 'Strict' : 'Flexible'}
-                    </Badge>
-                  </HStack>
-                  <VStack align="stretch" spacing={1}>
-                    {(formData.availability_slots || []).map(slot => {
-                      const fmt = (t: string) => {
-                        const [h, m] = t.split(':').map(Number)
-                        const ampm = h >= 12 ? 'PM' : 'AM'
-                        const hour = h % 12 || 12
-                        return m === 0 ? `${hour}${ampm}` : `${hour}:${String(m).padStart(2, '0')}${ampm}`
-                      }
-                      const d = new Date(`${slot.date}T00:00:00`)
-                      const dateStr = d.toLocaleDateString('en-PH', { weekday: 'short', month: 'short', day: 'numeric' })
-                      return (
-                        <Text key={slot.id} fontSize="11px" color="teal.800">
-                          🕐 {dateStr} · {fmt(slot.start_time)}–{fmt(slot.end_time)}
-                        </Text>
-                      )
-                    })}
-                  </VStack>
-                </Box>
-              </>
-            )}
           </VStack>
         </Box>
 
@@ -2786,7 +2608,7 @@ const AddProduct: React.FC = () => {
                 <HStack spacing={1.5} flexWrap="wrap">
                   {formData.wanted_categories.map(cat => (
                     <Badge key={cat} colorScheme="blue" variant="solid" fontSize="9px" borderRadius="full" px={2} py={0.5}>
-                      {PRODUCT_CATEGORIES.find(c => c.value === cat)?.label || cat}
+                      {getCategoryLabel(cat)}
                     </Badge>
                   ))}
                 </HStack>

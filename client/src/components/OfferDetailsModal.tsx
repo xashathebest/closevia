@@ -486,54 +486,29 @@ const OfferDetailsModal: React.FC<OfferDetailsModalProps> = ({ trade, isOpen, on
     return undefined
   }
 
-  const renderProductCard = (p: Product | null, opts?: { compact?: boolean }) => {
-    if (!p) return null
-    const compact = !!opts?.compact
-    const showPrice = !!p.allow_buying && !p.barter_only && typeof p.price === 'number'
-    const imageHeight = compact ? '120px' : '180px' // Increased height for better visibility
-    const padding = compact ? 2 : 3
-    const titleSize = compact ? 'xs' : 'sm'
-    const titleFontWeight = 'semibold'
-
-    const imgSrc = resolveImage(p)
+  const renderProductSummary = (p: Product | null, label: string, fallback?: { title?: string; image?: string; id?: number | string }) => {
+    const title = p?.title || fallback?.title || 'Item not available'
+    const imgSrc = p ? resolveImage(p) : fallback?.image
+    const href = p ? getProductUrl(p) : fallback?.id ? `/products/${fallback.id}` : undefined
+    const showPrice = !!p?.allow_buying && !p?.barter_only && typeof p?.price === 'number'
 
     return (
-      <Box borderWidth="1px" borderColor="gray.100" rounded="lg" overflow="hidden" bg="white" height="100%" display="flex" flexDirection="column" shadow="sm" transition="all 0.2s" _hover={{ shadow: 'md' }}>
-        <Box w="full" h={imageHeight} bg="gray.100" display="flex" alignItems="center" justifyContent="center" overflow="hidden" position="relative">
-          <Image 
-            src={imgSrc || ''} 
-            alt={p.title} 
-            w="100%" 
-            h="100%" 
-            objectFit="cover" 
-            fallbackSrc="/no-image.svg" 
-          />
-          {/* Show premium badge */}
-          {p.premium && !compact && (
-             <Badge position="absolute" top={2} right={2} colorScheme="brand" backdropFilter="blur(4px)" bg="brand.500" color="white" fontSize="xs" px={2} py={0.5} borderRadius="full">Boosted</Badge>
+      <Box borderWidth="1px" borderColor="gray.200" borderRadius="md" bg="white" p={2}>
+        <HStack align="center" spacing={2.5}>
+          <Box w="58px" h="58px" borderRadius="md" overflow="hidden" bg="gray.100" flexShrink={0}>
+            <Image src={imgSrc || ''} alt={title} w="100%" h="100%" objectFit="cover" fallbackSrc="/no-image.svg" />
+          </Box>
+          <VStack align="start" spacing={0.5} flex={1} minW={0}>
+            <Text fontSize="9px" color="gray.500" fontWeight="bold" textTransform="uppercase">{label}</Text>
+            <Text fontSize="sm" fontWeight="semibold" color="gray.900" noOfLines={1}>{title}</Text>
+            {showPrice && <Text fontSize="xs" color="brand.600" fontWeight="bold">{formatPHP(p.price as number)}</Text>}
+          </VStack>
+          {href && (
+            <Button as="a" href={href} size="xs" variant="ghost" colorScheme="brand" flexShrink={0}>
+              View
+            </Button>
           )}
-        </Box>
-        <Box p={padding} display="flex" flexDirection="column" flex={1}>
-          <Text fontWeight={titleFontWeight} fontSize={titleSize} noOfLines={2} mb={1}>{p.title}</Text>
-
-          {/* Status badges */}
-          {!compact && (
-            <HStack spacing={2} mb={2}>
-              <Badge colorScheme={p.status === 'available' ? 'green' : 'red'} fontSize="2xs" variant="subtle">{p.status}</Badge>
-              {p.barter_only ? <Badge colorScheme="purple" fontSize="2xs" variant="subtle">Barter</Badge> : <Badge colorScheme="blue" fontSize="2xs" variant="subtle">For Sale</Badge>}
-            </HStack>
-          )}
-
-          {!compact && p.description && <Text color="gray.500" mb={2} fontSize="11px" noOfLines={2}>{p.description}</Text>}
-
-          {showPrice && (
-            <Text mb={compact ? 1 : 2} fontWeight="bold" fontSize="xs" color="brand.600">{formatPHP(p.price as number)}</Text>
-          )}
-
-          {!compact && <Text mt="auto" mb={2} fontSize="10px" color="gray.500" fontWeight="medium">Trader: {p.seller_name || `#${p.seller_id}`}</Text>}
-
-          <Button as={'a'} href={getProductUrl(p)} variant="outline" colorScheme="brand" mt="auto" size="xs" w="full" borderRadius="md">View Listing</Button>
-        </Box>
+        </HStack>
       </Box>
     )
   }
@@ -541,9 +516,9 @@ const OfferDetailsModal: React.FC<OfferDetailsModalProps> = ({ trade, isOpen, on
   const disableAccept = (offeredItemIds.length === 0) && (!effectiveTrade?.offered_cash_amount || effectiveTrade.offered_cash_amount === 0)
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} size={{ base: 'full', md: 'lg' }} isCentered>
+    <Modal isOpen={isOpen} onClose={onClose} size={{ base: 'sm', md: 'lg' }} isCentered>
       <ModalOverlay bg="blackAlpha.600" backdropFilter="blur(4px)" />
-      <ModalContent maxH="90vh" display="flex" flexDirection="column" bg="white" borderRadius="lg" boxShadow="lg">
+      <ModalContent mx={{ base: 3, md: 0 }} maxH={{ base: '88vh', md: '90vh' }} display="flex" flexDirection="column" bg="white" borderRadius={{ base: 'xl', md: 'lg' }} boxShadow="lg">
         {/* Compact Header */}
         <Box bg="white" borderBottomWidth="1px" borderColor="gray.200" p={2.5}>
           <HStack justify="space-between" align="center">
@@ -705,13 +680,13 @@ const OfferDetailsModal: React.FC<OfferDetailsModalProps> = ({ trade, isOpen, on
             )}
 
             {/* Offer Details Section - Compact 2-Column Info Grid */}
-            <Box p={2.5} bg="orange.50" borderRadius="md" borderWidth="1px" borderColor="orange.200">
-              <Text fontSize="10px" fontWeight="bold" color="orange.900" mb={2} textTransform="uppercase">Offer Details</Text>
+            <Box p={2.5} bg="white" borderRadius="md" borderWidth="1px" borderColor="gray.200">
+              <Text fontSize="10px" fontWeight="bold" color="gray.700" mb={2} textTransform="uppercase">Offer Details</Text>
               <Grid templateColumns="1fr 1fr" gap={2}>
-                {/* Offer Timestamp */}
+                {/* Sent timestamp */}
                 <VStack align="start" spacing={0.5}>
-                  <Text fontSize="9px" fontWeight="bold" color="orange.700" textTransform="uppercase">Offered</Text>
-                  <Text fontSize="11px" color="orange.900" fontWeight="semibold">
+                  <Text fontSize="9px" fontWeight="bold" color="gray.500" textTransform="uppercase">Sent</Text>
+                  <Text fontSize="11px" color="gray.800" fontWeight="semibold">
                     {effectiveTrade?.created_at 
                       ? new Date(effectiveTrade.created_at).toLocaleDateString('en-PH', { 
                           month: 'short', 
@@ -724,57 +699,56 @@ const OfferDetailsModal: React.FC<OfferDetailsModalProps> = ({ trade, isOpen, on
                   </Text>
                 </VStack>
 
-                {/* Cash Amount (if applicable) */}
+                {/* Cash amount or pure trade */}
                 {effectiveTrade?.offered_cash_amount && effectiveTrade.offered_cash_amount > 0 ? (
                   <VStack align="start" spacing={0.5}>
-                    <Text fontSize="9px" fontWeight="bold" color="orange.700" textTransform="uppercase">💰 Cash</Text>
+                    <Text fontSize="9px" fontWeight="bold" color="gray.500" textTransform="uppercase">Cash Offer</Text>
                     <Text fontSize="11px" color="green.700" fontWeight="bold">
                       {formatPHP(effectiveTrade.offered_cash_amount)}
                     </Text>
                   </VStack>
                 ) : (
                   <VStack align="start" spacing={0.5}>
-                    <Text fontSize="9px" fontWeight="bold" color="orange.700" textTransform="uppercase">💰 Cash</Text>
+                    <Text fontSize="9px" fontWeight="bold" color="gray.500" textTransform="uppercase">Offer Type</Text>
                     <Text fontSize="11px" color="gray.600">
                       Pure trade
                     </Text>
                   </VStack>
                 )}
 
-                {/* Product Location */}
+                {/* Proposed pickup or meetup location */}
                 {requested && (
                   <VStack align="start" spacing={0.5}>
-                    <Text fontSize="9px" fontWeight="bold" color="orange.700" textTransform="uppercase">📍 Item Location</Text>
-                    <Text fontSize="11px" color="orange.900" fontWeight="semibold" noOfLines={1}>
-                      {requested.location || 'Not specified'}
+                    <Text fontSize="9px" fontWeight="bold" color="gray.500" textTransform="uppercase">Pickup / Meetup</Text>
+                    <Text fontSize="11px" color="gray.800" fontWeight="semibold" noOfLines={1}>
+                      {effectiveTrade?.meetup_location || requested.location || 'Not specified'}
                     </Text>
                   </VStack>
                 )}
 
-                {/* Offer Validity (Suggested) */}
+                {/* Proposed schedule */}
                 <VStack align="start" spacing={0.5}>
-                  <Text fontSize="9px" fontWeight="bold" color="orange.700" textTransform="uppercase">⏰ Valid Until</Text>
-                  <Text fontSize="11px" color="orange.900" fontWeight="semibold">
-                    {effectiveTrade?.created_at
-                      ? new Date(new Date(effectiveTrade.created_at).getTime() + 7 * 24 * 60 * 60 * 1000).toLocaleDateString('en-PH', { month: 'short', day: 'numeric' })
-                      : '7 days'
+                  <Text fontSize="9px" fontWeight="bold" color="gray.500" textTransform="uppercase">Proposed Date</Text>
+                  <Text fontSize="11px" color="gray.800" fontWeight="semibold">
+                    {effectiveTrade?.meetup_date
+                      ? new Date(`${effectiveTrade.meetup_date}T00:00:00`).toLocaleDateString('en-PH', { month: 'short', day: 'numeric' })
+                      : 'To be agreed'
                     }
                   </Text>
                 </VStack>
 
-                {/* Suggested: Response Time Badge */}
                 <VStack align="start" spacing={0.5}>
-                  <Text fontSize="9px" fontWeight="bold" color="orange.700" textTransform="uppercase">⚡ Response</Text>
-                  <Badge colorScheme="green" fontSize="9px" px={1.5} py={0.5}>
-                    Quick
-                  </Badge>
+                  <Text fontSize="9px" fontWeight="bold" color="gray.500" textTransform="uppercase">Proposed Time</Text>
+                  <Text fontSize="11px" color="gray.800" fontWeight="semibold">
+                    {effectiveTrade?.meetup_time || 'To be agreed'}
+                  </Text>
                 </VStack>
 
-                {/* Suggested: Payment Method (if applicable) */}
+                {/* Payment method, when available */}
                 {effectiveTrade?.payment_method && (
                   <VStack align="start" spacing={0.5}>
-                    <Text fontSize="9px" fontWeight="bold" color="orange.700" textTransform="uppercase">Payment</Text>
-                    <Text fontSize="11px" color="orange.900" fontWeight="semibold" textTransform="capitalize">
+                    <Text fontSize="9px" fontWeight="bold" color="gray.500" textTransform="uppercase">Payment</Text>
+                    <Text fontSize="11px" color="gray.800" fontWeight="semibold" textTransform="capitalize">
                       {effectiveTrade.payment_method}
                     </Text>
                   </VStack>
@@ -827,82 +801,39 @@ const OfferDetailsModal: React.FC<OfferDetailsModalProps> = ({ trade, isOpen, on
             {/* Items Comparison - Compact */}
             <Box>
               <Text fontSize="10px" fontWeight="bold" color="gray.700" mb={1.5} textTransform="uppercase">Items</Text>
-              <Grid templateColumns={{ base: '1fr', md: '1fr 1fr' }} gap={1.5}>
-                {/* Requested Items */}
-                <Box borderWidth="1px" borderColor="gray.200" borderRadius="md" overflow="hidden" bg="gray.50" display="flex" flexDirection="column" h="100%">
-                  {loading ? (
-                    <Box p={2} textAlign="center">
-                      <Text fontSize="11px" color="gray.500">Loading...</Text>
-                    </Box>
-                  ) : (
-                    <VStack spacing={1.5} align="stretch" h="100%">
-                      {requestedProducts.map((product) => (
-                        <Box key={`requested-${product.id}`} h="100%">
-                          {renderProductCard(product, { compact: true })}
+              {loading ? (
+                <Box p={3} bg="gray.50" borderRadius="md" textAlign="center">
+                  <Text fontSize="11px" color="gray.500">Loading items...</Text>
+                </Box>
+              ) : (
+                <VStack spacing={2} align="stretch">
+                  {requestedProducts.length > 0
+                    ? requestedProducts.map((product) => (
+                        <Box key={`requested-${product.id}`}>
+                          {renderProductSummary(product, 'Requested item')}
                         </Box>
-                      ))}
-                      {requestedProducts.length === 0 && <Box p={2}><Text fontSize="11px" color="gray.500">No item</Text></Box>}
-                    </VStack>
-                  )}
-                </Box>
+                      ))
+                    : <Box p={2} bg="gray.50" borderRadius="md"><Text fontSize="11px" color="gray.500">No requested item</Text></Box>}
 
-                {/* Their Offered Items */}
-                <Box>
-                  {activeOfferItems.length > 0 ? (
-                    <VStack spacing={1.5} align="stretch" h="100%">
-                      {activeOfferItems.map((item: any, idx: number) => {
-                        const product = offered.find(p => p.id === (item.product_id ?? item.productId));
-                        const itemId = item.product_id ?? item.productId
-                        
-                        if (!product) {
-                          const itemImg = item.product_image_url || item.productImageUrl || item.image || ''
-                          const itemTitle = item.product_title || item.productTitle || 'Unknown Item'
-                          return (
-                            <Box key={item.id || idx} borderWidth="1px" borderColor="gray.100" borderRadius="lg" overflow="hidden" bg="white" height="100%" display="flex" flexDirection="column" shadow="sm">
-                              <Box w="full" h="120px" bg="gray.100" display="flex" alignItems="center" justifyContent="center">
-                                <Image 
-                                  src={itemImg} 
-                                  alt={itemTitle} 
-                                  w="full" 
-                                  h="100%" 
-                                  objectFit="cover" 
-                                  fallbackSrc="/no-image.svg" 
-                                />
-                              </Box>
-                              <Box p={2} display="flex" flexDirection="column" flex={1}>
-                                <Text fontWeight="semibold" fontSize="xs" noOfLines={2} mb={2}>{itemTitle}</Text>
-                                <Button 
-                                  as="a" 
-                                  href={itemId ? `/products/${itemId}` : '#'} 
-                                  variant="outline" 
-                                  colorScheme="brand" 
-                                  w="full" 
-                                  size="xs"
-                                  mt="auto"
-                                  borderRadius="md"
-                                  isDisabled={!itemId}
-                                >
-                                  View Listing
-                                </Button>
-                              </Box>
-                            </Box>
-                          )
-                        }
-                        
-                        return (
-                          <Box key={item.id || idx} h="100%">
-                            {renderProductCard(product, { compact: true })}
-                          </Box>
-                        );
-                      })}
-                    </VStack>
-                  ) : (
-                    <Box p={3} bg="gray.50" borderRadius="md" textAlign="center">
-                      <Text fontSize="xs" color="gray.500">No items offered</Text>
+                  {activeOfferItems.length > 0 ? activeOfferItems.map((item: any, idx: number) => {
+                    const itemId = item.product_id ?? item.productId
+                    const product = offered.find(p => p.id === itemId)
+                    return (
+                      <Box key={item.id || idx}>
+                        {renderProductSummary(product || null, 'Offered item', {
+                          id: itemId,
+                          title: item.product_title || item.productTitle || 'Unknown item',
+                          image: item.product_image_url || item.productImageUrl || item.image || '',
+                        })}
+                      </Box>
+                    )
+                  }) : (
+                    <Box p={2} bg="gray.50" borderRadius="md">
+                      <Text fontSize="11px" color="gray.500">No items offered</Text>
                     </Box>
                   )}
-                </Box>
-              </Grid>
+                </VStack>
+              )}
             </Box>
 
             {/* Trade Summary */}

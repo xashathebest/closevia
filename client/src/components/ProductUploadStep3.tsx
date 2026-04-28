@@ -25,6 +25,7 @@ import {
 import { ArrowBackIcon, CheckCircleIcon } from '@chakra-ui/icons'
 import { MdCheckCircle } from 'react-icons/md'
 import { formatEstimatedValueRange } from '../utils/currency'
+import { getCategoryLabel, normalizeWantedCategories } from '../utils/categories'
 
 interface ReviewProduct {
   images: string[]
@@ -285,12 +286,12 @@ const ProductUploadStep3: React.FC<ProductUploadStep3Props> = ({
                     Looking For
                   </Text>
                   
-                  {product.wanted_categories && product.wanted_categories.length > 0 && (
+                  {normalizeWantedCategories(product.wanted_categories).length > 0 && (
                     <Wrap spacing={1}>
-                      {product.wanted_categories.map(cat => (
+                      {normalizeWantedCategories(product.wanted_categories).map(cat => (
                         <WrapItem key={cat}>
                           <Badge size="sm" variant="subtle" colorScheme="brand" borderRadius="full">
-                            {cat}
+                            {getCategoryLabel(cat)}
                           </Badge>
                         </WrapItem>
                       ))}

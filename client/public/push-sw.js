@@ -19,8 +19,8 @@ self.addEventListener('push', (event) => {
   event.waitUntil(
     self.registration.showNotification(data.title || 'CloviaPH', {
       body: data.body || '',
-      icon: '/icons/icon-192.png',
-      badge: '/icons/icon-192.png',
+      icon: '/icons/clovia-logo-192-v2.png',
+      badge: '/icons/clovia-logo-maskable-192-v2.png',
       data: { url: targetUrl },
       tag: data.tag || targetUrl,
       renotify: false,

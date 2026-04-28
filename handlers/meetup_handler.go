@@ -67,7 +67,7 @@ func (h *MeetupHandler) ProposeMeetupTime(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
 	}
-	sendPushToUser(otherUserID, "Trade schedule proposed", "Your trading partner proposed meetup details.", "/trades", "meetup_update")
+	sendPushToUser(otherUserID, "Trade schedule proposed", "Your trading partner proposed meetup details.", tradeDeepLink(tradeID), "meetup_update")
 
 	return c.JSON(fiber.Map{
 		"success": true,
@@ -187,7 +187,7 @@ func (h *MeetupHandler) ConfirmCompletion(c *fiber.Ctx) error {
 	if errComplete != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": errComplete.Error()})
 	}
-	sendPushToUser(otherUserID, "Meetup completion confirmed", "Your trading partner confirmed the meetup completion step.", "/trades", "trade_update")
+	sendPushToUser(otherUserID, "Meetup completion confirmed", "Your trading partner confirmed the meetup completion step.", tradeDeepLink(tradeID), "trade_update")
 
 	status, _ := meetupService.GetMeetupStatus(tradeID)
 

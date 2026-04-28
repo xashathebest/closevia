@@ -29,6 +29,25 @@ const ProximityBadge: React.FC<ProximityBadgeProps> = ({
   const hasPrefetchedDistance = Number.isFinite(prefetchedDistanceKm) || !!prefetchedDistanceLabel
   const canFetchProximity = !!targetId && !AI_DISABLED && isAuthenticated && !hasPrefetchedDistance
 
+  const formatExactDistance = (km: number, meters?: number | null) => {
+    if (!Number.isFinite(km)) return ''
+    if (km < 1) {
+      return `${Math.round(meters ?? km * 1000)}m away`
+    }
+    if (km < 10) {
+      return `${km.toFixed(1)}km away`
+    }
+    return `${Math.round(km)}km away`
+  }
+
+  const formatPrivateDistance = (km: number) => {
+    if (!Number.isFinite(km)) return 'Approx. location only'
+    if (km < 5) return 'Nearby'
+    if (km < 20) return 'Within your area'
+    if (km < 50) return 'Same city'
+    return 'Approx. location only'
+  }
+
   const { data: distance, isLoading: loading, error } = useQuery<DistanceResult | null>({
     queryKey: ['proximity', user?.id, type, targetId],
     queryFn: async () => {
@@ -49,19 +68,18 @@ const ProximityBadge: React.FC<ProximityBadgeProps> = ({
   })
 
   const formatPrefetchedDistance = () => {
+    if (type === 'user') {
+      const km = prefetchedDistanceKm ?? 0
+      if (Number.isFinite(km)) return formatPrivateDistance(km)
+      return prefetchedDistanceLabel ? 'Approx. location only' : ''
+    }
+
     if (prefetchedDistanceLabel && prefetchedDistanceLabel.trim()) {
       return prefetchedDistanceLabel.replace(/\s+/g, ' ').trim()
     }
 
     const km = prefetchedDistanceKm ?? 0
-    if (!Number.isFinite(km)) return ''
-    if (km < 1) {
-      return `${Math.round(km * 1000)}m away`
-    }
-    if (km < 10) {
-      return `${km.toFixed(1)}km away`
-    }
-    return `${Math.round(km)}km away`
+    return formatExactDistance(km)
   }
 
   if (hasPrefetchedDistance) {
@@ -69,7 +87,7 @@ const ProximityBadge: React.FC<ProximityBadgeProps> = ({
     if (!displayLabel) return null
 
     return (
-      <Tooltip label={`Distance: ${Number.isFinite(prefetchedDistanceKm) ? prefetchedDistanceKm!.toFixed(2) : 'N/A'} km`}>
+      <Tooltip label={type === 'user' ? 'Approximate area only. Exact distance is kept private.' : `Product distance: ${Number.isFinite(prefetchedDistanceKm) ? prefetchedDistanceKm!.toFixed(2) : 'N/A'} km`}>
         <Badge
           bg={badgeBg}
           color={badgeColor}
@@ -108,26 +126,12 @@ const ProximityBadge: React.FC<ProximityBadgeProps> = ({
 
   const formatDistance = () => {
     const km = distance.distance_km ?? 0
-    const m = distance.distance_m ?? 0
-    if (km < 1) {
-      return `${Math.round(m)}m away`
-    } else if (km < 10) {
-      return `${km.toFixed(1)}km away`
-    } else {
-      return `${Math.round(km)}km away`
-    }
-  }
-
-  const getColorScheme = () => {
-    const km = distance.distance_km ?? 0
-    if (km < 5) return 'green'
-    if (km < 20) return 'blue'
-    if (km < 50) return 'orange'
-    return 'gray'
+    if (type === 'user') return formatPrivateDistance(km)
+    return formatExactDistance(km, distance.distance_m)
   }
 
   return (
-    <Tooltip label={`Distance: ${(distance.distance_km ?? 0).toFixed(2)} km (${(distance.distance_miles ?? 0).toFixed(2)} miles)`}>
+    <Tooltip label={type === 'user' ? 'Approximate area only. Exact distance is kept private.' : `Product distance: ${(distance.distance_km ?? 0).toFixed(2)} km (${(distance.distance_miles ?? 0).toFixed(2)} miles)`}>
       <Badge 
         bg={badgeBg}
         color={badgeColor}

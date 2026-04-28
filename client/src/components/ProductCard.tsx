@@ -797,23 +797,42 @@ const ProductCard: React.FC<ProductCardProps> = ({
             </Button>
 
             <Tooltip label="View offers" placement="top">
-              <IconButton
-                aria-label="View offers"
-                icon={<FaHandshake />}
-                size="sm"
-                h={{ base: '30px', md: '36px' }}
-                w={{ base: '30px', md: '36px' }}
-                minW={{ base: '30px', md: '36px' }}
-                bg={useColorModeValue('blue.50', 'blue.900')}
-                color={useColorModeValue('blue.600', 'blue.200')}
-                borderRadius="xl"
-                onClick={handleViewOffers}
-                isDisabled={product.status === 'sold'}
-                flexShrink={0}
-                transition="all 0.2s"
-                _hover={{ bg: useColorModeValue('blue.100', 'blue.800'), transform: 'translateY(-2px)', shadow: 'sm' }}
-                _active={{ transform: 'scale(0.98)' }}
-              />
+              <Box position="relative" flexShrink={0}>
+                <IconButton
+                  aria-label="View offers"
+                  icon={<FaHandshake />}
+                  size="sm"
+                  h={{ base: '30px', md: '36px' }}
+                  w={{ base: '30px', md: '36px' }}
+                  minW={{ base: '30px', md: '36px' }}
+                  bg={useColorModeValue('brand.50', 'brand.900')}
+                  color={useColorModeValue('brand.600', 'brand.200')}
+                  borderRadius="xl"
+                  onClick={handleViewOffers}
+                  isDisabled={product.status === 'sold'}
+                  transition="all 0.2s"
+                  _hover={{ bg: useColorModeValue('brand.100', 'brand.800'), transform: 'translateY(-2px)', shadow: 'sm' }}
+                  _active={{ transform: 'scale(0.98)' }}
+                />
+                {Number(product.offer_count || 0) > 0 && (
+                  <Badge
+                    position="absolute"
+                    top="-6px"
+                    right="-6px"
+                    minW="17px"
+                    h="17px"
+                    px={1}
+                    borderRadius="full"
+                    colorScheme="brand"
+                    fontSize="9px"
+                    display="grid"
+                    placeItems="center"
+                    pointerEvents="none"
+                  >
+                    {product.offer_count}
+                  </Badge>
+                )}
+              </Box>
             </Tooltip>
           </HStack>
         )}
