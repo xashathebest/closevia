@@ -72,9 +72,9 @@ const ProductUploadStep1: React.FC<ProductUploadStep1Props> = ({
       if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
         toast({
         id: "productuploadstep1-invalid-file-type",
-          title: 'Invalid file type',
-          description: 'Only JPEG, PNG, or WebP are supported',
-          status: 'error',
+          title: 'Images only, please',
+          description: 'Use a JPEG, PNG, or WebP file.',
+          status: 'warning',
           duration: 3,
           isClosable: true,
         })
@@ -164,9 +164,9 @@ const ProductUploadStep1: React.FC<ProductUploadStep1Props> = ({
     if (!['video/mp4', 'video/quicktime'].includes(file.type)) {
       toast({
         id: "productuploadstep1-invalid-file-type-2",
-        title: 'Invalid file type',
-        description: 'Only MP4 or MOV formats are supported',
-        status: 'error',
+        title: 'Videos only here',
+        description: 'Please use an MP4 or MOV file.',
+        status: 'warning',
         duration: 3,
         isClosable: true,
       })

@@ -9,6 +9,7 @@ import { getFirstImage } from '../utils/imageUtils'
 import OfferDetailsModal from '../components/OfferDetailsModal'
 import TradeCompletionModal from '../components/TradeCompletionModal'
 import ViewTradeModal from '../components/ViewTradeModal'
+import AnimatedEmptyState from '../components/AnimatedEmptyState'
 
 const Offers: React.FC = () => {
   const navigate = useNavigate()
@@ -653,7 +654,7 @@ const Offers: React.FC = () => {
       }
       return false
     })
-    if (offered.length === 0) return <Text color="gray.500" fontSize="sm">No items attached</Text>
+    if (offered.length === 0) return <Text color="gray.500" fontSize="sm">No items were attached to this offer.</Text>
     return (
       <HStack spacing={2} mt={2} wrap="wrap">
         {offered.map((it: any) => {
@@ -1061,7 +1062,7 @@ const Offers: React.FC = () => {
           <TabPanels bg={cardBg} p={5}>
           <TabPanel p={0}>
             {offersReceivedSorted.length === 0 ? (
-              <Text color="gray.500" textAlign="center" py={8}>No offers received.</Text>
+              <AnimatedEmptyState icon={FaHandshake} title="No offers yet" description="When someone sends you a trade or buyout offer, it'll show up here." colorScheme="brand" />
             ) : viewMode === 'grid' ? (
               <VStack spacing={5} align="stretch">
                 {offersReceivedPickup.length > 0 && (
@@ -1372,7 +1373,7 @@ const Offers: React.FC = () => {
           </TabPanel>
           <TabPanel p={0}>
             {offersSentSorted.length === 0 ? (
-              <Text color="gray.500" textAlign="center" py={8}>No offers sent.</Text>
+              <Text color="gray.500" textAlign="center" py={8}>You haven't sent any offers yet. Find something you like and propose a trade!</Text>
             ) : viewMode === 'grid' ? (
               <SimpleGrid columns={{ base: 1, md: 2, lg: 3, xl: 4 }} spacing={3}>
                 {offersSentSorted.map((t) => (
@@ -1499,7 +1500,7 @@ const Offers: React.FC = () => {
           </TabPanel>
           <TabPanel p={0}>
             {ongoingItems.length === 0 ? (
-              <Text color="gray.500" textAlign="center" py={8}>No trades in progress.</Text>
+              <AnimatedEmptyState icon={FaTruck} title="No trades in progress" description="Accepted trades will appear here with their next steps." colorScheme="green" />
             ) : viewMode === 'grid' ? (
               <SimpleGrid columns={{ base: 1, md: 2, lg: 3, xl: 4 }} spacing={3}>
                 {ongoingItems.map((t) => (
@@ -1626,7 +1627,7 @@ const Offers: React.FC = () => {
           <TabPanel p={0}>
             <VStack spacing={2} align="stretch">
               {historyItems.length === 0 ? (
-                <Text color="gray.500" textAlign="center" py={8}>No history yet.</Text>
+                <AnimatedEmptyState icon={FaHandshake} title="No history yet" description="Completed, declined, and cancelled trades will settle here." colorScheme="gray" />
               ) : historyItems.map((t) => (
                 <ScaleFade in={true} key={t.id}>
                   <Box 

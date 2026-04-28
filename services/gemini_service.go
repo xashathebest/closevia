@@ -2,6 +2,7 @@ package services
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -80,6 +81,13 @@ func configuredGeminiAPIKeys() []geminiAPIKey {
 }
 
 func GenerateProductDetails(images []*multipart.FileHeader) (*GeminiResponse, error) {
+	return GenerateProductDetailsContext(context.Background(), images)
+}
+
+func GenerateProductDetailsContext(ctx context.Context, images []*multipart.FileHeader) (*GeminiResponse, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	apiKeys := configuredGeminiAPIKeys()
 	if len(apiKeys) == 0 {
 		log.Printf("[Gemini] No Gemini API keys configured. Set GEMINI_API_KEY_PRIMARY, GEMINI_API_KEY_SECONDARY, or GEMINI_API_KEY")
@@ -299,7 +307,7 @@ Remember: Check for prohibited items FIRST. If found, respond ONLY with {"prohib
 			url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", model, apiKey.Value)
 			log.Printf("Making request to Gemini API (%s / v1beta) with %d image part(s)", model, len(parts)-1)
 
-			req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+			req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
 			if err != nil {
 				log.Printf("Error creating Gemini request for %s using key tier %d: %v", model, apiKey.Tier, err)
 				lastErr = err

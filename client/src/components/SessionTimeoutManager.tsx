@@ -59,11 +59,12 @@ const SessionTimeoutManager: React.FC = () => {
         id: toastId,
         title: 'Session expired',
         description: reason === 'idle'
-          ? 'Your session expired due to inactivity.'
+          ? 'You were away for a bit — please log in again to continue.'
           : 'Your session is no longer valid. Please sign in again.',
         status: 'info',
         duration: 5000,
         isClosable: true,
+        position: 'top',
       })
     }
     navigate('/login', { replace: true, state: { sessionExpired: true, from: location.pathname } })
@@ -184,9 +185,9 @@ const SessionTimeoutManager: React.FC = () => {
     <Modal isOpen={isWarningOpen} onClose={stayLoggedIn} isCentered closeOnEsc closeOnOverlayClick={false}>
       <ModalOverlay />
       <ModalContent>
-        <ModalHeader>Session Expiring Soon</ModalHeader>
+        <ModalHeader>Still there?</ModalHeader>
         <ModalBody>
-          <Text>You have been inactive for a while. Your session will expire soon unless you stay logged in.</Text>
+          <Text>You've been away for a bit. Your session is about to expire — tap below to stay logged in.</Text>
         </ModalBody>
         <ModalFooter gap={3}>
           <Button variant="ghost" onClick={manualLogout}>Log Out</Button>

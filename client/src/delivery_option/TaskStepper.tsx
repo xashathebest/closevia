@@ -425,9 +425,9 @@ const TaskStepper: React.FC = () => {
     if (!file.type.startsWith('image/')) {
       toast({
         id: "taskstepper-invalid-file",
-        title: 'Invalid File',
-        description: 'Please capture an image file',
-        status: 'error',
+        title: 'Image files only',
+        description: 'Please take or select a photo (not a video or document).',
+        status: 'warning',
         duration: 3000,
       })
       return
@@ -437,9 +437,9 @@ const TaskStepper: React.FC = () => {
     if (file.size > 10 * 1024 * 1024) {
       toast({
         id: "taskstepper-file-too-large",
-        title: 'File Too Large',
-        description: 'Photo must be smaller than 10MB',
-        status: 'error',
+        title: 'Photo is a bit too big',
+        description: 'Please use a photo smaller than 10MB.',
+        status: 'warning',
         duration: 3000,
       })
       return
@@ -479,8 +479,8 @@ const TaskStepper: React.FC = () => {
       URL.revokeObjectURL(previewUrl)
       toast({
         id: "taskstepper-upload-failed",
-        title: 'Upload Failed',
-        description: error?.response?.data?.error || 'Failed to upload photo. Please try again.',
+        title: "Photo didn't upload",
+        description: error?.response?.data?.error || "Something went wrong. Give it a moment and try again.",
         status: 'error',
         duration: 3000,
       })
@@ -515,8 +515,8 @@ const TaskStepper: React.FC = () => {
       if (stopAction.action === 'complete' && currentStop.stop_type === 'delivery' && !photoCaptured && !capturedPhotoUrl) {
         toast({
           id: "taskstepper-missing-photo",
-          title: 'Photo Required',
-          description: 'Please capture a photo proof to complete delivery',
+          title: 'One more step — snap a photo',
+          description: 'A delivery proof photo is needed to mark this as complete.',
           status: 'warning',
           duration: 3000,
         })

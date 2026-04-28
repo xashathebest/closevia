@@ -60,6 +60,7 @@ import {
   FiFlag,
   FiAlertTriangle,
   FiStar,
+  FiInfo,
 } from 'react-icons/fi'
 import { FaHandshake, FaMapMarkerAlt } from 'react-icons/fa'
 import { useAuth } from '../contexts/AuthContext'
@@ -83,6 +84,7 @@ import { formatEstimatedValueRange } from '../utils/currency'
 import { getCategoryLabel, normalizeWantedCategories } from '../utils/categories'
 import axios from 'axios';
 import { CloseIcon } from '@chakra-ui/icons'
+import { productImageTransitionName } from '../utils/motion'
 
 const ProductDetail: React.FC = () => {
   const { id } = useParams<{ id: string }>()
@@ -350,8 +352,8 @@ const ProductDetail: React.FC = () => {
     if (!user) {
       toast({
         id: "auth-required-wishlist",
-        title: "Authentication required",
-        description: "Please log in to wishlist this product",
+        title: "Log in to save items",
+        description: "Create a free account or log in to start wishlisting.",
         status: "warning",
         duration: 3000,
         isClosable: true,
@@ -428,7 +430,7 @@ const ProductDetail: React.FC = () => {
           setVotes({ under: 0, over: 0 })
           setUserVote('')
         } else {
-          setError('Product not found')
+          setError("Hmm, we couldn't find this item. It may have been removed.")
         }
       } else {
         const response = await api.get(`/api/products/${identifier}`)
@@ -444,7 +446,7 @@ const ProductDetail: React.FC = () => {
           setVotes({ under: 0, over: 0 })
           setUserVote('')
         } else {
-          setError('Product not found')
+          setError("Hmm, we couldn't find this item. It may have been removed.")
         }
       }
     } catch (err: unknown) {
@@ -453,7 +455,7 @@ const ProductDetail: React.FC = () => {
         if (status === 403) {
           setError('This item is no longer available')
         } else if (status === 404) {
-          setError('Product not found')
+          setError("Hmm, we couldn't find this item. It may have been removed.")
         } else {
           setError(err.response?.data?.error || 'An unexpected error occurred')
         }
@@ -471,8 +473,8 @@ const ProductDetail: React.FC = () => {
     if (!user) {
       toast({
         id: 'auth-required-purchase',
-        title: 'Authentication required',
-        description: 'Please log in to purchase this product',
+        title: "Log in to purchase",
+        description: "You'll need an account to buy this item.",
         status: 'warning',
         duration: 3000,
         isClosable: true,
@@ -525,8 +527,8 @@ const ProductDetail: React.FC = () => {
     if (!user) {
       toast({
         id: 'auth-required-report',
-        title: 'Authentication required',
-        description: 'Please log in to report this trader',
+        title: "Log in to report",
+        description: "You'll need to be logged in to submit a report.",
         status: 'warning',
         duration: 3000,
         isClosable: true,
@@ -594,8 +596,8 @@ const ProductDetail: React.FC = () => {
     if (!user) {
       toast({
         id: 'auth-required-trade',
-        title: 'Authentication required',
-        description: 'Please log in to propose a trade',
+        title: "Log in to propose a trade",
+        description: "Create a free account to start trading with others.",
         status: 'warning',
         duration: 3000,
         isClosable: true,
@@ -613,8 +615,8 @@ const ProductDetail: React.FC = () => {
     if (!user) {
       toast({
         id: 'auth-required-buyout',
-        title: 'Authentication required',
-        description: 'Please log in to make a buyout offer',
+        title: "Log in to make an offer",
+        description: "You'll need an account to send a buyout offer.",
         status: 'warning',
         duration: 3000,
         isClosable: true,
@@ -731,8 +733,8 @@ const ProductDetail: React.FC = () => {
     if (!user) {
       toast({
         id: 'auth-required-share',
-        title: 'Authentication required',
-        description: 'Please log in to share this product',
+        title: "Log in to share",
+        description: "You'll need to be logged in to share this item.",
         status: 'warning',
         duration: 3000,
         isClosable: true,
@@ -747,8 +749,8 @@ const ProductDetail: React.FC = () => {
     if (!user) {
       toast({
         id: 'auth-required-vote',
-        title: 'Authentication required',
-        description: 'Please log in to vote on price',
+        title: "Log in to vote",
+        description: "Share your price opinion — just log in first!",
         status: 'warning',
         duration: 3000,
         isClosable: true,
@@ -945,8 +947,8 @@ const ProductDetail: React.FC = () => {
     } catch (error) {
       toast({
         id: "productdetail-error",
-        title: 'Error',
-        description: 'Failed to load offers for this product',
+        title: "Couldn't load offers",
+        description: "Something went wrong fetching offers. Give it a moment and try again.",
         status: 'error',
         duration: 3000,
         isClosable: true,
@@ -1196,6 +1198,7 @@ const ProductDetail: React.FC = () => {
                     isOwner={user?.id === product.seller_id}
                     onSetCover={handleSetCover}
                     isSettingCover={isSettingCover}
+                    sharedTransitionName={productImageTransitionName(product.id)}
                   />
 
                   {!isOwner && (
@@ -1218,44 +1221,53 @@ const ProductDetail: React.FC = () => {
                       maxW={{ base: '170px', md: 'none' }}
                     >
                       <VStack spacing={1} align="end">
-                        <Text fontSize="2xs" fontWeight="700" color="white" lineHeight="1" textAlign="right">
-                          Is this price accurate?
-                        </Text>
+                        <Tooltip label="Help the community by voting — your input shapes the price signal for this item." hasArrow placement="left">
+                          <HStack spacing={1} cursor="help">
+                            <Text fontSize="2xs" fontWeight="700" color="white" lineHeight="1" textAlign="right">
+                              Is this price fair?
+                            </Text>
+                            <Icon as={FiInfo} boxSize={2.5} color="whiteAlpha.700" />
+                          </HStack>
+                        </Tooltip>
                         <HStack spacing={1} flexWrap="wrap" justify="flex-end">
-                          <Button
-                            leftIcon={<FiTrendingUp />}
-                            borderRadius="full"
-                            size="xs"
-                            h={{ base: '21px', md: '24px' }}
-                            px={{ base: 1.5, md: 2 }}
-                            fontSize="2xs"
-                            variant={userVote === 'under' ? 'solid' : 'outline'}
-                            colorScheme={userVote === 'under' ? 'green' : 'gray'}
-                            borderColor="whiteAlpha.500"
-                            color={userVote === 'under' ? 'white' : 'white'}
-                            onClick={() => handleVote('under')}
-                            isDisabled={Boolean(product.price === null || product.price === undefined || isOwner)}
-                            isLoading={isVoting}
-                          >
-                            Too low
-                          </Button>
-                          <Button
-                            leftIcon={<FiTrendingDown />}
-                            borderRadius="full"
-                            size="xs"
-                            h={{ base: '21px', md: '24px' }}
-                            px={{ base: 1.5, md: 2 }}
-                            fontSize="2xs"
-                            variant={userVote === 'over' ? 'solid' : 'outline'}
-                            colorScheme={userVote === 'over' ? 'orange' : 'gray'}
-                            borderColor="whiteAlpha.500"
-                            color={userVote === 'over' ? 'white' : 'white'}
-                            onClick={() => handleVote('over')}
-                            isDisabled={Boolean(product.price === null || product.price === undefined || isOwner)}
-                            isLoading={isVoting}
-                          >
-                            Too high
-                          </Button>
+                          <Tooltip label="Feels a bit low for this item" hasArrow placement="bottom">
+                            <Button
+                              leftIcon={<FiTrendingUp />}
+                              borderRadius="full"
+                              size="xs"
+                              h={{ base: '21px', md: '24px' }}
+                              px={{ base: 1.5, md: 2 }}
+                              fontSize="2xs"
+                              variant={userVote === 'under' ? 'solid' : 'outline'}
+                              colorScheme={userVote === 'under' ? 'green' : 'gray'}
+                              borderColor="whiteAlpha.500"
+                              color={userVote === 'under' ? 'white' : 'white'}
+                              onClick={() => handleVote('under')}
+                              isDisabled={Boolean(product.price === null || product.price === undefined || isOwner)}
+                              isLoading={isVoting}
+                            >
+                              A bit low
+                            </Button>
+                          </Tooltip>
+                          <Tooltip label="Slightly above the usual range" hasArrow placement="bottom">
+                            <Button
+                              leftIcon={<FiTrendingDown />}
+                              borderRadius="full"
+                              size="xs"
+                              h={{ base: '21px', md: '24px' }}
+                              px={{ base: 1.5, md: 2 }}
+                              fontSize="2xs"
+                              variant={userVote === 'over' ? 'solid' : 'outline'}
+                              colorScheme={userVote === 'over' ? 'orange' : 'gray'}
+                              borderColor="whiteAlpha.500"
+                              color={userVote === 'over' ? 'white' : 'white'}
+                              onClick={() => handleVote('over')}
+                              isDisabled={Boolean(product.price === null || product.price === undefined || isOwner)}
+                              isLoading={isVoting}
+                            >
+                              A bit high
+                            </Button>
+                          </Tooltip>
                         </HStack>
                       </VStack>
                     </Box>
@@ -1440,8 +1452,8 @@ const ProductDetail: React.FC = () => {
                                       if (!user) {
                                         toast({
                                           id: 'auth-required-report-flag',
-                                          title: 'Authentication required',
-                                          description: 'Please log in to report this product',
+                                          title: "Log in to report",
+                                          description: "You'll need to be logged in to flag this item.",
                                           status: 'warning',
                                           duration: 3000,
                                           isClosable: true,
@@ -1676,9 +1688,16 @@ const ProductDetail: React.FC = () => {
                       bg="white"
                       shadow="sm"
                     >
-                      <Heading size="sm" mb={3} color={detailText} fontWeight="700">
-                        What They Are Looking For
-                      </Heading>
+                      <HStack mb={3} spacing={1.5} align="center">
+                        <Heading size="sm" color={detailText} fontWeight="700">
+                          What They Are Looking For
+                        </Heading>
+                        <Tooltip label="The seller listed what they'd ideally receive in a trade — matching this improves your chances!" hasArrow placement="top">
+                          <span>
+                            <Icon as={FiInfo} boxSize={3.5} color="gray.400" cursor="help" />
+                          </span>
+                        </Tooltip>
+                      </HStack>
                       <VStack align="stretch" spacing={3}>
                         {wantedCategories.length > 0 && (
                           <Wrap spacing={2}>
@@ -1721,12 +1740,14 @@ const ProductDetail: React.FC = () => {
                           Make an offer
                         </Text>
                         <HStack w="full" spacing={{ base: 2, md: 3 }} align="stretch">
-                          <Tooltip label={hasPendingOfferOnProduct ? "You already have a pending offer on this product" : "Propose a trade"}>
+                          <Tooltip label={hasPendingOfferOnProduct ? "You've already sent an offer — hang tight while they review it!" : "Offer one of your items in exchange — no cash needed"}>
                             <Button
                               flex={1}
                               h={{ base: '48px', md: '52px' }}
+                              px={{ base: 3, md: 4 }}
                               borderRadius={{ base: 'xl', md: '2xl' }}
-                              fontWeight="800"
+                              fontSize={{ base: 'sm', md: 'sm' }}
+                              fontWeight="600"
                               bg={hasPendingOfferOnProduct ? 'gray.200' : 'brand.500'}
                               color={hasPendingOfferOnProduct ? 'gray.700' : 'white'}
                               _hover={hasPendingOfferOnProduct ? { bg: 'gray.300' } : { bg: 'brand.600', transform: 'translateY(-2px)' }}
@@ -1736,15 +1757,17 @@ const ProductDetail: React.FC = () => {
                               onClick={openTrade}
                               isDisabled={hasPendingOfferOnProduct}
                             >
-                              {hasPendingOfferOnProduct ? 'Pending Offer Sent' : 'Propose Trade'}
+                              {hasPendingOfferOnProduct ? 'Offer Sent — Awaiting Reply' : 'Propose Trade'}
                             </Button>
                           </Tooltip>
-                          <Tooltip label="Offer to buy this item with cash">
+                          <Tooltip label="Purchase this item directly with cash — quick and simple">
                             <Button
                               flex={1}
                               h={{ base: '48px', md: '52px' }}
+                              px={{ base: 3, md: 4 }}
                               borderRadius={{ base: 'xl', md: '2xl' }}
-                              fontWeight="800"
+                              fontSize={{ base: 'sm', md: 'sm' }}
+                              fontWeight="600"
                               variant="outline"
                               colorScheme="orange"
                               bg="white"

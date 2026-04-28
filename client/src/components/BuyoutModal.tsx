@@ -7,6 +7,10 @@ import { api } from '../services/api'
 import { Product, TradeCreate, TradeOption } from '../types'
 import { getFirstImage } from '../utils/imageUtils'
 import { reverseGeocodeToAddress, formatCoordinates } from '../utils/locationUtils'
+import { motion, useReducedMotion } from 'framer-motion'
+import { tapGlow } from '../utils/motion'
+
+const MotionButton = motion(Button)
 
 interface BuyoutModalProps {
   isOpen: boolean
@@ -134,7 +138,7 @@ const BuyoutModal: React.FC<BuyoutModalProps> = ({ isOpen, onClose, targetProduc
     
     if (!cashAmount || Number(cashAmount) <= 0) {
       toast({
-        id: "buyoutmodal-invalid-amount", title: 'Invalid amount', description: 'Please enter a valid cash amount to offer.', status: 'warning' })
+        id: "buyoutmodal-invalid-amount", title: "Enter an offer amount", description: 'Please type in a cash amount greater than ₱0 to continue.', status: 'warning' })
       return
     }
     
@@ -193,9 +197,9 @@ const BuyoutModal: React.FC<BuyoutModalProps> = ({ isOpen, onClose, targetProduc
       setTradeOption(null)
       onClose()
     } catch (e: any) {
-      const errorMessage = e?.response?.data?.error || 'Failed to send buyout offer'
+      const errorMessage = e?.response?.data?.error || "Something went wrong sending your offer."
       toast({
-        id: "buyoutmodal-failed", title: 'Failed', description: errorMessage, status: 'error' })
+        id: "buyoutmodal-failed", title: "Couldn't send offer", description: errorMessage, status: 'error' })
     } finally {
       setSubmittingTrade(false)
     }

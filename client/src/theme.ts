@@ -32,8 +32,33 @@ export const theme = extendTheme({
   },
   components: {
     Button: {
+      baseStyle: {
+        transitionProperty: 'transform, box-shadow, background-color, border-color, color, opacity',
+        transitionDuration: '180ms',
+        transitionTimingFunction: 'ease-out',
+        _active: {
+          transform: 'scale(0.97)',
+          boxShadow: '0 0 0 3px rgba(49, 151, 149, 0.12)',
+        },
+      },
       defaultProps: {
         colorScheme: 'brand',
+      },
+    },
+    IconButton: {
+      baseStyle: {
+        transitionProperty: 'transform, background-color, color, opacity',
+        transitionDuration: '180ms',
+        transitionTimingFunction: 'ease-out',
+        _active: {
+          transform: 'scale(0.97)',
+          boxShadow: '0 0 0 3px rgba(49, 151, 149, 0.12)',
+        },
+      },
+    },
+    Modal: {
+      defaultProps: {
+        motionPreset: 'slideInBottom',
       },
     },
   },

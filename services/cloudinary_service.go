@@ -92,6 +92,10 @@ func EnsureCloudinaryReady() error {
 
 // UploadFileToCloudinary uploads a multipart file to Cloudinary under the provided folder.
 func UploadFileToCloudinary(fileHeader *multipart.FileHeader, folder string) (string, error) {
+	return UploadFileToCloudinaryContext(context.Background(), fileHeader, folder)
+}
+
+func UploadFileToCloudinaryContext(ctx context.Context, fileHeader *multipart.FileHeader, folder string) (string, error) {
 	service := getCloudinaryService()
 	if service == nil || !service.ready || service.client == nil {
 		if service != nil && service.initializationErr != nil {
@@ -106,11 +110,15 @@ func UploadFileToCloudinary(fileHeader *multipart.FileHeader, folder string) (st
 	}
 	defer file.Close()
 
-	return service.uploadStream(file, fileHeader.Filename, folder)
+	return service.uploadStream(ctx, file, fileHeader.Filename, folder)
 }
 
 // UploadLocalFileToCloudinary uploads a file from disk to Cloudinary.
 func UploadLocalFileToCloudinary(path, folder, publicID string) (string, error) {
+	return UploadLocalFileToCloudinaryContext(context.Background(), path, folder, publicID)
+}
+
+func UploadLocalFileToCloudinaryContext(ctx context.Context, path, folder, publicID string) (string, error) {
 	service := getCloudinaryService()
 	if service == nil || !service.ready || service.client == nil {
 		if service != nil && service.initializationErr != nil {
@@ -130,10 +138,10 @@ func UploadLocalFileToCloudinary(path, folder, publicID string) (string, error) 
 		name = filepath.Base(path)
 	}
 
-	return service.uploadStream(handle, name, folder)
+	return service.uploadStream(ctx, handle, name, folder)
 }
 
-func (s *CloudinaryService) uploadStream(reader io.ReadSeeker, originalName, folder string) (string, error) {
+func (s *CloudinaryService) uploadStream(parent context.Context, reader io.ReadSeeker, originalName, folder string) (string, error) {
 	if !s.ready || s.client == nil {
 		if s.initializationErr != nil {
 			return "", s.initializationErr
@@ -146,7 +154,10 @@ func (s *CloudinaryService) uploadStream(reader io.ReadSeeker, originalName, fol
 	}
 
 	// Use a 60-second timeout to prevent hanging uploads from holding the connection open
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parent, 60*time.Second)
 	defer cancel()
 
 	// Use a unique identifier to avoid caching issues and overwriting identical filenames
@@ -154,7 +165,7 @@ func (s *CloudinaryService) uploadStream(reader io.ReadSeeker, originalName, fol
 	// Always add timestamp to ensure unique ID for all uploads (prevents overwriting common names like image.jpg)
 	publicID = fmt.Sprintf("%s-%d", publicID, time.Now().UnixNano())
 
-	fmt.Printf("🖼️  [Cloudinary] Uploading with publicID: %s to folder: %s\n", publicID, folder)
+	Logger().Info("cloudinary upload starting", "service", "cloudinary", "public_id", publicID, "folder", folder)
 
 	params := uploader.UploadParams{
 		Folder:       buildFolderPath(s.conf.folderPrefix, folder),
@@ -168,9 +179,11 @@ func (s *CloudinaryService) uploadStream(reader io.ReadSeeker, originalName, fol
 
 	result, err := s.client.Upload.Upload(ctx, reader, params)
 	if err != nil {
+		Logger().Error("cloudinary upload failed", "service", "cloudinary", "public_id", publicID, "folder", folder, "error", err)
 		return "", err
 	}
 
+	Logger().Info("cloudinary upload completed", "service", "cloudinary", "public_id", publicID, "folder", folder)
 	return result.SecureURL, nil
 }
 

@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useMemo } from 'react'
 import { Modal, ModalOverlay, ModalContent, ModalHeader, ModalBody, VStack, Grid, Box, Image, Text, FormControl, FormLabel, Input, HStack, Button, useToast, Badge, Card, CardBody, Icon, useColorModeValue, Spinner, Flex, Checkbox, Alert, AlertIcon, Switch, RadioGroup, Radio, useBreakpointValue, Accordion, AccordionItem, AccordionButton, AccordionPanel, AccordionIcon, Progress, Divider } from '@chakra-ui/react'
-import { motion, useDragControls, type PanInfo } from 'framer-motion'
+import { AnimatePresence, motion, useDragControls, useReducedMotion, type PanInfo } from 'framer-motion'
 import { FaMapMarkerAlt, FaTruck, FaLocationArrow, FaBoxOpen, FaHandshake, FaTimes, FaCheckCircle, FaExternalLinkAlt, FaClock, FaLock } from 'react-icons/fa'
 import { AvailabilitySlot } from '../types'
 import { useNavigate } from 'react-router-dom'
@@ -14,6 +14,7 @@ import { reverseGeocodeToAddress, formatCoordinates } from '../utils/locationUti
 import { getProductLocationKey, getProductLocationLabel, getProductRawLocation } from '../utils/productLocation'
 import { useInvalidateDashboard, DASHBOARD_QUERY_KEYS } from '../hooks/useDashboard'
 import { updateTrade } from '../services/tradeService'
+import { motionDurations, motionEasings } from '../utils/motion'
 
 interface TradeModalProps {
   isOpen: boolean
@@ -78,6 +79,7 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
   const mutedTextColor = useColorModeValue('gray.600', 'gray.400')
   const isMobile = useBreakpointValue({ base: true, md: false }) ?? false
   const useTwoColumnLayout = useBreakpointValue({ base: false, md: false, lg: true }) ?? false
+  const prefersReducedMotion = useReducedMotion()
 
   const handleSheetDragEnd = (_event: MouseEvent | TouchEvent | PointerEvent, info: PanInfo) => {
     if (!isMobile) return
@@ -91,7 +93,7 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
     initial: { y: '100%', opacity: 1 },
     animate: { y: 0, opacity: 1 },
     exit: { y: '100%', opacity: 1 },
-    transition: { type: 'spring', stiffness: 380, damping: 36 },
+    transition: { duration: motionDurations.page, ease: motionEasings.easeOut },
     drag: 'y',
     dragControls: sheetDragControls,
     dragListener: false,
@@ -251,13 +253,20 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
   }, [targetProduct])
 
   const sellerAvailabilityType = (targetProduct as any)?.availability_type as 'flexible' | 'strict' | undefined
+  const currentAvailabilitySlots = useMemo(
+    () => sellerAvailabilitySlots.filter(slot => {
+      const method = (slot as any).method
+      return !method || !tradeOption || method === tradeOption
+    }),
+    [sellerAvailabilitySlots, tradeOption]
+  )
 
   const hasFixedLocation = useMemo(() => {
     return selectedTargetProducts.some((product) => {
       const locationType = product.location_type
-      if (locationType === 'current_location' || locationType === 'pickup_location') return true
-      if ((product as any)?.pickup_address && (product as any).pickup_address.trim()) return true
-      if (product.location && product.location.trim()) return true
+      const safeLocation = getProductRawLocation(product)
+      if ((locationType === 'current_location' || locationType === 'pickup_location') && safeLocation) return true
+      if (safeLocation) return true
       return false
     })
   }, [selectedTargetProducts])
@@ -388,6 +397,7 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
   // Reset the pickup acknowledgement whenever the user switches away from pickup
   // so they re-confirm the commitment if they come back to it.
   useEffect(() => {
+    setSelectedSlotId(null)
     if (tradeOption !== 'pickup') setPickupAcknowledged(false)
     if (tradeOption !== 'meetup') {
       setMeetupChoice(null)
@@ -639,13 +649,22 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
     try {
       setSubmittingTrade(true)
 
-      const pickupLocation = getProductRawLocation(targetProduct) || targetProduct?.pickup_address || targetProduct?.location || ''
+      const pickupLocation = getProductRawLocation(targetProduct) || ''
       const proposedMeetupLocation = tradeOption === 'pickup'
         ? pickupLocation.trim()
         : (resolvedMeetupAddress || '').trim()
       const proposedMeetupCoords = tradeOption === 'pickup' ? getProductCoords(targetProduct) : resolvedMeetupCoords
       const proposedMeetupDate = meetupDate.trim()
       const proposedMeetupTime = meetupTime.trim()
+      if (sellerAvailabilityType === 'strict' && currentAvailabilitySlots.length > 0 && !selectedSlotId) {
+        toast({
+          id: "trademodal-slot-required",
+          title: 'Pick an available slot',
+          description: "This seller uses a fixed schedule. Choose one of the available slots before sending the offer.",
+          status: 'warning',
+        })
+        return
+      }
       if (!proposedMeetupLocation || !proposedMeetupDate || !proposedMeetupTime) {
         toast({
           id: "trademodal-logistics-required",
@@ -748,7 +767,8 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
     }
   }
 
-  const canConfirm = selectedOfferIds.length > 0 && !!tradeOption && !!meetupDate && !!meetupTime && (tradeOption === 'pickup' || !!resolvedMeetupAddress) && (!selectedTargetsNeedLocationPlan || locationPlanAcknowledged) && (selectedTargetProducts.length === 0 || scheduleAgreed)
+  const strictSlotSatisfied = sellerAvailabilityType !== 'strict' || currentAvailabilitySlots.length === 0 || !!selectedSlotId
+  const canConfirm = selectedOfferIds.length > 0 && !!tradeOption && !!meetupDate && !!meetupTime && strictSlotSatisfied && (tradeOption === 'pickup' || !!resolvedMeetupAddress) && (!selectedTargetsNeedLocationPlan || locationPlanAcknowledged) && (selectedTargetProducts.length === 0 || scheduleAgreed)
   const mobileSteps = ['Trading For', 'My Offered Items', 'Trade Details', 'Review']
 
   const selectedSummary = selectedProducts.length > 0 ? (
@@ -988,7 +1008,7 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
                   >
                     <Icon as={FaBoxOpen} color="green.500" boxSize={3} flexShrink={0} />
                     <VStack spacing={0} align="start" flex={1} minW={0}>
-                      <Text fontSize="10px" fontWeight="700" color="gray.800">Suggested by trader</Text>
+                      <Text fontSize="10px" fontWeight="700" color="gray.800">Near my item</Text>
                       <Text fontSize="9px" color="gray.500" noOfLines={1}>{getProductLocationLabel(myProductForMeetup)}</Text>
                     </VStack>
                     {meetupChoice === 'my_product' && <Icon as={FaCheckCircle} color="green.500" boxSize={3} flexShrink={0} />}
@@ -1024,7 +1044,7 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
                   >
                     <Icon as={FaLocationArrow} color="purple.500" boxSize={3} flexShrink={0} />
                     <VStack spacing={0} align="start" flex={1} minW={0}>
-                      <Text fontSize="10px" fontWeight="700" color="gray.800">Suggested by trader</Text>
+                      <Text fontSize="10px" fontWeight="700" color="gray.800">Suggested meetup</Text>
                       <Text fontSize="9px" color="gray.500" noOfLines={1}>
                         {loadingMidpoint ? 'Calculating…' : midpointLabel || 'Between both product locations'}
                       </Text>
@@ -1059,6 +1079,11 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
                   fontSize="11px" size="sm" bg="white"
                 />
               )}
+              {meetupChoice === 'midpoint' && (midpointLabel || meetupMidpointCoords) && (
+                <Text fontSize="10px" color="purple.700" fontWeight="700">
+                  Suggested meetup: {midpointLabel || 'Between both product locations'}
+                </Text>
+              )}
 
               {/* View on map link (when coords are available for the selected choice) */}
               {meetupMapUrl && (
@@ -1081,7 +1106,7 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
                 <Text fontSize="11px" fontWeight="700" color={mutedTextColor} textTransform="uppercase" letterSpacing="0.5px">
                   Meetup Date &amp; Time
                 </Text>
-                {sellerAvailabilitySlots.length > 0 && (
+                {currentAvailabilitySlots.length > 0 && (
                   <Badge colorScheme={sellerAvailabilityType === 'strict' ? 'orange' : 'teal'} fontSize="8px">
                     <Icon as={sellerAvailabilityType === 'strict' ? FaLock : FaClock} boxSize={2} mr={1} />
                     {sellerAvailabilityType === 'strict' ? 'Strict' : 'Flexible'}
@@ -1089,13 +1114,13 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
                 )}
               </HStack>
 
-              {sellerAvailabilitySlots.length > 0 && (
+              {currentAvailabilitySlots.length > 0 && (
                 <>
                   <Text fontSize="9px" color="teal.700" fontWeight="semibold">
                     Seller's available slots — pick one:
                   </Text>
                   <VStack align="stretch" spacing={1}>
-                    {sellerAvailabilitySlots.map(slot => {
+                    {currentAvailabilitySlots.map(slot => {
                       const fmt = (t: string) => {
                         const [h, m] = t.split(':').map(Number)
                         const ampm = h >= 12 ? 'PM' : 'AM'
@@ -1134,9 +1159,9 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
               )}
 
               {/* Custom time input — hidden for strict schedule, optional for flexible */}
-              {sellerAvailabilityType !== 'strict' && (
+              {(sellerAvailabilityType !== 'strict' || currentAvailabilitySlots.length === 0) && (
                 <>
-                  {sellerAvailabilitySlots.length > 0 && (
+                  {currentAvailabilitySlots.length > 0 && (
                     <Text fontSize="9px" color="gray.500">Or propose a different time:</Text>
                   )}
                   <HStack spacing={2}>
@@ -1155,12 +1180,12 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
                 </>
               )}
 
-              {sellerAvailabilityType === 'strict' && sellerAvailabilitySlots.length > 0 && !selectedSlotId && (
+              {sellerAvailabilityType === 'strict' && currentAvailabilitySlots.length > 0 && !selectedSlotId && (
                 <Text fontSize="9px" color="orange.600">
                   This seller has a strict schedule — please select one of the slots above.
                 </Text>
               )}
-              {(!sellerAvailabilitySlots.length && sellerAvailabilityType !== 'strict') && (
+              {(!currentAvailabilitySlots.length && sellerAvailabilityType !== 'strict') && (
                 <Text fontSize="9px" color="gray.500">
                   Date and time are optional. The other trader can accept or suggest changes after the offer is accepted.
                 </Text>
@@ -1187,25 +1212,69 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
                 <Text fontSize="10px" fontWeight="700" color="orange.800" mb={1}>
                   Available: {formatCollectionDays(collectionSetup.pickup?.days)} · {formatCollectionWindow(collectionSetup.pickup?.time_start, collectionSetup.pickup?.time_end)}
                 </Text>
-                <HStack spacing={2}>
-                  <Input
-                    type="date"
-                    value={meetupDate}
-                    onChange={(e) => setMeetupDate(e.target.value)}
-                    fontSize="11px"
-                    size="sm"
-                    bg="white"
-                    min={new Date().toISOString().split('T')[0]}
-                  />
-                  <Input
-                    type="time"
-                    value={meetupTime}
-                    onChange={(e) => setMeetupTime(e.target.value)}
-                    fontSize="11px"
-                    size="sm"
-                    bg="white"
-                  />
-                </HStack>
+                {currentAvailabilitySlots.length > 0 && (
+                  <VStack align="stretch" spacing={1} mb={sellerAvailabilityType === 'strict' ? 0 : 2}>
+                    {currentAvailabilitySlots.map(slot => {
+                      const formatSlotTime = (time: string) => {
+                        const [hour, minute] = time.split(':').map(Number)
+                        const ampm = hour >= 12 ? 'PM' : 'AM'
+                        const displayHour = hour % 12 || 12
+                        return `${displayHour}:${String(minute).padStart(2, '0')} ${ampm}`
+                      }
+                      const dateStr = new Date(`${slot.date}T00:00:00`).toLocaleDateString('en-PH', { weekday: 'short', month: 'short', day: 'numeric' })
+                      const isSelected = selectedSlotId === slot.id
+                      return (
+                        <HStack
+                          key={slot.id}
+                          p={1.5}
+                          borderRadius="md"
+                          borderWidth="1.5px"
+                          borderColor={isSelected ? 'orange.400' : 'orange.100'}
+                          bg={isSelected ? 'orange.100' : 'white'}
+                          cursor="pointer"
+                          spacing={2}
+                          onClick={() => {
+                            setSelectedSlotId(slot.id)
+                            setMeetupDate(slot.date)
+                            setMeetupTime(slot.start_time)
+                          }}
+                        >
+                          <Icon as={FaClock} color={isSelected ? 'orange.500' : 'gray.400'} boxSize={3} />
+                          <Text fontSize="11px" color={isSelected ? 'orange.800' : 'gray.700'} fontWeight={isSelected ? 'semibold' : 'normal'}>
+                            {dateStr} Â· {formatSlotTime(slot.start_time)}-{formatSlotTime(slot.end_time)}
+                          </Text>
+                          {isSelected && <Icon as={FaCheckCircle} color="orange.500" boxSize={3} ml="auto" />}
+                        </HStack>
+                      )
+                    })}
+                  </VStack>
+                )}
+                {(sellerAvailabilityType !== 'strict' || currentAvailabilitySlots.length === 0) && (
+                  <HStack spacing={2}>
+                    <Input
+                      type="date"
+                      value={meetupDate}
+                      onChange={(e) => { setMeetupDate(e.target.value); setSelectedSlotId(null) }}
+                      fontSize="11px"
+                      size="sm"
+                      bg="white"
+                      min={new Date().toISOString().split('T')[0]}
+                    />
+                    <Input
+                      type="time"
+                      value={meetupTime}
+                      onChange={(e) => { setMeetupTime(e.target.value); setSelectedSlotId(null) }}
+                      fontSize="11px"
+                      size="sm"
+                      bg="white"
+                    />
+                  </HStack>
+                )}
+                {sellerAvailabilityType === 'strict' && currentAvailabilitySlots.length > 0 && !selectedSlotId && (
+                  <Text fontSize="9px" color="orange.700" mt={1}>
+                    Pick one of the owner's available pickup slots.
+                  </Text>
+                )}
               </Box>
               <Checkbox size="md" colorScheme="orange" isChecked={pickupAcknowledged} onChange={(e) => setPickupAcknowledged(e.target.checked)}>
                 <Text fontSize="11px" color="gray.700">I understand and I'm willing to go to the pickup location.</Text>
@@ -1503,12 +1572,21 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
 
               <Box flex="1" minH={0} overflowY="auto" px={{ base: 4, md: 5 }} pt={2} pb={4}>
                 {isMobile ? (
-                  <>
-                    {mobileStep === 0 && targetSection}
-                    {mobileStep === 1 && offerSection}
-                    {mobileStep === 2 && detailsSection}
-                    {mobileStep === 3 && reviewSection}
-                  </>
+                  <AnimatePresence mode="wait" initial={false}>
+                    <motion.div
+                      key={mobileStep}
+                      initial={prefersReducedMotion ? false : { opacity: 0, x: 16 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      exit={prefersReducedMotion ? undefined : { opacity: 0, x: -16 }}
+                      transition={{ duration: motionDurations.uiSlow, ease: motionEasings.easeOut }}
+                      style={{ willChange: 'transform, opacity' }}
+                    >
+                      {mobileStep === 0 && targetSection}
+                      {mobileStep === 1 && offerSection}
+                      {mobileStep === 2 && detailsSection}
+                      {mobileStep === 3 && reviewSection}
+                    </motion.div>
+                  </AnimatePresence>
                 ) : (
                   <Grid
                     templateColumns={useTwoColumnLayout ? 'minmax(0, 1fr) minmax(300px, 380px)' : '1fr'}

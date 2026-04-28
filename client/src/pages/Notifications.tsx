@@ -22,12 +22,13 @@ import {
   IconButton,
   Skeleton,
   SkeletonText,
-  ScaleFade,
   Divider,
   Icon,
 } from '@chakra-ui/react'
 import { SearchIcon, CheckIcon, BellIcon, ChevronLeftIcon, ChevronRightIcon } from '@chakra-ui/icons'
 import { FaHandshake, FaExchangeAlt, FaSyncAlt, FaLightbulb, FaFire, FaFlag, FaCog, FaBullhorn, FaBox, FaShoppingBag, FaCheckDouble, FaInbox } from 'react-icons/fa'
+import { motion, useReducedMotion } from 'framer-motion'
+import { motionDurations, motionEasings } from '../utils/motion'
 import { useAuth } from '../contexts/AuthContext'
 import { useProducts } from '../contexts/ProductContext'
 import { useRealtime } from '../contexts/RealtimeContext'
@@ -38,6 +39,7 @@ import { isNotificationAllowed } from '../utils/notificationPreferences'
 import { api } from '../services/api'
 import { DASHBOARD_QUERY_KEYS } from '../hooks/useDashboard'
 import FloatingTab from '../components/FloatingTab'
+import AnimatedEmptyState from '../components/AnimatedEmptyState'
 
 interface Notification {
   id: number
@@ -162,8 +164,11 @@ function getNotificationsCacheKey(role?: string): string {
 /*  Component                                                          */
 /* ------------------------------------------------------------------ */
 
+const MotionBox = motion(Box)
+
 const Notifications: React.FC = () => {
   const { user } = useAuth()
+  const prefersReducedMotion = useReducedMotion()
   const { products } = useProducts()
   const { adjustNotificationCount, refreshCounts } = useRealtime()
   const queryClient = useQueryClient()
@@ -220,8 +225,8 @@ const Notifications: React.FC = () => {
       setNotifications(list)
       try { localStorage.setItem(cacheKey, JSON.stringify(list)) } catch {}
     } catch (error: any) {
-      setError(error.message || 'Failed to fetch notifications')
-      toast({ id: 'notifications-error', title: 'Error', description: 'Failed to load notifications', status: 'error', duration: 3000, isClosable: true })
+      setError(error.message || "We couldn't load your notifications right now.")
+      toast({ id: 'notifications-error', title: "Couldn't load notifications", description: "Something went wrong. Pull down to try again.", status: 'error', duration: 3000, isClosable: true })
     } finally {
       setLoading(false)
       setInitialLoading(false)
@@ -274,7 +279,7 @@ const Notifications: React.FC = () => {
         adjustNotificationCount(1)
         updateDashboardUnreadCount(1)
       }
-      toast({ id: 'mark-read-error', title: 'Error', description: 'Failed to mark notification as read', status: 'error', duration: 3000, isClosable: true })
+      toast({ id: 'mark-read-error', title: "Couldn't mark as read", description: "Something went wrong. Please try again.", status: 'error', duration: 3000, isClosable: true })
     }
   }, [adjustNotificationCount, affectsUnreadBadge, notifications, queryClient, refreshCounts, toast, updateDashboardUnreadCount, updateNotificationsCache])
 
@@ -300,7 +305,7 @@ const Notifications: React.FC = () => {
       updateNotificationsCache(previous)
       adjustNotificationCount(unreadDelta)
       updateDashboardUnreadCount(unreadDelta)
-      toast({ id: 'mark-all-error', title: 'Error', description: 'Failed to mark all as read', status: 'error', duration: 3000, isClosable: true })
+      toast({ id: 'mark-all-error', title: "Couldn't update notifications", description: "Please try again in a moment.", status: 'error', duration: 3000, isClosable: true })
     }
   }, [adjustNotificationCount, affectsUnreadBadge, notifications, queryClient, refreshCounts, toast, updateDashboardUnreadCount, updateNotificationsCache])
 
@@ -649,9 +654,19 @@ const Notifications: React.FC = () => {
                   </Box>
                 ))}
               </VStack>
-            ) : (
+            ) : (<>
               /* Empty state */
-              <VStack spacing={4} py={16} align="center">
+              <AnimatedEmptyState
+                icon={FaInbox}
+                title={query ? 'Nothing matched your search' : user?.role === 'admin' ? 'No reports yet' : "You're all caught up!"}
+                description={query
+                  ? `Try different keywords — nothing matches "${query}".`
+                  : user?.role === 'admin'
+                    ? "You'll see user reports here when they come in."
+                    : "We'll let you know about trades, offers, and important updates."}
+                colorScheme="blue"
+              />
+              {false && (<VStack spacing={4} py={16} align="center">
                 <Flex
                   w="80px"
                   h="80px"
@@ -664,18 +679,18 @@ const Notifications: React.FC = () => {
                 </Flex>
                 <VStack spacing={1}>
                   <Text fontSize="lg" fontWeight="semibold" color="gray.600" _dark={{ color: 'gray.300' }}>
-                    {query ? 'No results found' : user?.role === 'admin' ? 'No reports yet' : 'No notifications yet'}
+                    {query ? 'Nothing matched your search' : user?.role === 'admin' ? 'No reports yet' : "You're all caught up!"}
                   </Text>
                   <Text fontSize="sm" color="gray.400" textAlign="center" maxW="300px">
                     {query
-                      ? `Nothing matches "${query}". Try a different search.`
+                      ? `Try different keywords — nothing matches "${query}".`
                       : user?.role === 'admin'
                         ? "You'll see user reports here when they come in."
                         : "We'll let you know about trades, offers, and important updates."}
                   </Text>
                 </VStack>
-              </VStack>
-            )
+              </VStack>)}
+            </>)
           ) : (
             /* Grouped notification cards */
             <VStack spacing={4} align="stretch">
@@ -697,7 +712,17 @@ const Notifications: React.FC = () => {
                     const title = TITLE_MAP[notification.type] || notification.type.replace('_', ' ')
 
                     return (
-                      <ScaleFade key={notification.id} in={true} initialScale={0.97}>
+                      <MotionBox
+                        key={notification.id}
+                        initial={prefersReducedMotion ? false : { opacity: 0, y: 8, scale: 0.98 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        transition={{
+                          duration: motionDurations.uiSlow,
+                          ease: motionEasings.easeOut,
+                          delay: prefersReducedMotion ? 0 : idx * 0.04,
+                        }}
+                        style={{ willChange: 'transform, opacity' }}
+                      >
                         <Box
                           position="relative"
                           bg={notification.read ? cardBg : unreadBg}
@@ -821,7 +846,7 @@ const Notifications: React.FC = () => {
                             </Flex>
                           </Box>
                         </Box>
-                      </ScaleFade>
+                      </MotionBox>
                     )
                   })}
                 </VStack>

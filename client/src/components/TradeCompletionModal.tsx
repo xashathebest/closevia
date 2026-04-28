@@ -189,9 +189,9 @@ const TradeCompletionModal: React.FC<TradeCompletionModalProps> = ({
     if (!file.type.startsWith('image/')) {
       toast({
         id: "tradecompletionmodal-invalid-file-type",
-        title: 'Invalid file type',
-        description: 'Please upload an image file',
-        status: 'error',
+        title: 'Images only, please',
+        description: 'Please upload a photo (JPG, PNG, or WEBP).',
+        status: 'warning',
       })
       return
     }

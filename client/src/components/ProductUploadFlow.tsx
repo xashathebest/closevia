@@ -5,6 +5,8 @@ import ProductUploadStep2 from './ProductUploadStep2'
 import ProductUploadStep3 from './ProductUploadStep3'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../services/api'
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
+import { stepTransition, motionDurations, motionEasings } from '../utils/motion'
 
 type UploadStep = 1 | 2 | 3
 
@@ -46,6 +48,8 @@ interface ProductUploadFlowProps {
 
 const ProductUploadFlow: React.FC<ProductUploadFlowProps> = ({ onSuccess }) => {
   const [currentStep, setCurrentStep] = useState<UploadStep>(1)
+  const [direction, setDirection] = useState<'forward' | 'back'>('forward')
+  const prefersReducedMotion = useReducedMotion()
   const [isLoading, setIsLoading] = useState(false)
   const [productData, setProductData] = useState<ProductData>({
     images: [],
@@ -119,6 +123,7 @@ const ProductUploadFlow: React.FC<ProductUploadFlowProps> = ({ onSuccess }) => {
       })
     }
 
+    setDirection('forward')
     setCurrentStep(2)
   }
 
@@ -137,6 +142,7 @@ const ProductUploadFlow: React.FC<ProductUploadFlowProps> = ({ onSuccess }) => {
       wants: details.wants,
       wanted_categories: details.wanted_categories,
     }))
+    setDirection('forward')
     setCurrentStep(3)
   }
 
@@ -217,69 +223,83 @@ const ProductUploadFlow: React.FC<ProductUploadFlowProps> = ({ onSuccess }) => {
   // Navigation handlers
   const handleBack = () => {
     if (currentStep > 1) {
+      setDirection('back')
       setCurrentStep((prev) => (prev - 1) as UploadStep)
     } else {
-      navigate(-1) // Go back to previous page
+      navigate(-1)
     }
   }
 
+  const trans = stepTransition[direction]
+
   return (
-    <Box w="full" minH="100vh" bg="gray.50">
-      {currentStep === 1 && (
-        <ProductUploadStep1
-          onNext={handleStep1Next}
-          onBack={handleBack}
-          isLoading={isLoading}
-        />
-      )}
+    <Box w="full" minH="100vh" bg="gray.50" overflow="hidden">
+      <AnimatePresence mode="wait" initial={false}>
+        <motion.div
+          key={currentStep}
+          initial={prefersReducedMotion ? false : trans.initial}
+          animate={trans.animate}
+          exit={prefersReducedMotion ? undefined : trans.exit}
+          transition={{ duration: motionDurations.uiSlow, ease: motionEasings.easeOut }}
+          style={{ willChange: 'transform, opacity' }}
+        >
+          {currentStep === 1 && (
+            <ProductUploadStep1
+              onNext={handleStep1Next}
+              onBack={handleBack}
+              isLoading={isLoading}
+            />
+          )}
 
-      {currentStep === 2 && (
-        <ProductUploadStep2
-          onNext={handleStep2Next}
-          onBack={() => setCurrentStep(1)}
-          initialData={{
-            title: productData.title,
-            description: productData.description,
-            price: productData.price,
-            category: productData.category,
-            condition: productData.condition,
-            location: productData.location,
-            allowBuying: productData.allowBuying,
-            barterOnly: productData.barterOnly,
-            wants: productData.wants,
-            wanted_categories: productData.wanted_categories,
-          }}
-          aiAnalysis={productData.aiAnalysis}
-          isLoading={isLoading}
-        />
-      )}
+          {currentStep === 2 && (
+            <ProductUploadStep2
+              onNext={handleStep2Next}
+              onBack={() => { setDirection('back'); setCurrentStep(1) }}
+              initialData={{
+                title: productData.title,
+                description: productData.description,
+                price: productData.price,
+                category: productData.category,
+                condition: productData.condition,
+                location: productData.location,
+                allowBuying: productData.allowBuying,
+                barterOnly: productData.barterOnly,
+                wants: productData.wants,
+                wanted_categories: productData.wanted_categories,
+              }}
+              aiAnalysis={productData.aiAnalysis}
+              isLoading={isLoading}
+            />
+          )}
 
-      {currentStep === 3 && (
-        <ProductUploadStep3
-          product={{
-            images: productData.images.map((img) => URL.createObjectURL(img)),
-            video: productData.video ? URL.createObjectURL(productData.video) : undefined,
-            title: productData.title,
-            description: productData.description,
-            price: productData.price,
-            category: productData.category,
-            condition: productData.condition,
-            location: productData.location,
-            allowBuying: productData.allowBuying,
-            barterOnly: productData.barterOnly,
-            wants: productData.wants,
-            wanted_categories: productData.wanted_categories,
-            estimated_value_min: productData.aiAnalysis?.data?.estimated_value_min,
-            estimated_value_max: productData.aiAnalysis?.data?.estimated_value_max,
-            show_estimated_value: productData.show_estimated_value,
-            isAnalyzing: isLoading,
-          }}
-          onToggleEstimateVisibility={(show) => setProductData((prev) => ({ ...prev, show_estimated_value: show }))}
-          onSubmit={handleStep3Submit}
-          onBack={() => setCurrentStep(2)}
-          isLoading={isLoading}
-        />
-      )}
+          {currentStep === 3 && (
+            <ProductUploadStep3
+              product={{
+                images: productData.images.map((img) => URL.createObjectURL(img)),
+                video: productData.video ? URL.createObjectURL(productData.video) : undefined,
+                title: productData.title,
+                description: productData.description,
+                price: productData.price,
+                category: productData.category,
+                condition: productData.condition,
+                location: productData.location,
+                allowBuying: productData.allowBuying,
+                barterOnly: productData.barterOnly,
+                wants: productData.wants,
+                wanted_categories: productData.wanted_categories,
+                estimated_value_min: productData.aiAnalysis?.data?.estimated_value_min,
+                estimated_value_max: productData.aiAnalysis?.data?.estimated_value_max,
+                show_estimated_value: productData.show_estimated_value,
+                isAnalyzing: isLoading,
+              }}
+              onToggleEstimateVisibility={(show) => setProductData((prev) => ({ ...prev, show_estimated_value: show }))}
+              onSubmit={handleStep3Submit}
+              onBack={() => { setDirection('back'); setCurrentStep(2) }}
+              isLoading={isLoading}
+            />
+          )}
+        </motion.div>
+      </AnimatePresence>
     </Box>
   )
 }

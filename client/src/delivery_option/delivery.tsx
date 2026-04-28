@@ -166,7 +166,7 @@ const DeliveryUI: React.FC = () => {
   const getCurrentLocation = async () => {
     if (!navigator.geolocation) {
       toast({
-        id: "delivery-not-supported", title: 'Not supported', description: 'Geolocation not available', status: 'warning' })
+        id: "delivery-not-supported", title: "Location not available on this device", description: 'Please type your address manually.', status: 'warning' })
       return
     }
 
@@ -193,7 +193,7 @@ const DeliveryUI: React.FC = () => {
       () => {
         setIsGettingLocation(false)
         toast({
-        id: "delivery-location-access-denied", title: 'Location access denied', description: 'Enter address manually', status: 'warning' })
+        id: "delivery-location-access-denied", title: "Couldn't access your location", description: 'No worries — just type your address in the field below.', status: 'warning' })
       },
       { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
     )
@@ -205,22 +205,22 @@ const DeliveryUI: React.FC = () => {
 
     if (!deliveryAddress.trim() && !deliveryLatitude) {
       toast({
-        id: "delivery-missing-delivery-address", title: 'Missing Delivery Address', status: 'warning', duration: 3000 })
+        id: "delivery-missing-delivery-address", title: "Where should we deliver?", description: "Please add a delivery address before continuing.", status: 'warning', duration: 3000 })
       return
     }
 
     if (products.length === 0) {
       toast({
-        id: "delivery-no-orders-selected", title: 'No Orders Selected', description: 'Please select orders to deliver', status: 'warning', duration: 3000 })
+        id: "delivery-no-orders-selected", title: "No orders added yet", description: 'Select at least one order to continue.', status: 'warning', duration: 3000 })
       return
     }
 
     if (products.length > maxOrders) {
       toast({
         id: "delivery-too-many-orders",
-        title: 'Too Many Orders',
-        description: `${selectedDelivery === 'express' ? 'Express' : 'Standard'} delivery allows maximum ${maxOrders} order(s)`,
-        status: 'error',
+        title: "A few too many orders",
+        description: `${selectedDelivery === 'express' ? 'Express' : 'Standard'} delivery supports up to ${maxOrders} order(s) at a time.`,
+        status: 'warning',
         duration: 3000,
       })
       return

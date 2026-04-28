@@ -39,6 +39,7 @@ interface MediaGalleryProps {
   isOwner: boolean
   onSetCover?: (imageIndex: number) => void
   isSettingCover?: boolean
+  sharedTransitionName?: string
 }
 
 const MediaGallery: React.FC<MediaGalleryProps> = ({
@@ -54,6 +55,7 @@ const MediaGallery: React.FC<MediaGalleryProps> = ({
   isOwner,
   onSetCover,
   isSettingCover,
+  sharedTransitionName,
 }) => {
   // Deduplicate image URLs
   const seen = new Set<string>()
@@ -146,6 +148,7 @@ const MediaGallery: React.FC<MediaGalleryProps> = ({
                     fallbackSrc="/placeholder.svg"
                     cursor="zoom-in"
                     onClick={() => openZoom(index)}
+                    style={{ viewTransitionName: index === 0 ? sharedTransitionName : undefined }}
                   />
                 ) : (
                   <Box w="full" h="full" bg="black">

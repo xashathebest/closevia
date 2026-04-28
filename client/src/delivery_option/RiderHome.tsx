@@ -809,7 +809,7 @@ const RiderHome: React.FC = () => {
   // Handle accept delivery
   const handleAccept = async (delivery: DeliveryWithBatch) => {
     if (!riderState?.permissions?.can_claim_jobs) {
-      toast({ title: 'Cannot accept', description: 'You are not authorized to claim deliveries.', status: 'error', duration: 3000 })
+      toast({ title: "Rider approval needed", description: "You'll need to be approved as a rider before claiming deliveries.", status: 'warning', duration: 3000 })
       return
     }
 
@@ -822,7 +822,7 @@ const RiderHome: React.FC = () => {
       setDeliveryTab(1)
       fetchDeliveries()
     } catch (error: any) {
-      toast({ title: 'Error', description: error?.response?.data?.error || 'Failed to accept delivery', status: 'error', duration: 3000 })
+      toast({ title: "Couldn't claim this delivery", description: error?.response?.data?.error || 'Something went wrong. Give it a moment and try again.', status: 'error', duration: 3000 })
     } finally {
       setAccepting(null)
     }
@@ -847,8 +847,8 @@ const RiderHome: React.FC = () => {
       setDebugData(res.data?.data || null)
       openDebug()
     } catch (error: any) {
-      const msg = error?.response?.data?.error || error?.message || 'Failed to run diagnostics'
-      toast({ title: 'Diagnostics error', description: msg, status: 'error', duration: 3500 })
+      const msg = error?.response?.data?.error || error?.message || "Couldn't run the check right now."
+      toast({ title: "Diagnostic check failed", description: msg, status: 'error', duration: 3500 })
     } finally {
       setDebugLoading(false)
     }
@@ -899,7 +899,7 @@ const RiderHome: React.FC = () => {
         <VStack spacing={4} maxW="sm" w="full" bg="white" border="1px" borderColor="gray.200" borderRadius="xl" p={5}>
           <Heading size="sm" color="gray.800">Rider Access</Heading>
           <Text fontSize="sm" color="gray.600" textAlign="center">
-            {riderState?.message || 'You are not authorized to view rider jobs.'}
+            {riderState?.message || "Looks like you don't have rider access yet. Apply below to get started!"}
           </Text>
           <Button w="full" variant="outline" colorScheme="brand" onClick={() => navigate('/rider-application')}>
             Go to Rider Application

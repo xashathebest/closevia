@@ -3,6 +3,7 @@ package handlers
 import (
 	"bufio"
 	"encoding/json"
+	"log"
 	"strconv"
 	"sync"
 	"time"
@@ -18,11 +19,25 @@ type ChatHandler struct{}
 
 func NewChatHandler() *ChatHandler { return &ChatHandler{} }
 
+// init wires the package-level publishToUser into the shared services event bus
+// so that background services (cleanup, trade-status, worker-queue) can send
+// real-time SSE events to connected users without creating circular imports.
+func init() {
+	services.RegisterSSEPublisher(func(userID int, eventType string, data interface{}) {
+		publishToUser(userID, sseEvent{Type: eventType, Data: data})
+	})
+}
+
 // SSE subscribers map: userID -> list of channels
 var userStreams = struct {
 	sync.RWMutex
 	m map[int][]chan []byte
 }{m: make(map[int][]chan []byte)}
+
+var sseShutdown = struct {
+	sync.Once
+	ch chan struct{}
+}{ch: make(chan struct{})}
 
 type sseEvent struct {
 	Type string      `json:"type"`
@@ -41,16 +56,16 @@ func (h *ChatHandler) Stream(c *fiber.Ctx) error {
 	c.Set("Content-Type", "text/event-stream")
 	c.Set("Cache-Control", "no-cache")
 	c.Set("Connection", "keep-alive")
+	c.Set("X-Accel-Buffering", "no")
 
 	msgCh := make(chan []byte, 32)
-	// register
 	userStreams.Lock()
 	userStreams.m[userID] = append(userStreams.m[userID], msgCh)
 	userStreams.Unlock()
 
-	// cleanup on finish
-	defer func() {
+	removeStream := func() {
 		userStreams.Lock()
+		defer userStreams.Unlock()
 		subs := userStreams.m[userID]
 		for i, ch := range subs {
 			if ch == msgCh {
@@ -58,34 +73,87 @@ func (h *ChatHandler) Stream(c *fiber.Ctx) error {
 				break
 			}
 		}
-		userStreams.Unlock()
-		close(msgCh)
-	}()
+		if len(userStreams.m[userID]) == 0 {
+			delete(userStreams.m, userID)
+		}
+	}
 
 	c.Context().SetBodyStreamWriter(func(w *bufio.Writer) {
+		defer removeStream()
+
+		heartbeat := time.NewTicker(25 * time.Second)
+		defer heartbeat.Stop()
+
+		if _, err := w.WriteString(": connected\n\n"); err != nil {
+			return
+		}
+		if err := w.Flush(); err != nil {
+			return
+		}
+
 		for {
-			if b, ok := <-msgCh; ok {
-				w.WriteString("data: ")
-				w.Write(b)
-				w.WriteString("\n\n")
-				w.Flush()
-			} else {
-				break
+			select {
+			case b := <-msgCh:
+				if _, err := w.WriteString("data: "); err != nil {
+					return
+				}
+				if _, err := w.Write(b); err != nil {
+					return
+				}
+				if _, err := w.WriteString("\n\n"); err != nil {
+					return
+				}
+				if err := w.Flush(); err != nil {
+					return
+				}
+			case <-heartbeat.C:
+				if _, err := w.WriteString(": heartbeat\n\n"); err != nil {
+					return
+				}
+				if err := w.Flush(); err != nil {
+					return
+				}
+			case <-sseShutdown.ch:
+				return
 			}
 		}
 	})
 	return nil
 }
 
+func ShutdownSSEStreams() {
+	sseShutdown.Do(func() {
+		close(sseShutdown.ch)
+	})
+}
+
+func SSEStats() map[string]int {
+	userStreams.RLock()
+	defer userStreams.RUnlock()
+	activeUsers := len(userStreams.m)
+	activeStreams := 0
+	for _, subs := range userStreams.m {
+		activeStreams += len(subs)
+	}
+	return map[string]int{
+		"active_users":   activeUsers,
+		"active_streams": activeStreams,
+	}
+}
+
 // helper to publish an event to a user
 func publishToUser(userID int, evt sseEvent) {
 	userStreams.RLock()
-	subs := userStreams.m[userID]
+	subs := append([]chan []byte(nil), userStreams.m[userID]...)
 	userStreams.RUnlock()
 	if len(subs) == 0 {
 		return
 	}
-	payload, _ := json.Marshal(evt)
+	payload, err := json.Marshal(evt)
+	if err != nil {
+		log.Printf("[SSE] marshal event for user %d type=%s: %v", userID, evt.Type, err)
+		return
+	}
 	for _, ch := range subs {
 		select {
 		case ch <- payload:

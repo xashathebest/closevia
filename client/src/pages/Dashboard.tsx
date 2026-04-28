@@ -1177,8 +1177,8 @@ const Dashboard: React.FC = () => {
       console.error('Failed to load loop details:', e)
        toast({
         id: 'error-load-loop-details',
-        title: 'Error',
-        description: 'Failed to load trade loop details.',
+        title: "Couldn't load trade details",
+        description: "Something went wrong. Give it a moment and try again.",
         status: 'error',
       })
     } finally {
@@ -1214,8 +1214,8 @@ const Dashboard: React.FC = () => {
 
     } catch (error: any) {
       console.error('Failed to fetch multi-way trades:', error)
-      const msg = error?.response?.data?.error || 'Failed to load multi-way trades'
-      toast({ id: 'error-load-multi-way-trades', title: 'Error', description: msg, status: 'error' })
+      const msg = error?.response?.data?.error || "We couldn't load your trade loops right now."
+      toast({ id: 'error-load-multi-way-trades', title: "Couldn't load trades", description: msg, status: 'error' })
       setMultiWayTrades([])
     }
   }
@@ -2184,7 +2184,7 @@ const Dashboard: React.FC = () => {
 
   const handleDeleteProductClick = (product: Product) => {
     if (product.status === 'locked') {
-      toast({ id: 'cannot-delete-locked', title: 'Cannot delete', description: 'Locked products cannot be deleted. Please unlock it first.', status: 'warning', duration: 3000, isClosable: true })
+      toast({ id: 'cannot-delete-locked', title: "This item is locked", description: "Unlock it first before deleting.", status: 'warning', duration: 3000, isClosable: true })
       return
     }
     showPopup({
@@ -2215,7 +2215,7 @@ const Dashboard: React.FC = () => {
     })
 
     if (deletableIds.length === 0) {
-      toast({ id: 'cannot-delete-selected-locked', title: 'Cannot delete', description: 'Selected products are locked. Locked products cannot be deleted.', status: 'warning', duration: 3000, isClosable: true })
+      toast({ id: 'cannot-delete-selected-locked', title: "All selected items are locked", description: "Unlock them first, then you'll be able to delete.", status: 'warning', duration: 3000, isClosable: true })
       return
     }
 
@@ -2958,7 +2958,7 @@ const Dashboard: React.FC = () => {
                   Edit
                 </Button>
                 <Tooltip
-                  label={product.status === 'locked' ? 'Cannot delete locked products' : ''}
+                  label={product.status === 'locked' ? 'Unlock this item first to delete it' : ''}
                   isDisabled={product.status !== 'locked'}
                   hasArrow
                 >
@@ -4708,7 +4708,7 @@ const Dashboard: React.FC = () => {
                           <Icon as={FiShoppingBag} boxSize={{ base: 12, md: 16 }} color="green.300" mb={4} />
                           <Text color="gray.600" fontSize={{ base: 'md', md: 'lg' }} fontWeight="medium" mb={2}>
                             {(unifiedSearch || productSearch) || productFilter !== 'all'
-                              ? 'No products match your search/filters'
+                              ? 'Nothing matches that search — try different keywords or clear a filter.'
                               : 'Start by adding your first product!'}
                           </Text>
                           <Text color="gray.500" fontSize="sm" mb={4}>
@@ -5180,13 +5180,13 @@ const Dashboard: React.FC = () => {
                                 <Icon as={FaHandshake} boxSize={16} color="green.300" mb={4} />
                                 <Text color="gray.600" fontSize="lg" fontWeight="medium" mb={2}>
                                   {(unifiedSearch || offersSearch) || offersStatusFilter !== 'all' || offersTypeFilter !== 'all'
-                                    ? 'No offers match your search/filters.'
+                                    ? 'Nothing matches those filters.'
                                     : "You haven't sent any offers yet"}
                                 </Text>
                                 <Text color="gray.500" fontSize="sm">
                                   {(unifiedSearch || offersSearch) || offersStatusFilter !== 'all' || offersTypeFilter !== 'all'
-                                    ? 'Try adjusting your search or filters.'
-                                    : 'Start making offers to see them here!'}
+                                    ? 'Try tweaking your search or clearing a filter.'
+                                    : 'Browse listings and propose your first trade!'}
                                 </Text>
                               </Box>
                             </>

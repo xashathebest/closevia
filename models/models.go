@@ -374,6 +374,7 @@ type Trade struct {
 	// Meetup-related fields
 	MeetupLocation        string   `json:"meetup_location,omitempty"`
 	MeetupLabel           string   `json:"meetup_label,omitempty"`
+	MeetupDate            string   `json:"meetup_date,omitempty"`
 	MeetupTime            string   `json:"meetup_time,omitempty"`
 	MeetupLat             *float64 `json:"meetup_lat,omitempty"`
 	MeetupLng             *float64 `json:"meetup_lng,omitempty"`

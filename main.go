@@ -4,11 +4,16 @@ package main
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"log"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -74,6 +79,27 @@ func sendMissingUploadPlaceholder(c *fiber.Ctx) error {
 	return c.SendString(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 480"><rect width="640" height="480" fill="#f3f4f6"/><path d="M150 350h340L385 230l-70 82-45-52z" fill="#d1d5db"/><circle cx="235" cy="180" r="42" fill="#d1d5db"/><text x="320" y="410" text-anchor="middle" font-family="Arial,sans-serif" font-size="26" fill="#6b7280">Image unavailable</text></svg>`)
 }
 
+func startPprofIfEnabled() *http.Server {
+	if !envBool("ENABLE_PPROF", false) {
+		return nil
+	}
+	addr := os.Getenv("PPROF_ADDR")
+	if addr == "" {
+		addr = "127.0.0.1:6060"
+	}
+	server := &http.Server{
+		Addr:              addr,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+	go func() {
+		log.Printf("[STARTUP] pprof enabled on %s", addr)
+		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Printf("[pprof] server stopped with error: %v", err)
+		}
+	}()
+	return server
+}
+
 func main() {
 	// Load developer env files if present.
 	// NOTE: godotenv.Load does NOT override already-set environment variables.
@@ -90,6 +116,11 @@ func main() {
 	if !loadedAny {
 		log.Println("No .env files found, using system environment variables")
 	}
+	appLogger := services.InitLogger()
+	configValidation := services.ValidateStartupConfig()
+	pprofServer := startPprofIfEnabled()
+	rootCtx, rootCancel := context.WithCancel(context.Background())
+	defer rootCancel()
 
 	// Initialize database
 	log.Println("[STARTUP] Connecting to database...")
@@ -131,16 +162,20 @@ func main() {
 			}
 			log.Printf("Fiber error handler: %v (path: %s)", err, c.Path())
 			return c.Status(code).JSON(fiber.Map{
-				"success": false,
-				"error":   message,
+				"success":    false,
+				"error":      message,
+				"request_id": middleware.RequestIDFromFiber(c),
 			})
 		},
 	})
 
 	// Middleware
 	app.Use(recover.New())
+	app.Use(middleware.RequestID())
+	app.Use(middleware.RequestContext(60 * time.Second))
 	app.Use(middleware.SecurityHeaders())
 	app.Use(middleware.RequestTiming())
+	app.Use(middleware.StructuredRequestLogger(appLogger))
 	app.Use(logger.New())
 
 	corsOrigins := os.Getenv("CORS_ORIGINS")
@@ -282,6 +317,40 @@ func main() {
 	app.Get("/health", func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{
 			"status": "ok",
+		})
+	})
+
+	app.Get("/healthz", func(c *fiber.Ctx) error {
+		snapshot := services.BuildHealthSnapshot(middleware.RequestContextFromFiber(c), database.DB, false)
+		status := fiber.StatusOK
+		if snapshot.Status != "ok" {
+			status = fiber.StatusServiceUnavailable
+		}
+		return c.Status(status).JSON(fiber.Map{
+			"request_id":  middleware.RequestIDFromFiber(c),
+			"status":      snapshot.Status,
+			"checked_at":  snapshot.CheckedAt,
+			"components":  snapshot.Components,
+			"version":     "xendit-sync-all-405-fix",
+			"sse":         handlers.SSEStats(),
+			"config_warn": len(configValidation.Warnings),
+		})
+	})
+
+	app.Get("/readyz", func(c *fiber.Ctx) error {
+		snapshot := services.BuildHealthSnapshot(middleware.RequestContextFromFiber(c), database.DB, true)
+		status := fiber.StatusOK
+		if snapshot.Status != "ok" {
+			status = fiber.StatusServiceUnavailable
+		}
+		return c.Status(status).JSON(fiber.Map{
+			"request_id": middleware.RequestIDFromFiber(c),
+			"status":     snapshot.Status,
+			"checked_at": snapshot.CheckedAt,
+			"components": snapshot.Components,
+			"version":    "xendit-sync-all-405-fix",
+			"sse":        handlers.SSEStats(),
+			"config":     configValidation,
 		})
 	})
 
@@ -478,11 +547,25 @@ func main() {
 		Expiration: time.Minute,
 	})
 
+	// Per-user limiters — tighter than the global IP-based ones above and
+	// keyed to the authenticated user ID so shared IPs (campus networks, NAT)
+	// don't unfairly block unrelated users.
+	userTradeCreateLimiter := middleware.PerUserLimiter(10, time.Minute,
+		"You're sending trade offers too quickly. Please wait a moment before trying again.")
+	userProductPostLimiter := middleware.PerUserLimiter(5, time.Minute,
+		"You're posting products too quickly. Please wait a moment before trying again.")
+	userAILimiter := middleware.PerUserLimiter(15, time.Minute,
+		"You've used AI features too many times recently. Please wait a moment before trying again.")
+	userLoginLimiter := middleware.PerUserLimiter(5, time.Minute,
+		"Too many login attempts. Please wait a minute before trying again.")
+	userBuyoutLimiter := middleware.PerUserLimiter(5, time.Minute,
+		"Too many buyout attempts. Please wait a moment before trying again.")
+
 	// Auth routes (no authentication required)
 	auth := api.Group("/auth")
 	auth.Post("/register", authLimiter, userHandler.Register)
-	auth.Post("/login", authLimiter, userHandler.Login)
-	auth.Post("/google", authLimiter, userHandler.GoogleLogin)
+	auth.Post("/login", authLimiter, userLoginLimiter, userHandler.Login)
+	auth.Post("/google", authLimiter, userLoginLimiter, userHandler.GoogleLogin)
 	auth.Post("/logout", userHandler.Logout)
 	auth.Post("/refresh-session", authLimiter, middleware.AuthMiddleware(), userHandler.RefreshSession)
 	auth.Post("/verify-email", authLimiter, userHandler.VerifyEmail)
@@ -546,7 +629,7 @@ func main() {
 	products.Get("/search-suggestions", productHandler.SearchSuggestions)              // Smart search autocomplete
 	products.Get("/smart-search", aiLimiter, productHandler.SmartSearch)               // AI-powered search
 	// Specific routes must come before generic :id route
-	products.Post("/generate-details", aiLimiter, productHandler.GenerateProductDetailsWithAI)
+	products.Post("/generate-details", aiLimiter, userAILimiter, productHandler.GenerateProductDetailsWithAI)
 	products.Post("/check-image-quality", aiLimiter, productHandler.CheckImageQuality)                // Fast image quality check
 	products.Post("/report", middleware.AuthMiddleware(), productHandler.ReportListing)               // Report a listing
 	products.Get("/boost-candidates", middleware.AuthMiddleware(), productHandler.GetBoostCandidates) // Listings eligible for boost
@@ -564,7 +647,7 @@ func main() {
 	products.Get("/:id/suggested-trades", middleware.AuthMiddleware(), productHandler.GetSuggestedTrades)
 	products.Get("/:id/multiway-status", tradeHandler.GetProductMultiwayStatus) // Public — listing badge
 	products.Get("/:id", productHandler.GetProduct)                             // Public route (must be last)
-	products.Post("/", middleware.AuthMiddleware(), productHandler.CreateProduct)
+	products.Post("/", middleware.AuthMiddleware(), userProductPostLimiter, productHandler.CreateProduct)
 	products.Put("/:id", middleware.AuthMiddleware(), productHandler.UpdateProduct)
 	products.Delete("/:id", middleware.AuthMiddleware(), productHandler.DeleteProduct)
 
@@ -611,8 +694,8 @@ func main() {
 
 	// Trade routes (order matters: specific paths before :id)
 	trades := api.Group("/trades")
-	trades.Post("/", middleware.AuthMiddleware(), tradeHandler.CreateTrade)
-	trades.Post("", middleware.AuthMiddleware(), tradeHandler.CreateTrade) // Support no trailing slash
+	trades.Post("/", middleware.AuthMiddleware(), userTradeCreateLimiter, tradeHandler.CreateTrade)
+	trades.Post("", middleware.AuthMiddleware(), userTradeCreateLimiter, tradeHandler.CreateTrade) // Support no trailing slash
 	trades.Get("/", middleware.AuthMiddleware(), tradeHandler.GetTrades)
 	trades.Get("", middleware.AuthMiddleware(), tradeHandler.GetTrades) // Support no trailing slash
 	trades.Post("/likes", middleware.AuthMiddleware(), tradeHandler.AddTradeLike)
@@ -732,7 +815,7 @@ func main() {
 	disputes.Post("/escalate/expired", disputeHandler.CheckAndEscalateDisputesHandler)             // Auto-escalate expired disputes (cron job)
 
 	payments := api.Group("/payments")
-	payments.Post("/trade/:id", paymentLimiter, middleware.AuthMiddleware(), paymentHandler.CreateTradeInvoice)
+	payments.Post("/trade/:id", paymentLimiter, userBuyoutLimiter, middleware.AuthMiddleware(), paymentHandler.CreateTradeInvoice)
 	// Accept any method for sync to avoid 405 issues in dev/proxies.
 	payments.All("/trade/:id/sync", middleware.AuthMiddleware(), paymentHandler.SyncTradePayment)
 	payments.Post("/remittance-invoice", paymentLimiter, middleware.AuthMiddleware(), paymentHandler.CreateRemittanceInvoice)
@@ -891,7 +974,7 @@ func main() {
 	ai.Get("/counterfeit/:id", aiFeaturesHandler.GetCounterfeitReport)
 
 	// Product analysis route (uses Gemini + Groq fallback)
-	ai.Post("/analyze-product", aiLimiter, middleware.AuthMiddleware(), uploadHandler.AnalyzeProductImages)
+	ai.Post("/analyze-product", aiLimiter, userAILimiter, middleware.AuthMiddleware(), uploadHandler.AnalyzeProductImages)
 
 	// Campaigns route (public-facing for fetching active campaigns)
 	campaigns := api.Group("/campaigns")
@@ -927,6 +1010,28 @@ func main() {
 	disputeService := services.NewDisputeService(database.DB)
 	disputeService.StartAutoEscalationJob(30 * time.Minute)
 
+	// ── New background services ───────────────────────────────────────────────
+
+	// Worker queue (4 workers, 256-job buffer) — must start before other services
+	// that enqueue jobs (e.g. push notifications, image processing).
+	services.InitWorkerQueue(4, 256)
+
+	// Cache eviction — sweeps expired entries every 5 minutes.
+	services.StartCacheEvictionContext(rootCtx)
+
+	// Hourly cleanup: expired tokens, OTP codes, old notifications, orphaned rows.
+	services.StartCleanupSchedulerContext(rootCtx, database.DB)
+
+	// 10-minute trade-status pass: expired meetup proposals, unpaid buyouts,
+	// losing-offer cancellation after acceptance.
+	services.StartTradeStatusSchedulerContext(rootCtx, database.DB)
+
+	// Conservative reconciliation: repairs obvious stale state without changing
+	// public route behavior.
+	services.StartReconciliationScheduler(rootCtx, database.DB)
+
+	log.Println("[STARTUP] All background services started")
+
 	// ⚡ SPA SERVE ROUTES - MUST BE LAST (after all API routes)
 	// Serve root path with index.html
 	app.Get("/", func(c *fiber.Ctx) error {
@@ -944,6 +1049,37 @@ func main() {
 		return c.Next()
 	})
 
-	log.Printf("Starting Clovia server on port %s", port)
-	log.Fatal(app.Listen(":" + port))
+	errCh := make(chan error, 1)
+	go func() {
+		log.Printf("Starting Clovia server on port %s", port)
+		errCh <- app.Listen(":" + port)
+	}()
+
+	signalCh := make(chan os.Signal, 1)
+	signal.Notify(signalCh, os.Interrupt, syscall.SIGTERM)
+
+	select {
+	case sig := <-signalCh:
+		log.Printf("[SHUTDOWN] Received signal %s; starting graceful shutdown", sig)
+	case err := <-errCh:
+		if err != nil {
+			log.Printf("[SHUTDOWN] Server stopped with error: %v", err)
+		}
+	}
+
+	rootCancel()
+	handlers.ShutdownSSEStreams()
+
+	if err := app.ShutdownWithTimeout(25 * time.Second); err != nil {
+		log.Printf("[SHUTDOWN] Fiber shutdown error: %v", err)
+	}
+	services.StopDefaultWorkerQueue()
+	if pprofServer != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		if err := pprofServer.Shutdown(ctx); err != nil {
+			log.Printf("[SHUTDOWN] pprof shutdown error: %v", err)
+		}
+		cancel()
+	}
+	log.Println("[SHUTDOWN] Graceful shutdown complete")
 }

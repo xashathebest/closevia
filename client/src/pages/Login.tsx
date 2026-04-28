@@ -74,6 +74,7 @@ const Login: React.FC = () => {
       status: 'success',
       duration: 3000,
       isClosable: true,
+      position: 'top',
     })
 
     setGoogleLoginSuccess(true)
@@ -115,6 +116,7 @@ const Login: React.FC = () => {
         status: 'success',
         duration: 3000,
         isClosable: true,
+        position: 'top',
       })
 
       const storedUser = getStoredUser()

@@ -29,6 +29,8 @@ import { getProductUrl } from '../utils/productUtils'
 import { getProductLocationLabel, getProductLocationKey } from '../utils/productLocation'
 import FloatingTab from '../components/FloatingTab'
 import TradeModal from '../components/TradeModal'
+import AnimatedEmptyState from '../components/AnimatedEmptyState'
+import { productImageTransitionName, runViewTransition } from '../utils/motion'
 
 interface SavedProductsResponse {
   status: string
@@ -93,7 +95,7 @@ const SavedProducts: React.FC = () => {
 
     if (!user) {
       setLoading(false)
-      setError('Please log in to view your saved products.')
+      setError("Log in to see the items you've saved.")
       return
     }
 
@@ -115,7 +117,7 @@ const SavedProducts: React.FC = () => {
         await new Promise((resolve) => setTimeout(resolve, Math.pow(2, retryCount) * 1000))
         return fetchSavedProducts(retryCount + 1)
       }
-      setError(error?.response?.data?.error || error?.response?.data?.message || error?.message || 'Failed to load saved products')
+      setError(error?.response?.data?.error || error?.response?.data?.message || error?.message || "We couldn't load your saved items right now. Please try again.")
     } finally {
       setLoading(false)
     }
@@ -135,7 +137,7 @@ const SavedProducts: React.FC = () => {
     } catch {
       toast({
         id: `savedproducts-remove-error-${productId}`,
-        title: 'Failed to remove product',
+        title: "Couldn't remove that item",
         status: 'error',
         duration: 3000,
         isClosable: true,
@@ -171,7 +173,7 @@ const SavedProducts: React.FC = () => {
           <Alert status="error" borderRadius="lg">
             <AlertIcon />
             <Box>
-              <Text fontWeight="bold">Error loading saved products</Text>
+              <Text fontWeight="bold">Couldn't load your saved items</Text>
               <Text>{error}</Text>
             </Box>
           </Alert>
@@ -197,18 +199,14 @@ const SavedProducts: React.FC = () => {
           </Box>
 
           {savedProducts.length === 0 ? (
-            <Box py={16} textAlign="center">
-              <VStack spacing={4}>
-                <Flex w="80px" h="80px" bg="red.50" color="red.300" borderRadius="full" align="center" justify="center">
-                  <FiHeart size={32} />
-                </Flex>
-                <Heading size="md" color="gray.600">No saved products yet</Heading>
-                <Text color="gray.500">Start exploring products and save the ones you like.</Text>
-                <Button colorScheme="brand" onClick={() => navigate('/home')} leftIcon={<FiEye />} borderRadius="full" mt={2}>
-                  Browse Products
-                </Button>
-              </VStack>
-            </Box>
+            <AnimatedEmptyState
+              icon={FiHeart}
+              title="No saved products yet"
+              description="Start exploring products and save the ones you like."
+              actionLabel="Browse Products"
+              onAction={() => navigate('/home')}
+              colorScheme="red"
+            />
           ) : (
             <VStack spacing={4} align="stretch">
               {groupedSavedProducts.map((group) => (
@@ -238,9 +236,9 @@ const SavedProducts: React.FC = () => {
 
                   <VStack spacing={0} align="stretch" divider={<Box borderBottom="1px" borderColor="gray.100" />}>
                     {group.products.map((product) => (
-                      <Flex key={product.id} p={{ base: 3, md: 4 }} gap={3} align="center" cursor="pointer" _hover={{ bg: 'gray.50' }} onClick={() => navigate(getProductUrl(product))}>
+                      <Flex key={product.id} p={{ base: 3, md: 4 }} gap={3} align="center" cursor="pointer" _hover={{ bg: 'gray.50' }} onClick={() => runViewTransition(() => navigate(getProductUrl(product)))}>
                         <Box boxSize={{ base: '70px', md: '84px' }} borderRadius="lg" overflow="hidden" flexShrink={0} bg="gray.100">
-                          <Image src={getFirstImage(product.image_urls)} alt={product.title} w="100%" h="100%" objectFit="cover" fallbackSrc="/no-image.svg" />
+                          <Image src={getFirstImage(product.image_urls)} alt={product.title} w="100%" h="100%" objectFit="cover" fallbackSrc="/no-image.svg" style={{ viewTransitionName: productImageTransitionName(product.id) }} />
                         </Box>
                         <VStack align="start" spacing={1.5} flex={1} minW={0}>
                           <HStack spacing={2} minW={0} w="full">

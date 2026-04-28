@@ -28,6 +28,10 @@ import { useAuth } from '../contexts/AuthContext'
 import { api } from '../services/api'
 import AvailabilitySlots from './AvailabilitySlots'
 import { AvailabilitySlot } from '../types'
+import { motion, AnimatePresence, useReducedMotion } from 'framer-motion'
+import { cardReveal, motionDurations, motionEasings, productImageTransitionName, runViewTransition, uiTap } from '../utils/motion'
+
+const MotionBox = motion(Box)
 
 interface ProductCardProps {
   product: any
@@ -61,6 +65,7 @@ const ProductCard: React.FC<ProductCardProps> = ({
   const [isBoosted, setIsBoosted] = useState(false)
   const [isSaved, setIsSaved] = useState(Boolean(product.is_saved))
   const [isSaving, setIsSaving] = useState(false)
+  const prefersReducedMotion = useReducedMotion()
   const isOwnProduct = Boolean(user?.id && product.seller_id && Number(user.id) === Number(product.seller_id))
 
   // Calculate boost remaining time
@@ -115,7 +120,7 @@ const ProductCard: React.FC<ProductCardProps> = ({
   // Memoize click handlers
   const handleCardClick = useCallback(async () => {
     // Navigate to product details page
-    navigate(getProductUrl(product))
+    runViewTransition(() => navigate(getProductUrl(product)))
   }, [product, navigate])
 
   const handleTradeClick = useCallback(
@@ -174,7 +179,8 @@ const ProductCard: React.FC<ProductCardProps> = ({
       if (user?.id === product.seller_id) {
         toast({
           id: `productcard-own-save-${product.id}`,
-          title: 'You cannot save your own item',
+          title: "That's your own listing!",
+          description: "You can't save your own items, but others can.",
           status: 'info',
           duration: 2000,
         })
@@ -198,26 +204,27 @@ const ProductCard: React.FC<ProductCardProps> = ({
         return
       }
 
+      const nextSaved = !isSaved
+      setIsSaved(nextSaved)
       try {
         setIsSaving(true)
-        if (isSaved) {
+        if (!nextSaved) {
           await api.delete(`/api/users/saved-products/${product.id}`)
-          setIsSaved(false)
         } else {
           await api.post('/api/users/saved-products', { product_id: product.id })
-          setIsSaved(true)
         }
         toast({
           id: `productcard-save-${product.id}`,
-          title: isSaved ? 'Removed from saved' : 'Saved',
-          status: isSaved ? 'info' : 'success',
+          title: nextSaved ? 'Saved' : 'Removed from saved',
+          status: nextSaved ? 'success' : 'info',
           duration: 1800,
         })
       } catch (error: any) {
+        setIsSaved(!nextSaved)
         toast({
           id: `productcard-save-error-${product.id}`,
-          title: 'Could not update saved item',
-          description: error?.response?.data?.error || 'Please try again.',
+          title: "Couldn't update your saved items",
+          description: error?.response?.data?.error || 'Something went wrong. Please try again.',
           status: 'error',
           duration: 3000,
           isClosable: true,
@@ -245,7 +252,7 @@ const ProductCard: React.FC<ProductCardProps> = ({
   const canShowEstimate = product.show_estimated_value !== false && product.estimated_value_min && product.estimated_value_max
 
   return (
-    <Box
+    <MotionBox
       key={product.id}
       bg="white"
       borderRadius="2xl"
@@ -253,13 +260,19 @@ const ProductCard: React.FC<ProductCardProps> = ({
       borderWidth="1px"
       borderColor={useColorModeValue('gray.200', 'gray.700')}
       overflow="hidden"
-      transition="all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1)"
+      transition="box-shadow 180ms ease-out, transform 180ms ease-out, border-color 180ms ease-out"
       w="full"
       h="full"
       display="flex"
       flexDirection="column"
-      _hover={{ boxShadow: 'lg', transform: 'translateY(-4px)', borderColor: 'brand.200', cursor: 'pointer' }}
+      initial={prefersReducedMotion ? false : 'hidden'}
+      whileInView={prefersReducedMotion ? undefined : 'visible'}
+      viewport={{ once: true, margin: '0px 0px -40px 0px' }}
+      variants={cardReveal}
+      whileTap={prefersReducedMotion ? undefined : uiTap}
+      _hover={{ boxShadow: 'lg', transform: prefersReducedMotion ? undefined : 'translateY(-3px)', borderColor: 'brand.200', cursor: 'pointer' }}
       onClick={handleCardClick}
+      style={{ willChange: 'transform, opacity' }}
     >
       {/* Image section */}
       <Box position="relative" w="full" pt="100%" overflow="hidden" bg="gray.100">
@@ -274,6 +287,7 @@ const ProductCard: React.FC<ProductCardProps> = ({
           position="absolute"
           top={0}
           left={0}
+          style={{ viewTransitionName: productImageTransitionName(product.id) }}
         />
 
         {/* Top-right image badges */}
@@ -534,7 +548,20 @@ const ProductCard: React.FC<ProductCardProps> = ({
               <Tooltip label={isSaved ? 'Remove from saved' : 'Save'} placement="top" hasArrow>
                 <IconButton
                   aria-label={isSaved ? 'Remove from saved' : 'Save product'}
-                  icon={isSaved ? <FaHeart /> : <FaRegHeart />}
+                  icon={
+                    <AnimatePresence mode="wait" initial={false}>
+                      <motion.span
+                        key={isSaved ? 'saved' : 'unsaved'}
+                        initial={prefersReducedMotion ? false : { opacity: 0, scale: 0.88 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        exit={prefersReducedMotion ? undefined : { opacity: 0, scale: 0.88 }}
+                        transition={{ duration: motionDurations.ui, ease: motionEasings.easeOut }}
+                        style={{ display: 'inline-flex' }}
+                      >
+                        {isSaved ? <FaHeart /> : <FaRegHeart />}
+                      </motion.span>
+                    </AnimatePresence>
+                  }
                   size="xs"
                   minW="28px"
                   h="28px"
@@ -577,7 +604,20 @@ const ProductCard: React.FC<ProductCardProps> = ({
               <IconButton
                 display={{ base: 'flex', md: 'none' }}
                 aria-label={isSaved ? 'Remove from saved' : 'Save product'}
-                icon={isSaved ? <FaHeart /> : <FaRegHeart />}
+                icon={
+                  <AnimatePresence mode="wait" initial={false}>
+                    <motion.span
+                      key={isSaved ? 'saved-mobile' : 'unsaved-mobile'}
+                      initial={prefersReducedMotion ? false : { opacity: 0, scale: 0.88 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      exit={prefersReducedMotion ? undefined : { opacity: 0, scale: 0.88 }}
+                      transition={{ duration: motionDurations.ui, ease: motionEasings.easeOut }}
+                      style={{ display: 'inline-flex' }}
+                    >
+                      {isSaved ? <FaHeart /> : <FaRegHeart />}
+                    </motion.span>
+                  </AnimatePresence>
+                }
                 size="xs"
                 minW="24px"
                 h="24px"
@@ -837,7 +877,7 @@ const ProductCard: React.FC<ProductCardProps> = ({
           </HStack>
         )}
       </Box>
-    </Box>
+    </MotionBox>
   )
 }
 

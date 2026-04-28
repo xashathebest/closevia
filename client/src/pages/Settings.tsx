@@ -538,9 +538,9 @@ const SettingsPage: React.FC = () => {
     if (!supportedImageTypes.includes(file.type.toLowerCase())) {
       toast({
         id: 'invalid-file-type',
-        title: 'Invalid file type',
-        description: 'Please upload a JPG, PNG, or WEBP image.',
-        status: 'error',
+        title: 'Images only, please',
+        description: 'Use a JPG, PNG, or WEBP file for your profile photo.',
+        status: 'warning',
         duration: 3000,
         isClosable: true,
       })
@@ -2106,9 +2106,9 @@ const SettingsPage: React.FC = () => {
                             <Alert status="info" borderRadius="xl" mb={4}>
                               <AlertIcon />
                               <Box>
-                                <AlertTitle fontSize="sm">Your education profile is empty</AlertTitle>
+                                <AlertTitle fontSize="sm">Fill in your academic info</AlertTitle>
                                 <AlertDescription fontSize="sm">
-                                  Add your program, year level, or a short academic note. These fields save with the main Settings button.
+                                  Add your program, year level, or a short bio. These save when you hit the main Settings button.
                                 </AlertDescription>
                               </Box>
                             </Alert>

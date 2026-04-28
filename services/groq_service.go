@@ -2,6 +2,7 @@ package services
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -16,6 +17,13 @@ import (
 )
 
 func AnalyzeProductWithGroq(images []*multipart.FileHeader) (*GeminiResponse, error) {
+	return AnalyzeProductWithGroqContext(context.Background(), images)
+}
+
+func AnalyzeProductWithGroqContext(ctx context.Context, images []*multipart.FileHeader) (*GeminiResponse, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	// Using Groq API only (primary: llama-4-scout, fallback: llama-4-maverick)
 	apiKey := os.Getenv("GROQ_API_KEY")
 	if apiKey == "" {
@@ -197,7 +205,11 @@ Remember: SAFETY IS THE HIGHEST PRIORITY. Check for prohibited items first. If f
 		if attempt > 0 {
 			waitTime := time.Duration(1<<uint(attempt)) * time.Second // 2s, 4s, 8s...
 			log.Printf("Rate limit detected. Waiting %v before retry attempt %d/%d...", waitTime, attempt+1, maxRetries)
-			time.Sleep(waitTime)
+			select {
+			case <-time.After(waitTime):
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
 		}
 
 		for modelIdx, model := range models {
@@ -245,7 +257,7 @@ Remember: SAFETY IS THE HIGHEST PRIORITY. Check for prohibited items first. If f
 
 			// Make request to Groq API
 			url := "https://api.groq.com/openai/v1/chat/completions"
-			req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+			req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
 			if err != nil {
 				log.Printf("Error creating Groq request: %v", err)
 				lastErr = err
@@ -268,9 +280,9 @@ Remember: SAFETY IS THE HIGHEST PRIORITY. Check for prohibited items first. If f
 				}
 				continue
 			}
-			defer resp.Body.Close()
 
 			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
 
 			log.Printf("Groq API response status: %d", resp.StatusCode)
 

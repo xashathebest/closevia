@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { Link as RouterLink } from 'react-router-dom'
 import {
   Box,
@@ -18,6 +18,11 @@ import { Badge as CBadge } from '@chakra-ui/react'
 import { useRealtime } from '../contexts/RealtimeContext'
 import { useMobileNav } from '../contexts/MobileNavContext'
 import { useNavigate } from 'react-router-dom'
+import { motion, useReducedMotion } from 'framer-motion'
+import { motionDurations, motionEasings } from '../utils/motion'
+
+const MotionBox = motion(Box)
+const MotionBadge = motion(CBadge)
 
 interface FloatingTabProps {
   dashboardLink?: string
@@ -35,21 +40,75 @@ const FloatingTab: React.FC<FloatingTabProps> = ({
   const { notificationCount, offerCount } = useRealtime()
   const { onOpen: openMobileNav } = useMobileNav()
   const navigate = useNavigate()
+  const prefersReducedMotion = useReducedMotion()
+  const [hidden, setHidden] = useState(false)
+  const [notificationPulseKey, setNotificationPulseKey] = useState(0)
+  const [offerPulseKey, setOfferPulseKey] = useState(0)
+  const previousNotificationCount = React.useRef(notificationCount)
+  const previousOfferCount = React.useRef(offerCount)
+
+  useEffect(() => {
+    let lastY = window.scrollY
+    let ticking = false
+    const onScroll = () => {
+      if (ticking) return
+      ticking = true
+      window.requestAnimationFrame(() => {
+        const nextY = window.scrollY
+        const delta = nextY - lastY
+        if (Math.abs(delta) > 8) {
+          setHidden(delta > 0 && nextY > 120)
+          lastY = nextY
+        }
+        ticking = false
+      })
+    }
+    window.addEventListener('scroll', onScroll, { passive: true })
+    return () => window.removeEventListener('scroll', onScroll)
+  }, [])
+
+  useEffect(() => {
+    if (notificationCount > previousNotificationCount.current) {
+      setNotificationPulseKey(key => key + 1)
+    }
+    previousNotificationCount.current = notificationCount
+  }, [notificationCount])
+
+  useEffect(() => {
+    if (offerCount > previousOfferCount.current) {
+      setOfferPulseKey(key => key + 1)
+    }
+    previousOfferCount.current = offerCount
+  }, [offerCount])
+
+  const tapStyles = {
+    _active: {
+      bg: 'rgba(49, 151, 149, 0.16)',
+      transform: prefersReducedMotion ? undefined : 'scale(0.97)',
+    },
+  }
 
   return (
     <>
       {/* Mobile Bottom Navigation Bar - Floating Tab */}
-      <Box
+      <MotionBox
         position="fixed"
         bottom="env(safe-area-inset-bottom, 16px)"
         mb={8}
         left="50%"
-        transform="translateX(-50%)"
         display={{ base: 'block', md: 'none' }}
         zIndex={200}
         boxShadow="0 8px 32px rgba(0,0,0,0.12)"
         borderRadius="full"
         overflow="hidden"
+        initial={false}
+        animate={{
+          x: '-50%',
+          y: hidden && !prefersReducedMotion ? 96 : 0,
+          opacity: hidden && !prefersReducedMotion ? 0 : 1,
+        }}
+        transition={{ duration: motionDurations.uiSlow, ease: motionEasings.easeOut }}
+        style={{ willChange: 'transform, opacity' }}
       >
         <HStack
           spacing={0}
@@ -76,16 +135,13 @@ const FloatingTab: React.FC<FloatingTabProps> = ({
             borderRadius="full"
             variant="ghost"
             fontSize="20px"
-            transition="all 0.3s ease"
+            transition="transform 180ms ease-out, background-color 180ms ease-out, color 180ms ease-out"
             _hover={{
               bg: 'rgba(49, 151, 149, 0.1)',
               color: 'brand.600',
-              transform: 'scale(1.1)',
+              transform: prefersReducedMotion ? undefined : 'scale(1.03)',
             }}
-            _active={{
-              bg: 'rgba(49, 151, 149, 0.2)',
-              transform: 'scale(0.95)',
-            }}
+            {...tapStyles}
           />
 
           {/* Dashboard Button */}
@@ -103,19 +159,17 @@ const FloatingTab: React.FC<FloatingTabProps> = ({
               borderRadius="full"
               variant="ghost"
               fontSize="20px"
-              transition="all 0.3s ease"
+              transition="transform 180ms ease-out, background-color 180ms ease-out, color 180ms ease-out"
               _hover={{
                 bg: 'rgba(49, 151, 149, 0.1)',
                 color: 'brand.600',
-                transform: 'scale(1.1)',
+                transform: prefersReducedMotion ? undefined : 'scale(1.03)',
               }}
-              _active={{
-                bg: 'rgba(49, 151, 149, 0.2)',
-                transform: 'scale(0.95)',
-              }}
+              {...tapStyles}
             />
             {offerCount > 0 && (
-              <CBadge
+              <MotionBadge
+                key={`offers-${offerPulseKey}`}
                 position="absolute"
                 top="-4px"
                 right="-4px"
@@ -124,9 +178,11 @@ const FloatingTab: React.FC<FloatingTabProps> = ({
                 fontSize="0.7em"
                 px={1}
                 zIndex={1}
+                animate={prefersReducedMotion ? undefined : { scale: [1, 1.18, 1] }}
+                transition={{ duration: 0.32, ease: motionEasings.easeOut }}
               >
                 {offerCount}
-              </CBadge>
+              </MotionBadge>
             )}
           </Box>
 
@@ -142,17 +198,17 @@ const FloatingTab: React.FC<FloatingTabProps> = ({
               color="white"
               borderRadius="full"
               boxShadow="0 6px 24px rgba(49, 151, 149, 0.4)"
-              transition="all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1)"
+              transition="transform 200ms ease-out, box-shadow 200ms ease-out, background 200ms ease-out"
               display="flex"
               alignItems="center"
               justifyContent="center"
               _hover={{
-                transform: 'translateY(-4px) scale(1.08)',
+                transform: prefersReducedMotion ? undefined : 'translateY(-2px) scale(1.03)',
                 boxShadow: '0 12px 32px rgba(49, 151, 149, 0.5)',
                 bg: 'linear(to-br, brand.600, teal.500)',
               }}
               _active={{
-                transform: 'translateY(-2px) scale(1.02)',
+                transform: prefersReducedMotion ? undefined : 'scale(0.97)',
                 boxShadow: '0 8px 24px rgba(49, 151, 149, 0.4)',
               }}
               position="relative"
@@ -174,20 +230,18 @@ const FloatingTab: React.FC<FloatingTabProps> = ({
               borderRadius="full"
               variant="ghost"
               fontSize="20px"
-              transition="all 0.3s ease"
+              transition="transform 180ms ease-out, background-color 180ms ease-out, color 180ms ease-out"
               _hover={{
                 bg: 'rgba(49, 151, 149, 0.1)',
                 color: 'brand.600',
-                transform: 'scale(1.1)',
+                transform: prefersReducedMotion ? undefined : 'scale(1.03)',
               }}
-              _active={{
-                bg: 'rgba(49, 151, 149, 0.2)',
-                transform: 'scale(0.95)',
-              }}
+              {...tapStyles}
               onClick={() => navigate('/notifications')}
             />
             {notificationCount > 0 && (
-              <CBadge
+              <MotionBadge
+                key={`notifications-${notificationPulseKey}`}
                 position="absolute"
                 top="-4px"
                 right="-4px"
@@ -197,9 +251,11 @@ const FloatingTab: React.FC<FloatingTabProps> = ({
                 px={1}
                 zIndex={1}
                 pointerEvents="none"
+                animate={prefersReducedMotion ? undefined : { scale: [1, 1.18, 1] }}
+                transition={{ duration: 0.32, ease: motionEasings.easeOut }}
               >
                 {notificationCount}
-              </CBadge>
+              </MotionBadge>
             )}
           </Box>
 
@@ -215,20 +271,17 @@ const FloatingTab: React.FC<FloatingTabProps> = ({
             borderRadius="full"
             variant="ghost"
             fontSize="20px"
-            transition="all 0.3s ease"
+            transition="transform 180ms ease-out, background-color 180ms ease-out, color 180ms ease-out"
             _hover={{
               bg: 'rgba(49, 151, 149, 0.1)',
               color: 'brand.600',
-              transform: 'scale(1.1)',
+              transform: prefersReducedMotion ? undefined : 'scale(1.03)',
             }}
-            _active={{
-              bg: 'rgba(49, 151, 149, 0.2)',
-              transform: 'scale(0.95)',
-            }}
+            {...tapStyles}
             onClick={openMobileNav}
           />
         </HStack>
-      </Box>
+      </MotionBox>
 
       {/* Floating Add Product FAB - Desktop/Tablet */}
       {showAddButton && (

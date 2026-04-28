@@ -96,6 +96,28 @@ func (h *ProductHandler) productTextColumnExpr(column string) string {
 	return "''"
 }
 
+func filterFutureAvailabilitySlots(raw string) string {
+	if strings.TrimSpace(raw) == "" {
+		return raw
+	}
+	today := time.Now().Format("2006-01-02")
+	var slots []map[string]string
+	if err := json.Unmarshal([]byte(raw), &slots); err != nil {
+		return raw
+	}
+	active := make([]map[string]string, 0, len(slots))
+	for _, slot := range slots {
+		if date, ok := slot["date"]; ok && date >= today {
+			active = append(active, slot)
+		}
+	}
+	b, err := json.Marshal(active)
+	if err != nil {
+		return raw
+	}
+	return string(b)
+}
+
 func (h *ProductHandler) showOwnProductsOnHome() bool {
 	var raw string
 	if err := h.db.QueryRow("SELECT setting_value FROM app_settings WHERE setting_key = 'show_own_products_on_home'").Scan(&raw); err != nil {
@@ -740,17 +762,40 @@ func (h *ProductHandler) CreateProduct(c *fiber.Ctx) error {
 	var createdVideoURL sql.NullString
 	var wantsNull sql.NullString
 	var wantedCategoriesRaw sql.NullString
+	var locationTypeNull, pickupAddressNull, availabilitySlotsNull, availabilityTypeNull, collectionSetupNull sql.NullString
+	var pickupLatNull, pickupLngNull sql.NullFloat64
 	err = h.db.QueryRow(
-		"SELECT id, slug, title, description, price, image_urls, video_url, seller_id, premium, status, allow_buying, barter_only, location, `condition`, suggested_value, category, estimated_value_min, estimated_value_max, COALESCE(show_estimated_value, TRUE), `value`, wants, wanted_categories, created_at, updated_at FROM products WHERE id = ?",
+		"SELECT id, slug, title, description, price, image_urls, video_url, seller_id, premium, status, allow_buying, barter_only, location, location_type, pickup_latitude, pickup_longitude, pickup_address, `condition`, suggested_value, category, estimated_value_min, estimated_value_max, COALESCE(show_estimated_value, TRUE), `value`, wants, wanted_categories, COALESCE(availability_slots, ''), COALESCE(availability_type, 'flexible'), COALESCE(collection_setup, ''), created_at, updated_at FROM products WHERE id = ?",
 		productID,
 	).Scan(&createdProduct.ID, &slugNull, &createdProduct.Title, &createdProduct.Description, &createdProduct.Price,
 		&createdProduct.ImageURLs, &createdVideoURL, &createdProduct.SellerID, &createdProduct.Premium, &createdProduct.Status,
-		&createdProduct.AllowBuying, &createdProduct.BarterOnly, &createdProduct.Location,
+		&createdProduct.AllowBuying, &createdProduct.BarterOnly, &createdProduct.Location, &locationTypeNull, &pickupLatNull, &pickupLngNull, &pickupAddressNull,
 		&createdProduct.Condition, &createdProduct.SuggestedValue, &createdProduct.Category,
 		&createdProduct.EstimatedValueMin, &createdProduct.EstimatedValueMax, &createdProduct.ShowEstimatedValue, &createdProduct.Value,
-		&wantsNull, &wantedCategoriesRaw,
+		&wantsNull, &wantedCategoriesRaw, &availabilitySlotsNull, &availabilityTypeNull, &collectionSetupNull,
 		&createdProduct.CreatedAt, &createdProduct.UpdatedAt)
 
+	if locationTypeNull.Valid {
+		createdProduct.LocationType = locationTypeNull.String
+	}
+	if pickupLatNull.Valid {
+		createdProduct.PickupLatitude = &pickupLatNull.Float64
+	}
+	if pickupLngNull.Valid {
+		createdProduct.PickupLongitude = &pickupLngNull.Float64
+	}
+	if pickupAddressNull.Valid {
+		createdProduct.PickupAddress = pickupAddressNull.String
+	}
+	if availabilitySlotsNull.Valid {
+		createdProduct.AvailabilitySlots = availabilitySlotsNull.String
+	}
+	if availabilityTypeNull.Valid {
+		createdProduct.AvailabilityType = availabilityTypeNull.String
+	}
+	if collectionSetupNull.Valid {
+		createdProduct.CollectionSetup = collectionSetupNull.String
+	}
 	if wantsNull.Valid {
 		createdProduct.Wants = wantsNull.String
 	}
@@ -2809,10 +2854,13 @@ func (h *ProductHandler) GetUserProducts(c *fiber.Ctx) error {
 	}
 
 	// Get products (use image_urls) with category field
+	collectionSetupExpr := h.productTextColumnExpr("collection_setup")
 	queryArgs := append(args, limit, offset)
 	rows, err := h.db.Query(`
 		SELECT p.id, p.slug, p.title, p.description, p.price, p.image_urls, p.seller_id, 
-		       p.premium, p.status, p.allow_buying, p.barter_only, p.category, p.wants, p.wanted_categories, p.desired_product, p.created_at, p.updated_at, p.boosted_at,
+		       p.premium, p.status, p.allow_buying, p.barter_only, p.location, p.location_type, p.pickup_latitude, p.pickup_longitude, p.pickup_address,
+		       p.category, p.wants, p.wanted_categories, p.desired_product, COALESCE(p.availability_slots, '') as availability_slots, COALESCE(p.availability_type, 'flexible') as availability_type, `+collectionSetupExpr+` as collection_setup,
+		       p.created_at, p.updated_at, p.boosted_at,
 		       p.featured_order,
 		       u.name as seller_name, u.profile_picture as seller_profile_picture,
 		       (SELECT COUNT(*) FROM trades t WHERE t.target_product_id = p.id AND t.status = 'pending') as offer_count,
@@ -2844,9 +2892,13 @@ func (h *ProductHandler) GetUserProducts(c *fiber.Ctx) error {
 		var boostedAtNull sql.NullTime
 		var featuredOrderNull sql.NullInt64
 		var wantsNull, wantedCategoriesRaw, desiredProductNull sql.NullString
+		var locationNull, locationTypeNull, pickupAddressNull sql.NullString
+		var pickupLatNull, pickupLngNull sql.NullFloat64
+		var availabilitySlotsNull, availabilityTypeNull, collectionSetupNull sql.NullString
 		err := rows.Scan(&product.ID, &slugNull, &product.Title, &product.Description, &priceNull,
 			&imageURLsJSONStr, &product.SellerID, &product.Premium, &product.Status,
-			&product.AllowBuying, &product.BarterOnly, &product.Category, &wantsNull, &wantedCategoriesRaw, &desiredProductNull, &product.CreatedAt, &product.UpdatedAt, &boostedAtNull, &featuredOrderNull,
+			&product.AllowBuying, &product.BarterOnly, &locationNull, &locationTypeNull, &pickupLatNull, &pickupLngNull, &pickupAddressNull,
+			&product.Category, &wantsNull, &wantedCategoriesRaw, &desiredProductNull, &availabilitySlotsNull, &availabilityTypeNull, &collectionSetupNull, &product.CreatedAt, &product.UpdatedAt, &boostedAtNull, &featuredOrderNull,
 			&product.SellerName, &sellerProfile, &product.OfferCount, &product.IsSaved)
 		if slugNull.Valid {
 			product.Slug = slugNull.String
@@ -2869,6 +2921,30 @@ func (h *ProductHandler) GetUserProducts(c *fiber.Ctx) error {
 		}
 		if desiredProductNull.Valid {
 			product.DesiredProduct = desiredProductNull.String
+		}
+		if locationNull.Valid {
+			product.Location = locationNull.String
+		}
+		if locationTypeNull.Valid {
+			product.LocationType = locationTypeNull.String
+		}
+		if pickupLatNull.Valid {
+			product.PickupLatitude = &pickupLatNull.Float64
+		}
+		if pickupLngNull.Valid {
+			product.PickupLongitude = &pickupLngNull.Float64
+		}
+		if pickupAddressNull.Valid {
+			product.PickupAddress = pickupAddressNull.String
+		}
+		if availabilitySlotsNull.Valid {
+			product.AvailabilitySlots = filterFutureAvailabilitySlots(availabilitySlotsNull.String)
+		}
+		if availabilityTypeNull.Valid {
+			product.AvailabilityType = availabilityTypeNull.String
+		}
+		if collectionSetupNull.Valid {
+			product.CollectionSetup = collectionSetupNull.String
 		}
 		if priceNull.Valid {
 			p := priceNull.Float64
@@ -3090,7 +3166,8 @@ func (h *ProductHandler) GenerateProductDetailsWithAI(c *fiber.Ctx) error {
 	}
 
 	// Use fallback service: Gemini (primary) → Groq (backup)
-	aiResult, err := services.AnalyzeProductWithFallback(files)
+	ctx := middleware.RequestContextFromFiber(c)
+	aiResult, err := services.AnalyzeProductWithFallbackContext(ctx, files)
 	if aiResult != nil && (aiResult.Provider == "gemini" || aiResult.Provider == "groq") {
 		log.Printf("✅ [AI] Analysis complete: Provider=%s, Retried=%v, TimeMs=%d", aiResult.Provider, aiResult.Retried, aiResult.TimeMs)
 	}

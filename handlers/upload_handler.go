@@ -9,6 +9,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
+	"github.com/xashathebest/clovia/middleware"
 	"github.com/xashathebest/clovia/services"
 )
 
@@ -73,7 +74,8 @@ func (h *UploadHandler) UploadImage(c *fiber.Ctx) error {
 
 	fmt.Printf("📤 [Upload] file=%s size=%d type=%s folder=%s\n", file.Filename, file.Size, uploadType, folder)
 
-	url, err := services.UploadFileToCloudinary(file, folder)
+	ctx := middleware.RequestContextFromFiber(c)
+	url, err := services.UploadFileToCloudinaryContext(ctx, file, folder)
 	if err != nil {
 		fmt.Printf("❌ [Upload] Cloudinary error: %v (will fallback to local)\n", err)
 	} else if url == "" {
@@ -176,7 +178,8 @@ func (h *UploadHandler) AnalyzeProductImages(c *fiber.Ctx) error {
 	fmt.Printf("📸 [AI Analysis] Analyzing %d product image(s)...\n", len(images))
 
 	// Analyze with fallback
-	result, err := services.AnalyzeProductWithFallback(images)
+	ctx := middleware.RequestContextFromFiber(c)
+	result, err := services.AnalyzeProductWithFallbackContext(ctx, images)
 	if err != nil || result == nil {
 		errMsg := "AI analysis failed"
 		if err != nil {

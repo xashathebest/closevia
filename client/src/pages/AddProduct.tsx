@@ -1,6 +1,7 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import {
   Box,
   VStack,
@@ -114,6 +115,9 @@ import { PRODUCT_CATEGORIES, getCategoryLabel } from '../utils/categories'
 import { checkMultipleImageQuality, getQualityLabel, getQualityColorScheme, type ImageQualityResult as ClientQualityResult } from '../utils/imageQualityChecker'
 import { getBackupPriceEstimate } from '../utils/priceEstimator'
 import { formatEstimatedValueRange } from '../utils/currency'
+import { motionDurations, motionEasings } from '../utils/motion'
+
+const MotionBox = motion(Box)
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -127,6 +131,80 @@ const PH_BOUNDS = {
   maxLat: 21.3,
   minLng: 116.8,
   maxLng: 127.2,
+}
+
+const WEEKDAY_INDEXES: Record<string, number[]> = {
+  weekdays: [1, 2, 3, 4, 5],
+  weekends: [0, 6],
+  monday: [1],
+  tuesday: [2],
+  wednesday: [3],
+  thursday: [4],
+  friday: [5],
+  saturday: [6],
+  sunday: [0],
+}
+
+const formatLocalDate = (date: Date): string => {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+const expandCollectionDayIndexes = (days: string[] = []): Set<number> => {
+  const indexes = new Set<number>()
+  days.forEach(day => {
+    ;(WEEKDAY_INDEXES[day] || []).forEach(index => indexes.add(index))
+  })
+  return indexes
+}
+
+const buildAvailabilitySlotsFromCollectionSetup = (setup: ProductFormData['collection_setup']) => {
+  const slots: Array<{ id: string; date: string; start_time: string; end_time: string; method: 'pickup' | 'meetup' }> = []
+  const seen = new Set<string>()
+  const today = new Date()
+
+  setup.methods.forEach(method => {
+    const config = setup[method]
+    const start = config.time_start?.trim()
+    const end = config.time_end?.trim()
+    if (!start || !end || start >= end) return
+
+    const allowedDays = expandCollectionDayIndexes(config.days)
+    if (allowedDays.size === 0) return
+
+    for (let offset = 0; offset < 28; offset += 1) {
+      const date = new Date(today.getFullYear(), today.getMonth(), today.getDate() + offset)
+      if (!allowedDays.has(date.getDay())) continue
+      const localDate = formatLocalDate(date)
+      const key = `${method}-${localDate}-${start}-${end}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      slots.push({
+        id: key,
+        date: localDate,
+        start_time: start,
+        end_time: end,
+        method,
+      })
+    }
+  })
+
+  return slots
+}
+
+const validateCollectionSetup = (setup: ProductFormData['collection_setup']): string | null => {
+  if (!setup.methods.length) return 'Choose at least one collection method'
+
+  for (const method of setup.methods) {
+    const config = setup[method]
+    if (!config.days?.length) return `Choose available days for ${method}`
+    if (!config.time_start || !config.time_end) return `Choose a time window for ${method}`
+    if (config.time_start >= config.time_end) return `Set a valid start and end time for ${method}`
+  }
+
+  return null
 }
 
 const isInPhilippines = (lat: number, lng: number): boolean => {
@@ -239,6 +317,7 @@ const AddProduct: React.FC = () => {
   const { user } = useAuth()
   const { createProduct } = useProducts()
   const toast = useToast()
+  const prefersReducedMotion = useReducedMotion()
   const aiTriggeredRef = useRef(false)
 
   // Custom locations
@@ -829,7 +908,7 @@ const AddProduct: React.FC = () => {
     const validFiles = Array.from(files).filter(f => f.type.startsWith('image/'))
     if (!validFiles.length) {
       toast({
-        id: "addproduct-invalid-file-type", title: 'Invalid file type', description: 'Please select image files only.', status: 'error', duration: 3000 })
+        id: "addproduct-invalid-file-type", title: 'Images only, please', description: 'Only image files (JPG, PNG, WEBP) can be uploaded here.', status: 'warning', duration: 3000 })
       return
     }
 
@@ -914,12 +993,12 @@ const AddProduct: React.FC = () => {
     const file = files[0]
     if (!file.type.startsWith('video/')) {
       toast({
-        id: "addproduct-invalid-file-type-2", title: 'Invalid file type', status: 'error', duration: 3000 })
+        id: "addproduct-invalid-file-type-2", title: 'Videos only here', description: 'Please select a valid video file.', status: 'warning', duration: 3000 })
       return
     }
     if (file.size > 50 * 1024 * 1024) {
       toast({
-        id: "addproduct-video-too-large", title: 'Video too large', description: 'Max 50MB', status: 'error', duration: 3000 })
+        id: "addproduct-video-too-large", title: 'Video is a bit too big', description: 'Please keep videos under 50MB.', status: 'warning', duration: 3000 })
       return
     }
     setUploadedVideo(file)
@@ -1048,9 +1127,41 @@ const AddProduct: React.FC = () => {
         id: "addproduct-missing-price", title: 'Price required!', description: priceError || 'Enter a valid asking price greater than 0.', status: 'warning', position: 'top', duration: 4000, isClosable: true })
       return
     }
+    const collectionIssue = validateCollectionSetup(formData.collection_setup)
+    if (collectionIssue) {
+      toast({
+        id: "addproduct-collection-setup",
+        title: 'Complete collection setup',
+        description: collectionIssue,
+        status: 'warning',
+        position: 'top',
+        duration: 4000,
+        isClosable: true,
+      })
+      return
+    }
+    if (formData.collection_setup.methods.includes('pickup')) {
+      const hasPublicPickupLocation =
+        formData.location_type !== 'no_location' &&
+        formData.location?.trim() &&
+        formData.location.trim().toLowerCase() !== PRIVATE_HOME_LOCATION_LABEL.toLowerCase()
+      if (!hasPublicPickupLocation) {
+        toast({
+          id: "addproduct-pickup-location-required",
+          title: 'Pickup location needed',
+          description: 'Choose a public pickup location for pickup trades, or switch this item to meetup only.',
+          status: 'warning',
+          position: 'top',
+          duration: 4500,
+          isClosable: true,
+        })
+        return
+      }
+    }
 
     setIsSubmitting(true)
     try {
+      const availabilitySlots = buildAvailabilitySlotsFromCollectionSetup(formData.collection_setup)
       const fd = new FormData()
       fd.append('title', formData.title.trim())
       fd.append('description', formData.description.trim())
@@ -1101,6 +1212,8 @@ const AddProduct: React.FC = () => {
       if (formData.wants) fd.append('wants', formData.wants)
       if (formData.desired_product) fd.append('desired_product', formData.desired_product)
       fd.append('collection_setup', JSON.stringify(formData.collection_setup))
+      fd.append('availability_slots', JSON.stringify(availabilitySlots))
+      fd.append('availability_type', availabilitySlots.length > 0 ? 'strict' : 'flexible')
       
       // Add organization IDs for tagging
       if (selectedOrganizationIds.length > 0) {
@@ -2208,7 +2321,7 @@ const AddProduct: React.FC = () => {
                 }
 
                 if (!/^\d+$/.test(raw)) {
-                  setPriceError('Enter a valid whole-peso amount')
+                  setPriceError('Please enter a whole number (e.g. 250)')
                   handleField('price', undefined)
                   return
                 }
@@ -2216,7 +2329,7 @@ const AddProduct: React.FC = () => {
                 const normalized = raw.replace(/^0+/, '')
                 if (!normalized) {
                   setPriceInput('')
-                  setPriceError('Price must be greater than 0')
+                  setPriceError('Price should be at least ₱1')
                   handleField('price', undefined)
                   return
                 }
@@ -2788,7 +2901,7 @@ const AddProduct: React.FC = () => {
           </HStack>
 
           {/* Elevated Step Content Card */}
-          <Box 
+          <MotionBox 
             bg={bgColor} 
             p={{ base: 6, md: 8 }} 
             borderRadius="2xl" 
@@ -2796,11 +2909,23 @@ const AddProduct: React.FC = () => {
             borderWidth="0" 
             position="relative" 
             overflow="hidden"
+            layout
+            transition={{ duration: motionDurations.uiSlow, ease: motionEasings.easeInOut }}
           >
-            {currentStep === 1 && renderStep1()}
-            {currentStep === 2 && renderStep2()}
-            {currentStep === 3 && renderStep3()}
-          </Box>
+            <AnimatePresence mode="wait" initial={false}>
+              <MotionBox
+                key={currentStep}
+                initial={prefersReducedMotion ? false : { opacity: 0, x: 18 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={prefersReducedMotion ? undefined : { opacity: 0, x: -18 }}
+                transition={{ duration: motionDurations.uiSlow, ease: motionEasings.easeOut }}
+              >
+                {currentStep === 1 && renderStep1()}
+                {currentStep === 2 && renderStep2()}
+                {currentStep === 3 && renderStep3()}
+              </MotionBox>
+            </AnimatePresence>
+          </MotionBox>
 
           {/* Premium Fluid Navigation Buttons */}
           <HStack justify="space-between" pb={{ base: 24, sm: 8 }} pt={2} spacing={{ base: 3, sm: 4 }}>

@@ -125,7 +125,7 @@ const CreateOrganization: React.FC = () => {
       setOrgLogoUrl(url)
       toast({ title: 'Logo uploaded', status: 'success', duration: 2000 })
     } catch (error: any) {
-      toast({ title: 'Logo upload failed', description: error?.message || 'Please try again', status: 'error' })
+      toast({ title: "Logo didn't upload", description: error?.message || 'Something went wrong — please try again.', status: 'error' })
     } finally {
       setUploadingLogo(false)
     }
@@ -142,7 +142,7 @@ const CreateOrganization: React.FC = () => {
       setOrgCoverUrl(url)
       toast({ title: 'Cover uploaded', status: 'success', duration: 2000 })
     } catch (error: any) {
-      toast({ title: 'Cover upload failed', description: error?.message || 'Please try again', status: 'error' })
+      toast({ title: "Cover didn't upload", description: error?.message || 'Something went wrong — please try again.', status: 'error' })
     } finally {
       setUploadingCover(false)
     }
@@ -152,15 +152,15 @@ const CreateOrganization: React.FC = () => {
     event.preventDefault()
 
     if (!orgName.trim()) {
-      toast({ title: 'Organization name is required', status: 'warning', duration: 2500 })
+      toast({ title: "What's your org's name?", description: "Give your organization a name to get started.", status: 'warning', duration: 2500 })
       return
     }
     if (!sanitizeHandle(orgName)) {
-      toast({ title: 'A valid organization handle could not be generated from the name', status: 'warning', duration: 2500 })
+      toast({ title: "Let's tweak the name a bit", description: "The name needs at least some letters so we can create a handle for it.", status: 'warning', duration: 2500 })
       return
     }
     if (!orgCategory.trim()) {
-      toast({ title: 'Category is required', status: 'warning', duration: 2500 })
+      toast({ title: "Pick a category", description: "Choose what best describes your organization.", status: 'warning', duration: 2500 })
       return
     }
 

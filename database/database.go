@@ -137,7 +137,9 @@ func InitDatabase() error {
 
 	// Test a simple query to verify we're connected to the right database
 	var currentDbName string
-	queryErr := DB.QueryRow("SELECT DATABASE()").Scan(&currentDbName)
+	queryCtx, queryCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	queryErr := DB.QueryRowContext(queryCtx, "SELECT DATABASE()").Scan(&currentDbName)
+	queryCancel()
 	if queryErr != nil {
 		return fmt.Errorf("failed to get database name: %v", queryErr)
 	}

@@ -1,5 +1,5 @@
 import React, { Suspense, lazy } from 'react'
-import { ChakraProvider, Box, Spinner, Center, Button, VStack, Text, useColorMode } from '@chakra-ui/react'
+import { ChakraProvider, Box, Center, Button, VStack, Text, useColorMode, Skeleton, SkeletonCircle } from '@chakra-ui/react'
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom'
 import { AnimatePresence } from 'framer-motion'
 import { theme } from './theme'
@@ -27,6 +27,7 @@ import { NotificationProvider } from './contexts/NotificationContext'
 import ErrorBoundary from './components/ErrorBoundary'
 import ToastNotification from './components/ToastNotification'
 import SessionTimeoutManager from './components/SessionTimeoutManager'
+import PullToRefresh from './components/PullToRefresh'
 
 // Theme applier component - loads and applies saved theme preference
 const ThemeApplier: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -52,9 +53,21 @@ const ThemeApplier: React.FC<{ children: React.ReactNode }> = ({ children }) => 
   return <>{children}</>
 }
 const RouteFallback: React.FC = () => (
-  <Center h="100vh">
-    <Spinner />
-  </Center>
+  <Box minH="100vh" px={{ base: 4, md: 8 }} py={6}>
+    <VStack align="stretch" spacing={4} maxW="960px" mx="auto">
+      <Skeleton height="34px" width="45%" borderRadius="md" />
+      <Skeleton height="16px" width="70%" borderRadius="md" />
+      <Box display="grid" gridTemplateColumns={{ base: 'repeat(2, 1fr)', md: 'repeat(4, 1fr)' }} gap={3}>
+        {Array.from({ length: 8 }).map((_, index) => (
+          <Box key={index} bg="white" borderWidth="1px" borderColor="gray.100" borderRadius="lg" overflow="hidden" p={2}>
+            <Skeleton height="120px" borderRadius="md" mb={2} />
+            <Skeleton height="14px" width="80%" borderRadius="md" mb={2} />
+            <Skeleton height="12px" width="55%" borderRadius="md" />
+          </Box>
+        ))}
+      </Box>
+    </VStack>
+  </Box>
 )
 
 const lazyWithFallback = (importer: () => Promise<{ default: React.ComponentType<any> }>, label: string) =>
@@ -116,7 +129,7 @@ const LoadingOverlay: React.FC = () => {
       backdropFilter="blur(1px)"
     >
       <Center flexDirection="column" gap={6}>
-        <Spinner size="xl" color="brand.500" thickness="4px" />
+        <SkeletonCircle size="56px" />
         <VStack spacing={2}>
           <Text fontSize="lg" color="gray.700" fontWeight="medium">
             {user ? 'Loading your dashboard...' : 'Verifying session...'}
@@ -353,7 +366,7 @@ const AppContent: React.FC = () => {
 
 function App() {
   return (
-    <ChakraProvider theme={theme}>
+    <ChakraProvider theme={theme} toastOptions={{ defaultOptions: { position: 'top', duration: 4000, isClosable: true } }}>
       <ThemeApplier>
         <AuthProvider>
           <ProductProvider>
@@ -363,7 +376,9 @@ function App() {
                   <Router future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
                     <ErrorBoundary>
                       <SessionTimeoutManager />
-                      <AppContent />
+                      <PullToRefresh>
+                        <AppContent />
+                      </PullToRefresh>
                     </ErrorBoundary>
                     <GlobalPopup />
                     <ToastNotification />

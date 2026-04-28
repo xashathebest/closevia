@@ -632,6 +632,7 @@ func (h *PaymentHandler) CreateRemittanceInvoice(c *fiber.Ctx) error {
 
 // CreateTradeInvoice generates a Xendit checkout URL for a Trade
 func (h *PaymentHandler) CreateTradeInvoice(c *fiber.Ctx) error {
+	ctx := middleware.RequestContextFromFiber(c)
 	// Parse Trade ID
 	tradeID := c.Params("id")
 	if tradeID == "" {
@@ -654,7 +655,7 @@ func (h *PaymentHandler) CreateTradeInvoice(c *fiber.Ctx) error {
 	var offeredCashAmount sql.NullFloat64
 	var deliveryType sql.NullString
 
-	err := h.db.QueryRow(`
+	err := h.db.QueryRowContext(ctx, `
 		SELECT id, buyer_id, seller_id, status, offered_cash_amount, COALESCE(delivery_type, ''), target_product_id 
 		FROM trades 
 		WHERE id = ?`, tradeID).Scan(
@@ -700,10 +701,10 @@ func (h *PaymentHandler) CreateTradeInvoice(c *fiber.Ctx) error {
 
 	// 2. Product Price (if it's a direct purchase, i.e., 0 items offered by buyer)
 	var itemCount int
-	h.db.QueryRow("SELECT COUNT(*) FROM trade_items WHERE trade_id = ? AND offered_by = 'buyer'", tradeID).Scan(&itemCount)
+	h.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM trade_items WHERE trade_id = ? AND offered_by = 'buyer'", tradeID).Scan(&itemCount)
 	if itemCount == 0 {
 		var productPrice float64
-		h.db.QueryRow("SELECT COALESCE(price, 0) FROM products WHERE id = ?", targetProductID).Scan(&productPrice)
+		h.db.QueryRowContext(ctx, "SELECT COALESCE(price, 0) FROM products WHERE id = ?", targetProductID).Scan(&productPrice)
 		amount += productPrice
 		fmt.Printf("Purchase detected (0 items offered). Added product price: %.2f\n", productPrice)
 	}
@@ -713,7 +714,7 @@ func (h *PaymentHandler) CreateTradeInvoice(c *fiber.Ctx) error {
 	if deliveryType.Valid && deliveryType.String != "" {
 		// Check premium status for express delivery
 		var isPremium bool
-		h.db.QueryRow("SELECT is_premium FROM users WHERE id = ?", userID).Scan(&isPremium)
+		h.db.QueryRowContext(ctx, "SELECT is_premium FROM users WHERE id = ?", userID).Scan(&isPremium)
 
 		if deliveryType.String == "express" && !isPremium {
 			return c.Status(403).JSON(models.APIResponse{
@@ -742,7 +743,7 @@ func (h *PaymentHandler) CreateTradeInvoice(c *fiber.Ctx) error {
 
 	// Get User Details for Invoice
 	var buyerName, buyerEmail string
-	h.db.QueryRow("SELECT name, email FROM users WHERE id = ?", buyerID).Scan(&buyerName, &buyerEmail)
+	h.db.QueryRowContext(ctx, "SELECT name, email FROM users WHERE id = ?", buyerID).Scan(&buyerName, &buyerEmail)
 
 	// Initialize Xendit Client
 	apiKey, keyErr := getXenditSecretKey()
@@ -799,7 +800,7 @@ func (h *PaymentHandler) CreateTradeInvoice(c *fiber.Ctx) error {
 	failureUrl := fmt.Sprintf("%s/dashboard?trade_id=%d&payment=failed&xendit_external_id=%s", frontendURL, trade.ID, url.QueryEscape(externalID))
 
 	currency := "PHP"
-	req := xenditClient.InvoiceApi.CreateInvoice(context.Background()).CreateInvoiceRequest(invoice.CreateInvoiceRequest{
+	req := xenditClient.InvoiceApi.CreateInvoice(ctx).CreateInvoiceRequest(invoice.CreateInvoiceRequest{
 		ExternalId:  externalID,
 		Amount:      float32(amount),
 		Description: &description,
@@ -825,8 +826,8 @@ func (h *PaymentHandler) CreateTradeInvoice(c *fiber.Ctx) error {
 
 	// Store latest invoice reference for fallback "sync" in local dev (where webhooks may not reach)
 	if resp.Id != nil && strings.TrimSpace(*resp.Id) != "" {
-		if _, err := h.db.Exec(
-			"UPDATE trades SET xendit_invoice_id = ?, xendit_external_id = ?, payment_method = 'online' WHERE id = ?",
+		if _, err := h.db.ExecContext(ctx,
+			"UPDATE trades SET xendit_invoice_id = ?, xendit_external_id = ?, payment_method = 'online' WHERE id = ? AND status IN ('accepted','active','pending')",
 			*resp.Id, externalID, trade.ID,
 		); err != nil {
 			log.Printf("Warning: failed to store Xendit invoice reference for trade %d: %v", trade.ID, err)

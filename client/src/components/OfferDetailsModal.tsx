@@ -244,7 +244,7 @@ const OfferDetailsModal: React.FC<OfferDetailsModalProps> = ({ trade, isOpen, on
       onClose()
     } catch (e: any) {
       toast({
-        id: "offerdetailsmodal-failed-to-accept", title: 'Failed to accept', description: e?.response?.data?.error || 'Try again', status: 'error' })
+        id: "offerdetailsmodal-failed-to-accept", title: "Couldn't accept the offer", description: e?.response?.data?.error || 'Something went wrong. Please try again.', status: 'error' })
     } finally {
       setIsAccepting(false)
     }
@@ -262,7 +262,7 @@ const OfferDetailsModal: React.FC<OfferDetailsModalProps> = ({ trade, isOpen, on
       onAccepted()
       onClose()
     } catch (e: any) {
-      toast({ id: 'odm-time-accept-fail', title: 'Failed to confirm time', description: e?.response?.data?.error || 'Try again', status: 'error' })
+      toast({ id: 'odm-time-accept-fail', title: "Couldn't confirm meetup time", description: e?.response?.data?.error || 'Something went wrong. Please try again.', status: 'error' })
     } finally {
       setIsAcceptingTime(false)
     }
@@ -282,7 +282,7 @@ const OfferDetailsModal: React.FC<OfferDetailsModalProps> = ({ trade, isOpen, on
       setSuggestTime('')
       onAccepted()
     } catch (e: any) {
-      toast({ id: 'odm-time-suggest-fail', title: 'Failed to suggest time', description: e?.response?.data?.error || 'Try again', status: 'error' })
+      toast({ id: 'odm-time-suggest-fail', title: "Couldn't suggest a time", description: e?.response?.data?.error || 'Something went wrong. Please try again.', status: 'error' })
     } finally {
       setIsSuggestingTime(false)
     }
@@ -304,7 +304,7 @@ const OfferDetailsModal: React.FC<OfferDetailsModalProps> = ({ trade, isOpen, on
       onDeclineClose()
     } catch (e: any) {
       toast({
-        id: "offerdetailsmodal-failed-to-decline", title: 'Failed to decline', description: e?.response?.data?.error || 'Try again', status: 'error' })
+        id: "offerdetailsmodal-failed-to-decline", title: "Couldn't decline the offer", description: e?.response?.data?.error || 'Something went wrong. Please try again.', status: 'error' })
     } finally {
       setIsDeclining(false)
     }
@@ -383,7 +383,7 @@ const OfferDetailsModal: React.FC<OfferDetailsModalProps> = ({ trade, isOpen, on
       onClose()
     } catch (e: any) {
       toast({
-        id: "offerdetailsmodal-failed-to-counter", title: 'Failed to counter', description: e?.response?.data?.error || 'Try again', status: 'error' })
+        id: "offerdetailsmodal-failed-to-counter", title: "Couldn't send counter-offer", description: e?.response?.data?.error || 'Something went wrong. Please try again.', status: 'error' })
     } finally {
       setIsCountering(false)
     }
@@ -427,7 +427,7 @@ const OfferDetailsModal: React.FC<OfferDetailsModalProps> = ({ trade, isOpen, on
       onAccepted() // Refresh trade data
     } catch (e: any) {
       toast({
-        id: "offerdetailsmodal-failed-to-request-change", title: 'Failed to request change', description: e?.response?.data?.error || 'Try again', status: 'error' })
+        id: "offerdetailsmodal-failed-to-request-change", title: "Couldn't request that change", description: e?.response?.data?.error || 'Something went wrong. Please try again.', status: 'error' })
     } finally {
       setRequestingOptionChange(false)
     }
@@ -444,7 +444,7 @@ const OfferDetailsModal: React.FC<OfferDetailsModalProps> = ({ trade, isOpen, on
       onAccepted() // Refresh trade data
     } catch (e: any) {
       toast({
-        id: "offerdetailsmodal-failed-to-approve-change", title: 'Failed to approve change', description: e?.response?.data?.error || 'Try again', status: 'error' })
+        id: "offerdetailsmodal-failed-to-approve-change", title: "Couldn't approve that change", description: e?.response?.data?.error || 'Something went wrong. Please try again.', status: 'error' })
     }
   }
 
@@ -459,7 +459,7 @@ const OfferDetailsModal: React.FC<OfferDetailsModalProps> = ({ trade, isOpen, on
       onAccepted() // Refresh trade data
     } catch (e: any) {
       toast({
-        id: "offerdetailsmodal-failed-to-reject-change", title: 'Failed to reject change', description: e?.response?.data?.error || 'Try again', status: 'error' })
+        id: "offerdetailsmodal-failed-to-reject-change", title: "Couldn't reject that change", description: e?.response?.data?.error || 'Something went wrong. Please try again.', status: 'error' })
     }
   }
 

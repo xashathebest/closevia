@@ -2,9 +2,13 @@ import React, { useEffect, useRef } from 'react'
 import { Box, HStack, Text, IconButton, Icon } from '@chakra-ui/react'
 import { InfoIcon } from '@chakra-ui/icons'
 import { FaCheckCircle, FaExclamationTriangle } from 'react-icons/fa'
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import { useNotification } from '../contexts/NotificationContext'
 import { NOTIFICATION_AUTO_DISMISS_MS } from '../contexts/NotificationContext'
 import type { Notification, NotificationType } from '../contexts/NotificationContext'
+import { motionDurations, motionEasings } from '../utils/motion'
+
+const MotionBox = motion(Box)
 
 const getIcon = (type: NotificationType) => {
   switch (type) {
@@ -49,6 +53,7 @@ interface ToastItemProps {
 const ToastItem: React.FC<ToastItemProps> = ({ notification, index, onDismiss, onExited }) => {
   const { id, message, type } = notification
   const [isExiting, setIsExiting] = React.useState(false)
+  const prefersReducedMotion = useReducedMotion()
   const timeoutRef = useRef<number | null>(null)
   const exitTimeoutRef = useRef<number | null>(null)
 
@@ -80,16 +85,17 @@ const ToastItem: React.FC<ToastItemProps> = ({ notification, index, onDismiss, o
   const IconComponent = getIcon(type)
 
   return (
-    <Box
+    <MotionBox
       position="relative"
       w="full"
       maxW={{ base: 'calc(100vw - 32px)', md: '400px' }}
       mx="auto"
       mb={index < 2 ? 0 : 3}
-      animation="toastSlideDown 0.35s ease-out"
-      opacity={isExiting ? 0 : 1}
-      transform={isExiting ? 'translateY(-20px)' : 'translateY(0)'}
-      transition="opacity 0.3s ease, transform 0.3s ease"
+      initial={prefersReducedMotion ? false : { opacity: 0, y: 18, scale: 0.98 }}
+      animate={{ opacity: isExiting ? 0 : 1, y: isExiting ? 12 : 0, scale: isExiting ? 0.98 : 1 }}
+      exit={prefersReducedMotion ? undefined : { opacity: 0, y: 12, scale: 0.98 }}
+      transition={{ duration: motionDurations.uiSlow, ease: motionEasings.easeOut }}
+      style={{ willChange: 'transform, opacity' }}
     >
       <Box
         bg="rgba(255, 255, 255, 0.85)"
@@ -138,7 +144,7 @@ const ToastItem: React.FC<ToastItemProps> = ({ notification, index, onDismiss, o
           />
         </HStack>
       </Box>
-    </Box>
+    </MotionBox>
   )
 }
 
@@ -160,17 +166,19 @@ const ToastNotification: React.FC = () => {
       pointerEvents="none"
       sx={{ '& > *': { pointerEvents: 'auto' } }}
     >
-      <Box display="flex" flexDirection="column" alignItems="center" gap={3}>
-        {notifications.map((n, i) => (
-          <ToastItem
-            key={n.id}
-            notification={n}
-            index={i}
-            onDismiss={dismissNotification}
-            onExited={dismissNotification}
-          />
-        ))}
-      </Box>
+      <AnimatePresence initial={false}>
+        <Box display="flex" flexDirection="column" alignItems="center" gap={3}>
+          {notifications.map((n, i) => (
+            <ToastItem
+              key={n.id}
+              notification={n}
+              index={i}
+              onDismiss={dismissNotification}
+              onExited={dismissNotification}
+            />
+          ))}
+        </Box>
+      </AnimatePresence>
     </Box>
   )
 }

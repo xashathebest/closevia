@@ -42,6 +42,14 @@ type productCollectionSetup struct {
 	} `json:"meetup"`
 }
 
+type tradeAvailabilitySlot struct {
+	ID        string `json:"id"`
+	Date      string `json:"date"`
+	StartTime string `json:"start_time"`
+	EndTime   string `json:"end_time"`
+	Method    string `json:"method,omitempty"`
+}
+
 func parseProductCollectionSetup(raw string) productCollectionSetup {
 	var setup productCollectionSetup
 	if strings.TrimSpace(raw) == "" || json.Unmarshal([]byte(raw), &setup) != nil {
@@ -58,6 +66,126 @@ func collectionMethodEnabled(setup productCollectionSetup, method string) bool {
 		}
 	}
 	return false
+}
+
+func validateTradeScheduleAgainstAvailability(rawSlots, availabilityType, selectedSlotID, meetupDate, meetupTime, meetingType string) error {
+	if err := validateCollectionDateTime(meetupDate, meetupTime); err != nil {
+		return err
+	}
+	var slots []tradeAvailabilitySlot
+	if strings.TrimSpace(rawSlots) == "" || json.Unmarshal([]byte(rawSlots), &slots) != nil || len(slots) == 0 {
+		return nil
+	}
+	relevantSlots := make([]tradeAvailabilitySlot, 0, len(slots))
+	for _, slot := range slots {
+		if slot.Method == "" || meetingType == "" || strings.EqualFold(slot.Method, meetingType) {
+			relevantSlots = append(relevantSlots, slot)
+		}
+	}
+	if len(relevantSlots) == 0 {
+		return nil
+	}
+
+	availabilityType = strings.ToLower(strings.TrimSpace(availabilityType))
+	selectedSlotID = strings.TrimSpace(selectedSlotID)
+	if availabilityType == "strict" && selectedSlotID == "" {
+		return fmt.Errorf("Please choose one of the product owner's available time slots")
+	}
+	if selectedSlotID == "" {
+		return nil
+	}
+
+	selectedDate, err := time.Parse("2006-01-02", meetupDate)
+	if err != nil {
+		return fmt.Errorf("Invalid collection date")
+	}
+	selectedTime, err := time.Parse("15:04", meetupTime)
+	if err != nil {
+		return fmt.Errorf("Invalid collection time")
+	}
+
+	for _, slot := range relevantSlots {
+		if strings.TrimSpace(slot.ID) != selectedSlotID {
+			continue
+		}
+		slotDate, err := time.Parse("2006-01-02", slot.Date)
+		if err != nil || !slotDate.Equal(selectedDate) {
+			return fmt.Errorf("Selected time slot does not match the proposed date")
+		}
+		start, startErr := time.Parse("15:04", slot.StartTime)
+		end, endErr := time.Parse("15:04", slot.EndTime)
+		if startErr != nil || endErr != nil || !end.After(start) {
+			return fmt.Errorf("Selected time slot is invalid")
+		}
+		if selectedTime.Before(start) || !selectedTime.Before(end) {
+			return fmt.Errorf("Proposed time must be within the selected availability slot")
+		}
+		return nil
+	}
+
+	return fmt.Errorf("Selected availability slot is no longer available")
+}
+
+func validateCollectionDateTime(meetupDate, meetupTime string) error {
+	location, err := time.LoadLocation("Asia/Manila")
+	if err != nil {
+		location = time.Local
+	}
+	date, err := time.ParseInLocation("2006-01-02", strings.TrimSpace(meetupDate), location)
+	if err != nil {
+		return fmt.Errorf("Invalid collection date")
+	}
+	if _, err := time.ParseInLocation("15:04", strings.TrimSpace(meetupTime), location); err != nil {
+		return fmt.Errorf("Invalid collection time")
+	}
+	today := time.Now().In(location)
+	startOfToday := time.Date(today.Year(), today.Month(), today.Day(), 0, 0, 0, 0, location)
+	if date.Before(startOfToday) {
+		return fmt.Errorf("Collection date cannot be in the past")
+	}
+	return nil
+}
+
+func normalizeTradeMeetupDateTime(tr *models.Trade) {
+	if tr == nil {
+		return
+	}
+	normalize := func(raw string) (string, string) {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			return "", ""
+		}
+		cleanClock := func(value string) string {
+			value = strings.TrimSpace(value)
+			if len(value) == 8 && strings.HasSuffix(value, ":00") {
+				return value[:5]
+			}
+			return value
+		}
+		if strings.Contains(raw, "T") {
+			parts := strings.SplitN(raw, "T", 2)
+			return strings.TrimSpace(parts[0]), cleanClock(parts[1])
+		}
+		fields := strings.Fields(raw)
+		if len(fields) >= 2 {
+			return fields[0], cleanClock(fields[1])
+		}
+		return "", raw
+	}
+
+	date, clock := normalize(tr.MeetupTime)
+	if date == "" {
+		date, _ = normalize(tr.BuyerMeetupTime)
+	}
+	if date == "" {
+		date, _ = normalize(tr.SellerMeetupTime)
+	}
+	if date != "" {
+		tr.MeetupDate = date
+	}
+	if clock != "" {
+		tr.MeetupTime = clock
+	}
 }
 
 const meetupConfirmRadiusMeters = 10.0
@@ -1234,13 +1362,22 @@ func (h *TradeHandler) CreateTrade(c *fiber.Ctx) error {
 		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "This product is no longer available for trading"})
 	}
 
-	var collectionSetupRaw, targetPickupAddress string
+	var collectionSetupRaw, targetPickupAddress, availabilitySlotsRaw, availabilityType string
 	var targetPickupLat, targetPickupLng, targetLat, targetLng sql.NullFloat64
-	_ = h.db.QueryRow(`
+	availabilityType = "flexible"
+	collectionErr := h.db.QueryRow(`
 		SELECT COALESCE(collection_setup, ''), COALESCE(pickup_address, location, ''),
-		       pickup_latitude, pickup_longitude, latitude, longitude
+		       pickup_latitude, pickup_longitude, latitude, longitude,
+		       COALESCE(availability_slots, ''), COALESCE(availability_type, 'flexible')
 		FROM products WHERE id = ?
-	`, payload.TargetProductID).Scan(&collectionSetupRaw, &targetPickupAddress, &targetPickupLat, &targetPickupLng, &targetLat, &targetLng)
+	`, payload.TargetProductID).Scan(&collectionSetupRaw, &targetPickupAddress, &targetPickupLat, &targetPickupLng, &targetLat, &targetLng, &availabilitySlotsRaw, &availabilityType)
+	if collectionErr != nil {
+		_ = h.db.QueryRow(`
+			SELECT COALESCE(collection_setup, ''), COALESCE(pickup_address, location, ''),
+			       pickup_latitude, pickup_longitude, latitude, longitude
+			FROM products WHERE id = ?
+		`, payload.TargetProductID).Scan(&collectionSetupRaw, &targetPickupAddress, &targetPickupLat, &targetPickupLng, &targetLat, &targetLng)
+	}
 	targetCollectionSetup := parseProductCollectionSetup(collectionSetupRaw)
 	meetingType := strings.TrimSpace(payload.MeetingType)
 	if meetingType == "" {
@@ -1263,6 +1400,9 @@ func (h *TradeHandler) CreateTrade(c *fiber.Ctx) error {
 	}
 	if meetupDate == "" || meetupTime == "" {
 		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "Collection date and time are required"})
+	}
+	if err := validateTradeScheduleAgainstAvailability(availabilitySlotsRaw, availabilityType, payload.SelectedAvailabilitySlotID, meetupDate, meetupTime, meetingType); err != nil {
+		return c.Status(400).JSON(models.APIResponse{Success: false, Error: err.Error()})
 	}
 	var meetupLat, meetupLng sql.NullFloat64
 	if meetingType == "pickup" {
@@ -1978,7 +2118,7 @@ func (h *TradeHandler) GetTrades(c *fiber.Ctx) error {
 	}
 
 	query += `,
-          COALESCE(t.meetup_location, '') as meetup_location, COALESCE(t.meetup_label, '') as meetup_label, COALESCE(t.buyer_meetup_confirmed, FALSE) as buyer_meetup_confirmed, COALESCE(t.seller_meetup_confirmed, FALSE) as seller_meetup_confirmed,
+          COALESCE(t.meetup_location, '') as meetup_location, COALESCE(t.meetup_label, '') as meetup_label, COALESCE(t.meetup_time, '') as meetup_time, COALESCE(t.buyer_meetup_confirmed, FALSE) as buyer_meetup_confirmed, COALESCE(t.seller_meetup_confirmed, FALSE) as seller_meetup_confirmed,
           t.meetup_lat, t.meetup_lng,
           COALESCE(t.buyer_meetup_location, '') as buyer_meetup_location, COALESCE(t.buyer_meetup_time, '') as buyer_meetup_time,
           COALESCE(t.seller_meetup_location, '') as seller_meetup_location, COALESCE(t.seller_meetup_time, '') as seller_meetup_time,
@@ -2026,7 +2166,7 @@ func (h *TradeHandler) GetTrades(c *fiber.Ctx) error {
 		var meetupLatNull, meetupLngNull sql.NullFloat64
 		var buyerArrivedAt, sellerArrivedAt, agreedDeadline sql.NullTime
 
-		if err := rows.Scan(&tr.ID, &tr.BuyerID, &tr.SellerID, &tr.TargetProductID, &tr.Status, &tr.Message, &offeredCashNull, &tr.CreatedAt, &tr.UpdatedAt, &tr.BuyerCompleted, &tr.SellerCompleted, &tr.BuyerAccepted, &tr.SellerAccepted, &tr.CompletedAt, &tr.TradeOption, &tr.MeetingType, &tr.DeliveryAddress, &deliveryType, &paymentMethod, &paymentConfirmed, &deliveryInstructions, &proofOfDelivery, &buyerConfirmedReceipt, &sellerConfirmedDelivery, &tr.MeetupLocation, &tr.MeetupLabel, &tr.BuyerMeetupConfirmed, &tr.SellerMeetupConfirmed, &meetupLatNull, &meetupLngNull, &tr.BuyerMeetupLocation, &tr.BuyerMeetupTime, &tr.SellerMeetupLocation, &tr.SellerMeetupTime, &tr.BuyerMet, &tr.SellerMet, &buyerArrivedAt, &sellerArrivedAt, &tr.BuyerWasLate, &tr.SellerWasLate, &tr.LatePenaltyApplied, &tr.BuyerLatePenaltyApplied, &tr.SellerLatePenaltyApplied, &agreedDeadline, &tr.GracePeriodMinutes, &tr.CounteredBy, &tr.ParentTradeID, &tr.BuyerName, &tr.SellerName, &tr.ProductTitle, &pimg, &pimgs, &targetPickupAddr, &targetPickupLat, &targetPickupLng); err == nil {
+		if err := rows.Scan(&tr.ID, &tr.BuyerID, &tr.SellerID, &tr.TargetProductID, &tr.Status, &tr.Message, &offeredCashNull, &tr.CreatedAt, &tr.UpdatedAt, &tr.BuyerCompleted, &tr.SellerCompleted, &tr.BuyerAccepted, &tr.SellerAccepted, &tr.CompletedAt, &tr.TradeOption, &tr.MeetingType, &tr.DeliveryAddress, &deliveryType, &paymentMethod, &paymentConfirmed, &deliveryInstructions, &proofOfDelivery, &buyerConfirmedReceipt, &sellerConfirmedDelivery, &tr.MeetupLocation, &tr.MeetupLabel, &tr.MeetupTime, &tr.BuyerMeetupConfirmed, &tr.SellerMeetupConfirmed, &meetupLatNull, &meetupLngNull, &tr.BuyerMeetupLocation, &tr.BuyerMeetupTime, &tr.SellerMeetupLocation, &tr.SellerMeetupTime, &tr.BuyerMet, &tr.SellerMet, &buyerArrivedAt, &sellerArrivedAt, &tr.BuyerWasLate, &tr.SellerWasLate, &tr.LatePenaltyApplied, &tr.BuyerLatePenaltyApplied, &tr.SellerLatePenaltyApplied, &agreedDeadline, &tr.GracePeriodMinutes, &tr.CounteredBy, &tr.ParentTradeID, &tr.BuyerName, &tr.SellerName, &tr.ProductTitle, &pimg, &pimgs, &targetPickupAddr, &targetPickupLat, &targetPickupLng); err == nil {
 			if meetupLatNull.Valid {
 				tr.MeetupLat = &meetupLatNull.Float64
 			}
@@ -2078,6 +2218,7 @@ func (h *TradeHandler) GetTrades(c *fiber.Ctx) error {
 			}
 
 			tr.Items = []models.TradeItem{}
+			normalizeTradeMeetupDateTime(&tr)
 			trCopy := tr
 			tradePtrs = append(tradePtrs, &trCopy)
 			tradeMap[tr.ID] = &trCopy
@@ -2202,6 +2343,7 @@ func (h *TradeHandler) GetTrades(c *fiber.Ctx) error {
 					}
 				}
 				tr.Items = []models.TradeItem{}
+				normalizeTradeMeetupDateTime(&tr)
 				tradePtrs = append(tradePtrs, &tr)
 				tradeMap[tr.ID] = &tr
 			}
@@ -4289,6 +4431,9 @@ func (h *TradeHandler) GetTrade(c *fiber.Ctx) error {
 	var meetupLatNull, meetupLngNull sql.NullFloat64
 	var buyerArrivedAt, sellerArrivedAt, agreedDeadline sql.NullTime
 	err = h.db.QueryRow(query, tradeID).Scan(&tr.ID, &tr.BuyerID, &tr.SellerID, &tr.TargetProductID, &tr.Status, &tr.Message, &offeredCashNull, &tr.CreatedAt, &tr.UpdatedAt, &tr.BuyerCompleted, &tr.SellerCompleted, &tr.BuyerAccepted, &tr.SellerAccepted, &tr.CompletedAt, &tr.TradeOption, &tr.MeetingType, &tr.DeliveryAddress, &deliveryType, &paymentMethod, &paymentConfirmed, &deliveryInstructions, &proofOfDelivery, &buyerConfirmedReceipt, &sellerConfirmedDelivery, &tr.MeetupLocation, &tr.MeetupLabel, &tr.MeetupTime, &meetupLatNull, &meetupLngNull, &tr.BuyerMeetupConfirmed, &tr.SellerMeetupConfirmed, &tr.BuyerMeetupLocation, &tr.BuyerMeetupTime, &tr.SellerMeetupLocation, &tr.SellerMeetupTime, &tr.BuyerMet, &tr.SellerMet, &buyerArrivedAt, &sellerArrivedAt, &tr.BuyerWasLate, &tr.SellerWasLate, &tr.LatePenaltyApplied, &tr.BuyerLatePenaltyApplied, &tr.SellerLatePenaltyApplied, &agreedDeadline, &tr.GracePeriodMinutes, &tr.CounteredBy, &tr.ParentTradeID, &tr.BuyerName, &tr.SellerName, &tr.ProductTitle, &targetPickupAddr, &targetPickupLat, &targetPickupLng)
+	if err != nil {
+		return c.Status(404).JSON(models.APIResponse{Success: false, Error: "Trade not found"})
+	}
 	if meetupLatNull.Valid {
 		tr.MeetupLat = &meetupLatNull.Float64
 	}
@@ -4326,9 +4471,7 @@ func (h *TradeHandler) GetTrade(c *fiber.Ctx) error {
 	}
 	tr.BuyerConfirmedReceipt = buyerConfirmedReceipt
 	tr.SellerConfirmedDelivery = sellerConfirmedDelivery
-	if err != nil {
-		return c.Status(404).JSON(models.APIResponse{Success: false, Error: "Trade not found"})
-	}
+	normalizeTradeMeetupDateTime(&tr)
 	if userID != tr.BuyerID && userID != tr.SellerID {
 		return c.Status(403).JSON(models.APIResponse{Success: false, Error: "Not authorized for this trade"})
 	}

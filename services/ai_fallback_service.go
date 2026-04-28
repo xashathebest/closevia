@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"mime/multipart"
@@ -22,12 +23,19 @@ type AIAnalysisResult struct {
 // AnalyzeProductWithFallback attempts to analyze product images with Gemini first,
 // and automatically falls back to Groq if Gemini fails due to rate limits or errors
 func AnalyzeProductWithFallback(images []*multipart.FileHeader) (*AIAnalysisResult, error) {
+	return AnalyzeProductWithFallbackContext(context.Background(), images)
+}
+
+func AnalyzeProductWithFallbackContext(ctx context.Context, images []*multipart.FileHeader) (*AIAnalysisResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	result := &AIAnalysisResult{}
 	startTime := time.Now()
 
 	// Step 1: Try Gemini first (primary provider - fastest)
 	log.Printf("🚀 [AI] PRIMARY: Attempting Gemini analysis...")
-	geminiResult, geminiErr := GenerateProductDetails(images)
+	geminiResult, geminiErr := GenerateProductDetailsContext(ctx, images)
 	geminiTimeMs := time.Since(startTime).Milliseconds()
 
 	if geminiErr == nil && geminiResult != nil {
@@ -52,7 +60,7 @@ func AnalyzeProductWithFallback(images []*multipart.FileHeader) (*AIAnalysisResu
 	// Step 3: Fall back to Groq (backup provider)
 	log.Printf("🔄 [AI] FALLBACK: Trying Groq backup provider...")
 	groqStartTime := time.Now()
-	groqResult, groqErr := AnalyzeProductWithGroq(images)
+	groqResult, groqErr := AnalyzeProductWithGroqContext(ctx, images)
 	groqTimeMs := time.Since(groqStartTime).Milliseconds()
 	totalTimeMs := time.Since(startTime).Milliseconds()
 

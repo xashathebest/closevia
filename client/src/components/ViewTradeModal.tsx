@@ -62,8 +62,12 @@ import {
   FiPackage,
 } from 'react-icons/fi'
 import { Circle, MapContainer, Marker, Polyline, Popup, TileLayer, useMap } from 'react-leaflet'
+import { motion, useReducedMotion } from 'framer-motion'
 import 'leaflet/dist/leaflet.css'
 import L from 'leaflet'
+import { motionDurations, motionEasings } from '../utils/motion'
+
+const MotionBox = motion(Box)
 
 // Fix generic leaflet icon
 delete (L.Icon.Default.prototype as any)._getIconUrl
@@ -301,6 +305,7 @@ interface TradeProgressIndicatorProps {
 }
 
 const TradeProgressIndicator: React.FC<TradeProgressIndicatorProps> = ({ trade }) => {
+  const prefersReducedMotion = useReducedMotion()
   const completedBg = useColorModeValue('green.500', 'green.600')
   const activeBg = useColorModeValue('brand.500', 'brand.600')
   const inactiveBg = useColorModeValue('gray.300', 'gray.600')
@@ -388,9 +393,9 @@ const TradeProgressIndicator: React.FC<TradeProgressIndicatorProps> = ({ trade }
           const stepBg = getStepBg(status)
 
           return (
-            <Box key={step.id} flex={1} display="flex" flexDirection="column" alignItems="center" position="relative" zIndex={index + 1}>
+            <MotionBox key={step.id} flex={1} display="flex" flexDirection="column" alignItems="center" position="relative" zIndex={index + 1} layout>
               {/* Step Circle */}
-              <Box
+              <MotionBox
                 w="36px"
                 h="36px"
                 borderRadius="full"
@@ -399,12 +404,16 @@ const TradeProgressIndicator: React.FC<TradeProgressIndicatorProps> = ({ trade }
                 display="flex"
                 alignItems="center"
                 justifyContent="center"
-                transition="all 0.3s cubic-bezier(0.4, 0, 0.2, 1)"
                 boxShadow={status === 'active' ? `0 0 0 3px ${activeRingColor}` : 'none'}
                 flexShrink={0}
+                animate={prefersReducedMotion ? undefined : {
+                  scale: status === 'active' ? [1, 1.06, 1] : 1,
+                  opacity: status === 'inactive' ? 0.72 : 1,
+                }}
+                transition={{ duration: 0.36, ease: motionEasings.easeOut }}
               >
                 <Icon as={step.icon} boxSize="4" />
-              </Box>
+              </MotionBox>
 
               {/* Step Label */}
               <Text
@@ -419,7 +428,7 @@ const TradeProgressIndicator: React.FC<TradeProgressIndicatorProps> = ({ trade }
               >
                 {step.label}
               </Text>
-            </Box>
+            </MotionBox>
           )
         })}
 
@@ -432,13 +441,16 @@ const TradeProgressIndicator: React.FC<TradeProgressIndicatorProps> = ({ trade }
             const lineColor = status === 'completed' ? completedBg : lineInactiveColor
 
             return (
-              <Box
+              <MotionBox
                 key={`line-${index}`}
                 flex={1}
                 h="1.5px"
                 bg={lineColor}
-                transition="background-color 0.6s cubic-bezier(0.4, 0, 0.2, 1)"
+                initial={false}
+                animate={{ opacity: status === 'completed' ? 1 : 0.55, scaleX: status === 'completed' ? 1 : 0.96 }}
+                transition={{ duration: motionDurations.uiSlow, ease: motionEasings.easeInOut }}
                 mx={0}
+                transformOrigin="left center"
               />
             )
           })}

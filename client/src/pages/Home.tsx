@@ -537,8 +537,8 @@ const Home: React.FC = () => {
     } catch (error) {
       toast({
         id: "home-error",
-        title: 'Error',
-        description: 'Failed to load offers for this product',
+        title: "Couldn't load offers",
+        description: "Something went wrong fetching offers. Give it a moment and try again.",
         status: 'error',
         duration: 3000,
         isClosable: true,
@@ -1562,7 +1562,7 @@ const Home: React.FC = () => {
               </Box>
               <VStack spacing={2}>
                 <Heading size="lg" color="gray.700">
-                  No products found
+                  Nothing here yet
                 </Heading>
                 <Text color="gray.500" fontSize="lg">
                   {filters.keyword || filters.condition || filters.verified_seller_only || filters.sort_by !== 'most_relevant'

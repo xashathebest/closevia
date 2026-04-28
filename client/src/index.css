@@ -21,10 +21,12 @@
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  interpolate-size: allow-keywords;
 }
 
 * {
   box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
 }
 
 body {
@@ -53,6 +55,67 @@ html, body {
 #root {
   min-height: 100vh;
   overflow-x: hidden;
+}
+
+button,
+a,
+[role="button"] {
+  touch-action: manipulation;
+}
+
+.chakra-modal__content,
+.chakra-modal__overlay,
+.chakra-slide,
+.chakra-collapse,
+[data-motion-safe] {
+  will-change: transform, opacity;
+}
+
+.chakra-skeleton {
+  position: relative;
+  overflow: hidden;
+}
+
+.chakra-skeleton::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.42), transparent);
+  animation: cloviaSkeletonShimmer 1.45s ease-in-out infinite;
+}
+
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 260ms;
+  animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+::view-transition-old(*),
+::view-transition-new(*) {
+  animation-duration: 300ms;
+  animation-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes cloviaSkeletonShimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.001ms !important;
+  }
+
+  .chakra-skeleton::after {
+    animation: none !important;
+  }
 }
 
 /* Toast notification animations */
