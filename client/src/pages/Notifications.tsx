@@ -364,12 +364,23 @@ const Notifications: React.FC = () => {
   const getRedirectPath = useCallback((notification: Notification): string | null => {
     const data = notification.data || {}
 
+    const productId = asPositiveNumber(data.product_id ?? data.target_id ?? data.product?.id)
+    const productSlug = data.product_slug || data.product?.slug
+
+    if (notification.type === 'trade_offer' || notification.type === 'trade_update') {
+      const tradeId = asPositiveNumber(data.trade_id ?? data.target_id)
+      if (tradeId) {
+        return notification.type === 'trade_update'
+          ? `/dashboard?tab=ongoing&trade_id=${tradeId}`
+          : `/offers?trade_id=${tradeId}`
+      }
+      return notification.type === 'trade_update' ? '/dashboard?tab=ongoing' : '/offers'
+    }
+
     if (typeof data.target_url === 'string' && data.target_url.trim()) {
       return data.target_url
     }
 
-    const productId = asPositiveNumber(data.product_id ?? data.target_id ?? data.product?.id)
-    const productSlug = data.product_slug || data.product?.slug
     const pointsToProduct =
       data.target_type === 'product' ||
       notification.type === 'product' ||
@@ -389,15 +400,6 @@ const Notifications: React.FC = () => {
       return null
     }
 
-    if (notification.type === 'trade_offer' || notification.type === 'trade_update') {
-      const tradeId = asPositiveNumber(data.trade_id ?? data.target_id)
-      if (tradeId) {
-        return notification.type === 'trade_update'
-          ? `/dashboard?tab=ongoing&trade_id=${tradeId}`
-          : `/offers/buyout/${tradeId}`
-      }
-      return notification.type === 'trade_update' ? '/dashboard?tab=ongoing' : '/offers/buyout'
-    }
     if (notification.type === 'trade_loop') return '/dashboard?tab=2'
     return null
   }, [products])
@@ -438,7 +440,7 @@ const Notifications: React.FC = () => {
               duration: 4500,
               isClosable: true,
             })
-            navigate(isRejectedOffer ? '/offers/buyout' : '/dashboard?tab=history')
+            navigate(isRejectedOffer ? '/offers' : '/dashboard?tab=history')
             return
           }
         }
@@ -446,7 +448,7 @@ const Notifications: React.FC = () => {
     } catch {
       if (notification.type === 'trade_offer') {
         toast({ id: `notif-offer-stale-${notification.id}`, title: 'Offer no longer available', description: 'This offer may have been declined, canceled, or removed.', status: 'info', duration: 4500, isClosable: true })
-        navigate('/offers/buyout')
+        navigate('/offers')
         return
       }
     }

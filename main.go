@@ -118,6 +118,9 @@ func main() {
 	}
 	appLogger := services.InitLogger()
 	configValidation := services.ValidateStartupConfig()
+	if len(configValidation.Errors) > 0 {
+		log.Fatalf("[STARTUP] configuration validation failed with %d error(s)", len(configValidation.Errors))
+	}
 	pprofServer := startPprofIfEnabled()
 	rootCtx, rootCancel := context.WithCancel(context.Background())
 	defer rootCancel()
@@ -160,7 +163,17 @@ func main() {
 					message = e.Message
 				}
 			}
-			log.Printf("Fiber error handler: %v (path: %s)", err, c.Path())
+			services.Logger().Error("fiber error",
+				"service", "http",
+				"request_id", middleware.RequestIDFromFiber(c),
+				"method", c.Method(),
+				"path", c.Path(),
+				"status", code,
+				"error", err.Error(),
+			)
+			if code >= fiber.StatusInternalServerError {
+				services.RecordBackendError()
+			}
 			return c.Status(code).JSON(fiber.Map{
 				"success":    false,
 				"error":      message,
@@ -202,7 +215,7 @@ func main() {
 		AllowMethods:     "GET, POST, PUT, DELETE, OPTIONS, PATCH",
 		AllowCredentials: true,
 		MaxAge:           3600,
-		ExposeHeaders:    "Content-Length, Content-Type, Authorization",
+		ExposeHeaders:    "Content-Length, Content-Type, Authorization, X-Request-ID",
 	}))
 
 	// Handle preflight requests without registering a wildcard OPTIONS route.

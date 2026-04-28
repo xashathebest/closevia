@@ -95,23 +95,26 @@ const ConnectionStatus: React.FC<ConnectionStatusProps> = ({ showDetails = false
   };
 
   const getLatencyText = () => {
-    if (status.latency === 0) return 'Unknown';
+  if (status.latency === 0) return 'Unknown';
     return `${status.latency}ms`;
   };
+
+  const isHealthy = status.online && status.apiReachable && status.latency <= 2000;
+  if (!showDetails && isHealthy) return null;
 
   return (
     <Box
       position="fixed"
-      top={{ base: 2, md: 4 }}
-      right={{ base: 2, md: 4 }}
+      top={{ base: 3, md: 4 }}
+      right={{ base: 3, md: 4 }}
       zIndex={1000}
       bg={bgColor}
       border="1px"
       borderColor={borderColor}
-      borderRadius="md"
-      px={{ base: 2, md: 3 }}
+      borderRadius="full"
+      px={{ base: 3, md: 3 }}
       py={{ base: 1, md: 2 }}
-      boxShadow="sm"
+      boxShadow="lg"
       maxW={{ base: 'auto', md: 'unset' }}
       fontSize={{ base: 'xs', md: 'sm' }}
     >
@@ -126,7 +129,7 @@ const ConnectionStatus: React.FC<ConnectionStatusProps> = ({ showDetails = false
         {showDetails ? (
           <HStack spacing={2}>
             <Text fontSize="sm" fontWeight="medium">
-              {getStatusText()}
+              {!status.online ? "You're offline" : getStatusText()}
             </Text>
             <Badge
               colorScheme={getStatusColor()}
@@ -138,7 +141,7 @@ const ConnectionStatus: React.FC<ConnectionStatusProps> = ({ showDetails = false
           </HStack>
         ) : (
           <Tooltip
-            label={`${getStatusText()} - Latency: ${getLatencyText()}`}
+            label={!status.online ? "You're offline. We'll use cached pages where possible." : `${getStatusText()} - Latency: ${getLatencyText()}`}
             placement="left"
           >
             <Badge
@@ -147,7 +150,7 @@ const ConnectionStatus: React.FC<ConnectionStatusProps> = ({ showDetails = false
               fontSize="xs"
               cursor="pointer"
             >
-              {getLatencyText()}
+              {!status.online ? "You're offline" : getStatusText()}
             </Badge>
           </Tooltip>
         )}

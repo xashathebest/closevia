@@ -42,6 +42,7 @@ type JobQueue struct {
 	stopped     atomic.Bool
 	totalDone   atomic.Int64
 	totalFail   atomic.Int64
+	totalDrop   atomic.Int64
 	workerCount int
 }
 
@@ -53,6 +54,7 @@ type WorkerQueueStats struct {
 	QueueCapacity int   `json:"queue_capacity"`
 	TotalDone     int64 `json:"total_done"`
 	TotalFail     int64 `json:"total_fail"`
+	TotalDropped  int64 `json:"total_dropped"`
 }
 
 var DefaultQueue *JobQueue
@@ -108,12 +110,14 @@ func (q *JobQueue) Stop() {
 func (q *JobQueue) Enqueue(job *Job) bool {
 	if job == nil || job.Handler == nil {
 		log.Printf("[WorkerQueue] Dropping invalid job")
+		q.totalDrop.Add(1)
 		return false
 	}
 	q.sendMu.RLock()
 	defer q.sendMu.RUnlock()
 	if q.stopped.Load() {
 		log.Printf("[WorkerQueue] Queue stopped, dropping job %s (%s)", job.ID, job.Type)
+		q.totalDrop.Add(1)
 		return false
 	}
 	if job.MaxRetry < 0 {
@@ -124,6 +128,7 @@ func (q *JobQueue) Enqueue(job *Job) bool {
 		return true
 	default:
 		log.Printf("[WorkerQueue] Buffer full, dropping job %s (%s)", job.ID, job.Type)
+		q.totalDrop.Add(1)
 		return false
 	}
 }
@@ -157,6 +162,7 @@ func (q *JobQueue) Health() WorkerQueueStats {
 		QueueCapacity: cap(q.jobs),
 		TotalDone:     q.totalDone.Load(),
 		TotalFail:     q.totalFail.Load(),
+		TotalDropped:  q.totalDrop.Load(),
 	}
 }
 

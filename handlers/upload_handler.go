@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,29 +28,39 @@ func NewUploadHandler() *UploadHandler {
 func (h *UploadHandler) UploadImage(c *fiber.Ctx) error {
 	file, err := c.FormFile("image")
 	if err != nil {
+		services.Logger().Warn("upload rejected missing file", "service", "upload", "request_id", middleware.RequestIDFromFiber(c), "error", err.Error())
 		return c.Status(400).JSON(fiber.Map{
 			"success": false,
 			"error":   "No image file provided. Use field name 'image'.",
 		})
 	}
 
-	// Validate file type
+	// Validate file type with both headers and magic bytes. Extension is only
+	// a final mobile-browser compatibility fallback.
 	contentType := file.Header.Get("Content-Type")
-	if !strings.HasPrefix(contentType, "image/") {
-		// Fallback: check extension
-		name := strings.ToLower(file.Filename)
-		if !strings.HasSuffix(name, ".jpg") && !strings.HasSuffix(name, ".jpeg") &&
-			!strings.HasSuffix(name, ".png") && !strings.HasSuffix(name, ".gif") &&
-			!strings.HasSuffix(name, ".webp") {
-			return c.Status(400).JSON(fiber.Map{
-				"success": false,
-				"error":   "File must be an image (jpg, png, gif, webp)",
-			})
+	detectedType := ""
+	if opened, openErr := file.Open(); openErr == nil {
+		defer opened.Close()
+		buf := make([]byte, 512)
+		if n, readErr := opened.Read(buf); readErr == nil && n > 0 {
+			detectedType = http.DetectContentType(buf[:n])
 		}
+	}
+	name := strings.ToLower(file.Filename)
+	allowedExt := strings.HasSuffix(name, ".jpg") || strings.HasSuffix(name, ".jpeg") ||
+		strings.HasSuffix(name, ".png") || strings.HasSuffix(name, ".gif") ||
+		strings.HasSuffix(name, ".webp")
+	if (!strings.HasPrefix(contentType, "image/") && !strings.HasPrefix(detectedType, "image/")) || !allowedExt {
+		services.Logger().Warn("upload rejected invalid type", "service", "upload", "request_id", middleware.RequestIDFromFiber(c), "filename", file.Filename, "content_type", contentType, "detected_type", detectedType)
+		return c.Status(400).JSON(fiber.Map{
+			"success": false,
+			"error":   "File must be an image (jpg, png, gif, webp)",
+		})
 	}
 
 	// Validate file size (max 10MB)
 	if file.Size > 10*1024*1024 {
+		services.Logger().Warn("upload rejected too large", "service", "upload", "request_id", middleware.RequestIDFromFiber(c), "filename", file.Filename, "size", file.Size)
 		return c.Status(400).JSON(fiber.Map{
 			"success": false,
 			"error":   "Image must be smaller than 10MB",
@@ -69,7 +80,15 @@ func (h *UploadHandler) UploadImage(c *fiber.Ctx) error {
 	case "delivery_proof":
 		folder = "delivery-proofs"
 	default:
-		folder = uploadType
+		folder = strings.Trim(strings.Map(func(r rune) rune {
+			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+				return r
+			}
+			return '-'
+		}, uploadType), "-")
+		if folder == "" {
+			folder = "uploads"
+		}
 	}
 
 	fmt.Printf("📤 [Upload] file=%s size=%d type=%s folder=%s\n", file.Filename, file.Size, uploadType, folder)

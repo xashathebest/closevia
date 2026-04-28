@@ -28,6 +28,7 @@ import ErrorBoundary from './components/ErrorBoundary'
 import ToastNotification from './components/ToastNotification'
 import SessionTimeoutManager from './components/SessionTimeoutManager'
 import PullToRefresh from './components/PullToRefresh'
+import ConnectionStatus from './components/ConnectionStatus'
 
 // Theme applier component - loads and applies saved theme preference
 const ThemeApplier: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -376,6 +377,7 @@ function App() {
                   <Router future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
                     <ErrorBoundary>
                       <SessionTimeoutManager />
+                      <ConnectionStatus />
                       <PullToRefresh>
                         <AppContent />
                       </PullToRefresh>

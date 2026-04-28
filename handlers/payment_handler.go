@@ -17,6 +17,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/xashathebest/clovia/middleware"
 	"github.com/xashathebest/clovia/models"
+	"github.com/xashathebest/clovia/services"
 	xendit "github.com/xendit/xendit-go/v3"
 	"github.com/xendit/xendit-go/v3/invoice"
 )
@@ -1483,14 +1484,16 @@ func (h *PaymentHandler) SyncRemittancePayment(c *fiber.Ctx) error {
 
 // XenditWebhook handles asynchronous payment confirmations.
 func (h *PaymentHandler) XenditWebhook(c *fiber.Ctx) error {
+	requestID := middleware.RequestIDFromFiber(c)
 	if !validateXenditWebhookToken(c) {
-		log.Printf("Webhook rejected: invalid or missing %s", xenditWebhookTokenHeader)
+		services.Logger().Warn("xendit webhook rejected", "service", "payments", "request_id", requestID, "reason", "invalid_callback_token")
 		return c.SendStatus(401)
 	}
 
 	var payload map[string]interface{}
 	if err := c.BodyParser(&payload); err != nil {
-		log.Printf("Webhook Error: invalid payload: %v", err)
+		services.Logger().Error("xendit webhook invalid payload", "service", "payments", "request_id", requestID, "error", err)
+		services.RecordBackendError()
 		return c.Status(400).SendString("Invalid payload")
 	}
 
@@ -1521,10 +1524,10 @@ func (h *PaymentHandler) XenditWebhook(c *fiber.Ctx) error {
 
 	status = strings.ToUpper(strings.TrimSpace(status))
 	externalID = strings.TrimSpace(externalID)
-	log.Printf("Webhook Received: Status=%s, ExternalID=%s, Amount=%.2f", status, externalID, amount)
+	services.Logger().Info("xendit webhook received", "service", "payments", "request_id", requestID, "status", status, "external_id", externalID, "amount", amount)
 
 	if externalID == "" {
-		log.Printf("Webhook ignored: missing external_id")
+		services.Logger().Warn("xendit webhook ignored", "service", "payments", "request_id", requestID, "reason", "missing_external_id")
 		return c.SendStatus(200)
 	}
 
@@ -1534,12 +1537,12 @@ func (h *PaymentHandler) XenditWebhook(c *fiber.Ctx) error {
 				_, _ = h.db.Exec("UPDATE rider_remittance_payments SET status = 'rejected' WHERE id = ? AND rider_id = ? AND status = 'pending'", paymentID, riderID)
 			}
 		}
-		log.Printf("Webhook ignored terminal non-success status: %s", status)
+		services.Logger().Info("xendit webhook ignored terminal non-success", "service", "payments", "request_id", requestID, "status", status, "external_id", externalID)
 		return c.SendStatus(200)
 	}
 
 	if !isSuccessfulXenditPaymentStatus(status) {
-		log.Printf("Webhook ignored non-success status: %s", status)
+		services.Logger().Info("xendit webhook ignored non-success", "service", "payments", "request_id", requestID, "status", status, "external_id", externalID)
 		return c.SendStatus(200)
 	}
 
@@ -1553,27 +1556,31 @@ func (h *PaymentHandler) XenditWebhook(c *fiber.Ctx) error {
 
 		tx, err := h.db.Begin()
 		if err != nil {
-			log.Printf("Webhook Error: failed to begin trade tx %d: %v", tradeID, err)
+			services.RecordBackendError()
+			services.Logger().Error("xendit webhook trade tx begin failed", "service", "payments", "request_id", requestID, "trade_id", tradeID, "error", err)
 			return c.SendStatus(200)
 		}
 		var buyerID int
 		if err = tx.QueryRow("SELECT buyer_id FROM trades WHERE id = ? FOR UPDATE", tradeID).Scan(&buyerID); err != nil {
 			_ = tx.Rollback()
-			log.Printf("Webhook Error: trade not found %d: %v", tradeID, err)
+			services.Logger().Warn("xendit webhook trade not found", "service", "payments", "request_id", requestID, "trade_id", tradeID, "error", err)
 			return c.SendStatus(200)
 		}
 		if _, err = tx.Exec("UPDATE trades SET payment_confirmed = true, payment_method = 'online', net_amount = ?, xendit_external_id = ? WHERE id = ?", amount, externalID, tradeID); err != nil {
 			_ = tx.Rollback()
-			log.Printf("Webhook Error: failed to update trade %d: %v", tradeID, err)
+			services.RecordBackendError()
+			services.Logger().Error("xendit webhook trade update failed", "service", "payments", "request_id", requestID, "trade_id", tradeID, "error", err)
 			return c.SendStatus(200)
 		}
 		if _, err = h.recordEarningOnceTx(tx, buyerID, amount, "trade_escrow", tradeID, externalID); err != nil {
 			_ = tx.Rollback()
-			log.Printf("Webhook Error: failed to record trade earning %d: %v", tradeID, err)
+			services.RecordBackendError()
+			services.Logger().Error("xendit webhook trade earning failed", "service", "payments", "request_id", requestID, "trade_id", tradeID, "error", err)
 			return c.SendStatus(200)
 		}
 		if err = tx.Commit(); err != nil {
-			log.Printf("Webhook Error: failed to commit trade tx %d: %v", tradeID, err)
+			services.RecordBackendError()
+			services.Logger().Error("xendit webhook trade tx commit failed", "service", "payments", "request_id", requestID, "trade_id", tradeID, "error", err)
 		}
 
 	case strings.HasPrefix(externalID, "premium_"):
@@ -1666,7 +1673,10 @@ func (h *PaymentHandler) XenditWebhook(c *fiber.Ctx) error {
 		}
 
 	default:
-		log.Printf("Webhook ignored: unsupported external_id prefix: %s", externalID)
+		// Release safety: this app accepts incoming invoice payments only. Unknown
+		// prefixes, including payout/withdrawal/disbursement-style callbacks, are
+		// ignored and logged for admin investigation.
+		services.Logger().Warn("xendit webhook ignored unsupported external_id", "service", "payments", "request_id", requestID, "external_id", externalID)
 	}
 
 	return c.SendStatus(200)

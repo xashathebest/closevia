@@ -204,6 +204,7 @@ interface AdminStats {
   revenue_breakdown: Array<{ period: string; amount: number }>;
   revenue_by_source?: Record<string, number>;
   recent_activity: Array<{ action: string; count: number; latest: string }>;
+  monitoring_summary?: Record<string, number>;
   last_updated: string;
 }
 
@@ -3463,6 +3464,21 @@ const AdminDashboard: React.FC = () => {
         <MetricCard icon={FiServer} color="purple" label="Storage Used" value={`${(stats!.storage_usage_mb || 0).toFixed(1)} MB`} raw />
         <MetricCard icon={FiShield} color="brand" label="Pending Verifications" value={stats!.pending_verifications ?? 0} />
       </SimpleGrid>
+
+      <Card bg={cardBg} border="1px solid" borderColor={borderColor} borderRadius="xl">
+        <CardHeader>
+          <HStack><Icon as={FiAlertCircle} color="orange.500" boxSize={5} /><Heading size="sm" color={textColor}>Release Monitoring</Heading></HStack>
+        </CardHeader>
+        <CardBody>
+          <SimpleGrid columns={{ base: 1, md: 2, lg: 5 }} spacing={4}>
+            <MetricCard icon={FiShield} color="rose" label="Reported Users/Items" value={stats!.monitoring_summary?.reported_users_items ?? stats!.reports_filed} />
+            <MetricCard icon={FiRefreshCw} color="orange" label="Stuck Trades" value={stats!.monitoring_summary?.stuck_trades ?? 0} />
+            <MetricCard icon={FiDollarSign} color="red" label="Failed Payments" value={stats!.monitoring_summary?.failed_payments ?? 0} />
+            <MetricCard icon={FiAlertTriangle} color="yellow" label="Suspicious Users" value={stats!.monitoring_summary?.suspicious_users ?? stats!.suspended_users} />
+            <MetricCard icon={FiServer} color="purple" label="Recent Backend Errors" value={stats!.monitoring_summary?.recent_errors ?? 0} />
+          </SimpleGrid>
+        </CardBody>
+      </Card>
 
       <Card bg={cardBg} border="1px solid" borderColor={borderColor} borderRadius="xl">
         <CardHeader>

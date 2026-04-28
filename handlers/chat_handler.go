@@ -6,6 +6,7 @@ import (
 	"log"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -33,6 +34,8 @@ var userStreams = struct {
 	sync.RWMutex
 	m map[int][]chan []byte
 }{m: make(map[int][]chan []byte)}
+
+var sseDroppedEvents atomic.Int64
 
 var sseShutdown = struct {
 	sync.Once
@@ -138,6 +141,7 @@ func SSEStats() map[string]int {
 	return map[string]int{
 		"active_users":   activeUsers,
 		"active_streams": activeStreams,
+		"dropped_events": int(sseDroppedEvents.Load()),
 	}
 }
 
@@ -158,6 +162,8 @@ func publishToUser(userID int, evt sseEvent) {
 		select {
 		case ch <- payload:
 		default:
+			sseDroppedEvents.Add(1)
+			log.Printf("[SSE] dropped event for user %d type=%s: stream buffer full", userID, evt.Type)
 		}
 	}
 }
