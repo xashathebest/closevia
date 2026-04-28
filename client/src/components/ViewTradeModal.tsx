@@ -143,6 +143,33 @@ const getDistanceStatusMessage = (distanceM: number, pointLabel: string) => {
   return `You are ${Math.round(distanceM)}m away from the ${pointLabel}.`
 }
 
+const parseLatLngString = (value?: string | null): { lat: number; lng: number } | null => {
+  if (!value) return null
+  const parts = value.split(',').map(Number)
+  if (parts.length !== 2 || !Number.isFinite(parts[0]) || !Number.isFinite(parts[1])) return null
+  return { lat: parts[0], lng: parts[1] }
+}
+
+const approximatePoint = (point: { lat: number; lng: number } | null, offset = 0) => {
+  if (!point) return null
+  return {
+    lat: Math.round((point.lat + offset) * 1000) / 1000,
+    lng: Math.round((point.lng - offset) * 1000) / 1000,
+  }
+}
+
+const formatTrackingDistance = (meters: number | null) => {
+  if (meters === null) return 'Distance pending'
+  if (meters < 1000) return `${Math.round(meters)} m`
+  return `${(meters / 1000).toFixed(1)} km`
+}
+
+const estimateTravelWindow = (meters: number | null) => {
+  if (meters === null) return 'ETA pending'
+  const minutes = Math.max(2, Math.round(meters / 67))
+  return `${Math.max(1, minutes - 4)}-${minutes + 6} mins`
+}
+
 const parseTradeDateTime = (value?: string | null): Date | null => {
   if (!value) return null
   const trimmed = value.trim()
@@ -1229,6 +1256,7 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
   const [geoMessage, setGeoMessage] = useState<string | null>(null)
   const [geoPermissionDenied, setGeoPermissionDenied] = useState(false)
   const [pickupRouteCoords, setPickupRouteCoords] = useState<Array<[number, number]>>([])
+  const [trackingSheetSnap, setTrackingSheetSnap] = useState<'collapsed' | 'half' | 'full'>('half')
   const [arrivalClockNow, setArrivalClockNow] = useState(() => Date.now())
   const [confirmingMeetupDone, setConfirmingMeetupDone] = useState(false)
   const [isReviewModalOpen, setIsReviewModalOpen] = useState(false)
@@ -1767,6 +1795,31 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
   const tradingPartner = isUserBuyer
     ? trade?.seller_name || `User #${trade?.seller_id}`
     : trade?.buyer_name || `User #${trade?.buyer_id}`
+
+  const buyerApproxPoint = approximatePoint(parseLatLngString(trade?.buyer_location), 0.0004)
+  const sellerApproxPoint = approximatePoint(parseLatLngString(trade?.seller_location), -0.0004)
+  const currentApproxPoint = approximatePoint(userGeoPoint ? { lat: userGeoPoint.lat, lng: userGeoPoint.lng } : null)
+  const meetupTrackingPoint = isPickupTrade ? pickupPoint : meetupPoint
+  const trackingCenter = meetupTrackingPoint || currentApproxPoint || buyerApproxPoint || sellerApproxPoint || { lat: 6.9214, lng: 122.0790 }
+  const trackingRoute = (pickupRouteCoords.length > 1 && isPickupTrade)
+    ? pickupRouteCoords
+    : currentApproxPoint && meetupTrackingPoint
+      ? [[currentApproxPoint.lat, currentApproxPoint.lng], [meetupTrackingPoint.lat, meetupTrackingPoint.lng]] as Array<[number, number]>
+      : []
+  const trackingMapPoints = [
+    ...(meetupTrackingPoint ? [[meetupTrackingPoint.lat, meetupTrackingPoint.lng] as [number, number]] : []),
+    ...(currentApproxPoint ? [[currentApproxPoint.lat, currentApproxPoint.lng] as [number, number]] : []),
+    ...(buyerApproxPoint ? [[buyerApproxPoint.lat, buyerApproxPoint.lng] as [number, number]] : []),
+    ...(sellerApproxPoint ? [[sellerApproxPoint.lat, sellerApproxPoint.lng] as [number, number]] : []),
+  ]
+  const trackingDistanceM = meetupDistanceM
+  const trackingEtaLabel = estimateTravelWindow(trackingDistanceM)
+  const trackingDistanceLabel = formatTrackingDistance(trackingDistanceM)
+  const trackingSheetHeight = trackingSheetSnap === 'full'
+    ? '82%'
+    : trackingSheetSnap === 'half'
+      ? '50%'
+      : '168px'
 
   const resolveAvatarSrc = (raw?: string | null): string | undefined => {
     if (!raw) return undefined
@@ -3136,7 +3189,7 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
                     </Badge>
                   )}
                 </Tab>
-                <Tab px={5} fontWeight="600">Details</Tab>
+                <Tab px={5} fontWeight="600">{trade?.meeting_type === 'pickup' ? 'Pickup' : 'Tracking'}</Tab>
               </TabList>
 
               <TabPanels
@@ -3804,8 +3857,8 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
                   </Box>
                 </TabPanel>
 
-                {/* Meetup/Delivery Tab */}
-                <TabPanel px={[0, 2]} flex={1} overflowY="auto" display="flex" flexDirection="column">
+                {/* Tracking/Delivery Tab */}
+                <TabPanel p={0} flex={1} overflow="hidden" display="flex" flexDirection="column">
                   {trade?.trade_option === 'delivery' ? (
                     <DeliveryTab
                       deliveryState={deliveryState}
@@ -3829,7 +3882,136 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
                       linkedDeliveries={linkedDeliveries}
                     />
                   ) : (
-                    <VStack spacing={6} align="stretch">
+                    <Box position="relative" flex={1} minH={{ base: '68vh', md: '72vh' }} overflow="hidden" bg="gray.100" borderRadius={{ base: 'xl', md: '2xl' }}>
+                      <Box position="absolute" inset={0}>
+                        <MapContainer
+                          key={`tracking-${mapInitKey}`}
+                          center={[trackingCenter.lat, trackingCenter.lng]}
+                          zoom={16}
+                          style={{ height: '100%', width: '100%' }}
+                          scrollWheelZoom
+                        >
+                          <ModalMapFix />
+                          {trackingMapPoints.length > 1 && <FitBounds points={trackingMapPoints} />}
+                          <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+                          {meetupTrackingPoint && (
+                            <>
+                              <Circle
+                                center={[meetupTrackingPoint.lat, meetupTrackingPoint.lng]}
+                                radius={MEETUP_CONFIRM_RADIUS_M}
+                                pathOptions={{ color: '#16A34A', fillColor: '#BBF7D0', fillOpacity: 0.28, weight: 3 }}
+                              />
+                              <Marker position={[meetupTrackingPoint.lat, meetupTrackingPoint.lng]}>
+                                <Popup>{isPickupTrade ? 'Pickup point' : 'Meetup point'}</Popup>
+                              </Marker>
+                            </>
+                          )}
+                          {trackingRoute.length > 1 && (
+                            <Polyline positions={trackingRoute} pathOptions={{ color: '#2563EB', weight: 5, opacity: 0.82 }} />
+                          )}
+                          {currentApproxPoint && (
+                            <Circle
+                              center={[currentApproxPoint.lat, currentApproxPoint.lng]}
+                              radius={70}
+                              pathOptions={{ color: '#2563EB', fillColor: '#DBEAFE', fillOpacity: 0.34, weight: 2 }}
+                            >
+                              <Popup>Your approximate location</Popup>
+                            </Circle>
+                          )}
+                          {buyerApproxPoint && (
+                            <Circle
+                              center={[buyerApproxPoint.lat, buyerApproxPoint.lng]}
+                              radius={90}
+                              pathOptions={{ color: '#7C3AED', fillColor: '#EDE9FE', fillOpacity: 0.28, weight: 2 }}
+                            >
+                              <Popup>User A approximate location</Popup>
+                            </Circle>
+                          )}
+                          {sellerApproxPoint && (
+                            <Circle
+                              center={[sellerApproxPoint.lat, sellerApproxPoint.lng]}
+                              radius={90}
+                              pathOptions={{ color: '#EA580C', fillColor: '#FFEDD5', fillOpacity: 0.28, weight: 2 }}
+                            >
+                              <Popup>User B approximate location</Popup>
+                            </Circle>
+                          )}
+                        </MapContainer>
+                      </Box>
+
+                      <Box position="absolute" top={3} left={3} right={3} zIndex={500} pointerEvents="none">
+                        <HStack justify="space-between" align="start" spacing={3}>
+                          <Box bg="whiteAlpha.950" borderRadius="xl" px={3} py={2} shadow="lg" maxW="70%">
+                            <Text fontSize="xs" fontWeight="900" color="gray.500" textTransform="uppercase">
+                              {isPickupTrade ? 'Pickup tracking' : 'Meetup tracking'}
+                            </Text>
+                            <Text fontSize="sm" fontWeight="800" color="gray.800" noOfLines={1}>{meetupDisplayLabel}</Text>
+                            <Text fontSize="xs" color="gray.600">Approximate locations only</Text>
+                          </Box>
+                          <VStack spacing={2} align="stretch" pointerEvents="auto">
+                            <HStack bg="whiteAlpha.950" borderRadius="full" px={3} py={2} shadow="lg" spacing={3}>
+                              <Text fontSize="xs" fontWeight="800" color="gray.800">{trackingEtaLabel}</Text>
+                              <Text fontSize="xs" color="gray.500">{trackingDistanceLabel}</Text>
+                            </HStack>
+                            <Button size="xs" colorScheme="green" borderRadius="full" onClick={openGoogleMapsDirections} isDisabled={!meetupTrackingPoint}>
+                              Open in Google Maps
+                            </Button>
+                          </VStack>
+                        </HStack>
+                      </Box>
+
+                      <MotionBox
+                        position="absolute"
+                        left={0}
+                        right={0}
+                        bottom={0}
+                        zIndex={600}
+                        h={trackingSheetHeight}
+                        bg={useColorModeValue('white', 'gray.900')}
+                        borderTopRadius="2xl"
+                        shadow="2xl"
+                        display="flex"
+                        flexDirection="column"
+                        drag="y"
+                        dragConstraints={{ top: 0, bottom: 0 }}
+                        dragElastic={0.08}
+                        onDragEnd={(_, info) => {
+                          if (info.offset.y > 80) setTrackingSheetSnap('collapsed')
+                          else if (info.offset.y < -80) setTrackingSheetSnap('full')
+                          else setTrackingSheetSnap('half')
+                        }}
+                        transition={{ duration: 0.18, ease: 'easeOut' }}
+                      >
+                        <VStack spacing={2} align="stretch" px={4} pt={2} pb={3} borderBottomWidth="1px" borderColor="gray.100" flexShrink={0}>
+                          <Box w="44px" h="5px" bg="gray.300" borderRadius="full" mx="auto" />
+                          <HStack justify="space-between" align="center">
+                            <Box minW={0}>
+                              <Text fontWeight="900" color="gray.800" fontSize="sm">
+                                {bothMetConfirmed ? 'Meetup completed' : userMetConfirmed ? 'Waiting for partner' : meetupLocationVerified ? 'Ready to confirm' : 'Head to the meetup point'}
+                              </Text>
+                              <Text fontSize="xs" color="gray.500" noOfLines={1}>
+                                {geoMessage || 'Confirm unlocks near the highlighted point.'}
+                              </Text>
+                            </Box>
+                            <HStack spacing={1}>
+                              {(['collapsed', 'half', 'full'] as const).map(snap => (
+                                <Button
+                                  key={snap}
+                                  size="xs"
+                                  variant={trackingSheetSnap === snap ? 'solid' : 'ghost'}
+                                  colorScheme="brand"
+                                  onClick={() => setTrackingSheetSnap(snap)}
+                                  borderRadius="full"
+                                >
+                                  {snap === 'collapsed' ? 'Min' : snap === 'half' ? 'Half' : 'Full'}
+                                </Button>
+                              ))}
+                            </HStack>
+                          </HStack>
+                        </VStack>
+
+                        <Box overflowY="auto" px={{ base: 3, md: 5 }} py={4} flex={1}>
+                          <VStack spacing={6} align="stretch">
 
                       {/* ── 1. MY PROPOSAL CARD (proposer's waiting view) ── */}
                       {!meetupAgreed && myMeetupProposal && !incomingMeetupProposal && (
@@ -5147,7 +5329,10 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
                             Change My Selection
                           </Button>
                         )}
-                    </VStack>
+                          </VStack>
+                        </Box>
+                      </MotionBox>
+                    </Box>
                   )}
                 </TabPanel>
               </TabPanels>
