@@ -616,7 +616,7 @@ const AdminDashboard: React.FC = () => {
     try {
       const status = await checkConnectionStatus();
       setConnectionStatus({ online: !!status.online, apiReachable: !!status.apiReachable });
-      setShowConnectionAlert(!status.online || !status.apiReachable);
+      setShowConnectionAlert(!status.online);
     } catch { }
   }, []);
 
@@ -3705,7 +3705,7 @@ const AdminDashboard: React.FC = () => {
             <Collapse in={showConnectionAlert}>
               <Alert status="warning" mt={3} borderRadius="lg">
                 <AlertIcon />
-                <AlertDescription>{!connectionStatus.online ? 'You are offline. Some features may be limited.' : 'API unreachable. Using demo data.'}</AlertDescription>
+                <AlertDescription>You are offline. Some features may be limited.</AlertDescription>
               </Alert>
             </Collapse>
           </Box>

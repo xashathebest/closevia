@@ -291,20 +291,25 @@ export const useTradeHistory = (options: DashboardQueryOptions = {}) => {
   return useQuery({
     queryKey: DASHBOARD_QUERY_KEYS.tradeHistory,
     queryFn: async (): Promise<Trade[]> => {
-      const [tradesRes, loopsRes] = await Promise.all([
+      const [tradesRes, completedLoopsRes, cancelledLoopsRes] = await Promise.all([
         api.get('/api/trades', {
           params: { status: 'completed', include: 'products', limit: 100 }
         }),
         api.get('/api/trades/loops', { params: { status: 'completed' } }).catch(() => ({ data: { data: [] } })),
+        api.get('/api/trades/loops', { params: { status: 'cancelled' } }).catch(() => ({ data: { data: [] } })),
       ])
 
       const trades: Trade[] = Array.isArray(tradesRes.data?.data)
         ? tradesRes.data.data
         : (Array.isArray(tradesRes.data) ? tradesRes.data : [])
 
-      const loops: any[] = Array.isArray(loopsRes.data?.data)
-        ? loopsRes.data.data
-        : (Array.isArray(loopsRes.data) ? loopsRes.data : [])
+      const completedLoops: any[] = Array.isArray(completedLoopsRes.data?.data)
+        ? completedLoopsRes.data.data
+        : (Array.isArray(completedLoopsRes.data) ? completedLoopsRes.data : [])
+      const cancelledLoops: any[] = Array.isArray(cancelledLoopsRes.data?.data)
+        ? cancelledLoopsRes.data.data
+        : (Array.isArray(cancelledLoopsRes.data) ? cancelledLoopsRes.data : [])
+      const loops: any[] = [...completedLoops, ...cancelledLoops]
 
       // Resolve the current user's ID so we can shape each loop from their perspective.
       let storedUserId = Number(localStorage.getItem('userId') || 0)
@@ -319,10 +324,15 @@ export const useTradeHistory = (options: DashboardQueryOptions = {}) => {
       const loopTrades: Trade[] = loops.flatMap((loop: any) => {
         const participants: any[] = Array.isArray(loop?.participants) ? loop.participants : []
         const me = participants.find((p: any) => Number(p?.user_id ?? p?.id) === storedUserId)
-        if (!me?.is_reviewed) return []
+        const loopStatus = String(loop?.status || '').toLowerCase()
+        const isClosedIncomplete = ['rejected', 'cancelled', 'cancelled_due_to_conflict', 'broken', 'expired', 'user3_declined'].includes(loopStatus)
+        if (!me || (!me?.is_reviewed && !isClosedIncomplete)) return []
         // Partner = who received my offered product (i.e. who wanted it).
         const partner = participants.find((p: any) => Number(p?.wanted_product_id) === Number(me?.product_id)) || participants.find((p: any) => Number(p?.user_id ?? p?.id) !== storedUserId) || {}
         const completedAt: string = loop?.completed_at || loop?.updated_at || new Date().toISOString()
+        const syntheticStatus = isClosedIncomplete
+          ? (loopStatus === 'expired' || loopStatus === 'broken' ? 'expired' : 'cancelled')
+          : 'completed'
 
         return [{
           // Negative synthetic id to avoid collision with real trade IDs.
@@ -333,7 +343,7 @@ export const useTradeHistory = (options: DashboardQueryOptions = {}) => {
           target_product_id: Number(me?.wanted_product_id || 0),
           product_title: String(me?.wanted_title || ''),
           product_image_url: String(partner?.product_image_url || ''),
-          status: 'completed',
+          status: syntheticStatus,
           created_at: completedAt,
           updated_at: completedAt,
           completed_at: completedAt,
@@ -344,10 +354,16 @@ export const useTradeHistory = (options: DashboardQueryOptions = {}) => {
           trade_option: 'meetup',
           // Extra context for loop-aware renderers (non-Trade fields are permissive here).
           ...({
+            trade_type: 'multiway',
             loop_id: loop?.loop_id,
+            chain_id: loop?.chain_id,
+            loop_type: loop?.loop_type,
             loop_length: loop?.loop_length,
             is_trade_loop: true,
+            is_multiway: true,
             participants,
+            edges: Array.isArray(loop?.edges) ? loop.edges : [],
+            loop_status: loop?.status,
             user_reviewed: true,
             fully_completed: participants.length > 0 && participants.every((p: any) => Boolean(p?.is_reviewed)),
           } as any),

@@ -76,20 +76,17 @@ const ConnectionStatus: React.FC<ConnectionStatusProps> = ({ showDetails = false
 
   const getStatusColor = () => {
     if (!status.online) return 'red';
-    if (!status.apiReachable) return 'orange';
     if (status.latency > 2000) return 'yellow';
     return 'green';
   };
 
   const getStatusIcon = () => {
     if (!status.online) return FiWifiOff;
-    if (!status.apiReachable) return FiServer;
     return FiWifi;
   };
 
   const getStatusText = () => {
     if (!status.online) return 'Offline';
-    if (!status.apiReachable) return 'API Unreachable';
     if (status.latency > 2000) return 'Slow Connection';
     return 'Connected';
   };
@@ -99,7 +96,7 @@ const ConnectionStatus: React.FC<ConnectionStatusProps> = ({ showDetails = false
     return `${status.latency}ms`;
   };
 
-  const isHealthy = status.online && status.apiReachable && status.latency <= 2000;
+  const isHealthy = status.online && status.latency <= 2000;
   if (!showDetails && isHealthy) return null;
 
   return (

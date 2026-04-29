@@ -1920,6 +1920,145 @@ const Dashboard: React.FC = () => {
   const [tradeHistorySearch, setTradeHistorySearch] = useState('')
   const [tradeHistorySort, setTradeHistorySort] = useState<'newest' | 'oldest'>('newest')
   const [tradeHistoryPage, setTradeHistoryPage] = useState(1)
+  const [multiwayDetailsTrade, setMultiwayDetailsTrade] = useState<Trade | null>(null)
+
+  const isMultiwayHistoryTrade = useCallback((trade: Trade) => {
+    const raw = trade as any
+    return String(raw.trade_type || '').toLowerCase() === 'multiway' ||
+      raw.is_multiway ||
+      raw.is_trade_loop ||
+      Array.isArray(raw.participants) && raw.participants.length >= 3 ||
+      String(raw.loop_type || '').includes('multiway')
+  }, [])
+
+  const getMultiwaySummary = useCallback((trade: Trade) => {
+    const raw = trade as any
+    const participants = (Array.isArray(raw.participants) ? raw.participants : [])
+      .slice()
+      .sort((a: any, b: any) => Number(a?.position_in_loop ?? 0) - Number(b?.position_in_loop ?? 0))
+    const currentUserID = Number(user?.id || 0)
+    const currentIndex = participants.findIndex((p: any) => Number(p?.user_id ?? p?.id) === currentUserID)
+    const current = currentIndex >= 0 ? participants[currentIndex] : participants[0]
+    const previous = currentIndex >= 0 && participants.length > 0
+      ? participants[(currentIndex - 1 + participants.length) % participants.length]
+      : null
+    const next = currentIndex >= 0 && participants.length > 0
+      ? participants[(currentIndex + 1) % participants.length]
+      : null
+    const gave = current?.product_title || getProductTitle(trade.target_product_id, trade.product_title)
+    const received = current?.wanted_title || previous?.product_title || getTradeReceivedTitle(trade)
+    const statusRaw = String(raw.loop_status || trade.status || '').toLowerCase()
+    const statusLabel = statusRaw === 'completed' || statusRaw === 'history' || trade.status === 'completed'
+      ? 'Completed'
+      : statusRaw === 'cancelled' || statusRaw === 'cancelled_due_to_conflict'
+        ? 'Cancelled'
+        : statusRaw === 'broken' || statusRaw === 'expired' || trade.status === 'expired'
+          ? 'Failed'
+          : getTradeStatusLabel(trade)
+    const loopCount = Number(raw.loop_length || raw.participant_count || participants.length || 3)
+    return {
+      participants,
+      current,
+      next,
+      gave,
+      received,
+      statusLabel,
+      loopCount,
+      where: getTradeWhere(trade),
+      when: getTradeWhen(trade),
+      completedAt: trade.completed_at || trade.updated_at || trade.created_at,
+      edges: Array.isArray(raw.edges) ? raw.edges : [],
+    }
+  }, [getProductTitle, getTradeReceivedTitle, getTradeStatusLabel, getTradeWhen, getTradeWhere, user?.id])
+
+  const MultiwayHistorySummaryCard = ({ trade, compact = false }: { trade: Trade; compact?: boolean }) => {
+    const summary = getMultiwaySummary(trade)
+    const statusScheme = summary.statusLabel === 'Completed' ? 'green' : summary.statusLabel === 'Cancelled' ? 'orange' : 'red'
+    const completedDate = new Date(summary.completedAt)
+    const niceCompleted = Number.isNaN(completedDate.getTime())
+      ? summary.when.date
+      : completedDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+    return (
+      <Box
+        bg={useColorModeValue('green.50', 'gray.800')}
+        borderWidth="1px"
+        borderColor={useColorModeValue('green.200', 'green.700')}
+        borderRadius="2xl"
+        p={{ base: 4, md: 5 }}
+        boxShadow="0 4px 14px rgba(29, 158, 117, 0.10)"
+      >
+        <VStack align="stretch" spacing={3}>
+          <HStack justify="space-between" align="start" spacing={3}>
+            <HStack spacing={3} minW={0}>
+              <Box p={2.5} borderRadius="xl" bg="white" color="green.600" boxShadow="sm">
+                <Icon as={FaExchangeAlt} boxSize={4} />
+              </Box>
+              <Box minW={0}>
+                <HStack spacing={2} flexWrap="wrap">
+                  <Badge colorScheme="purple" borderRadius="full" px={2}>Multiway Trade</Badge>
+                  <Badge colorScheme={statusScheme} borderRadius="full" px={2}>{summary.statusLabel}</Badge>
+                  <Badge colorScheme="green" variant="outline" borderRadius="full" px={2}>{summary.loopCount}-way trade</Badge>
+                </HStack>
+                <Text fontWeight="800" color="gray.800" fontSize={{ base: 'sm', md: 'md' }} mt={1}>
+                  You gave {summary.gave || 'an item'} and received {summary.received || 'an item'}
+                </Text>
+              </Box>
+            </HStack>
+            <Text fontSize="xs" color="gray.500" whiteSpace="nowrap">{niceCompleted}</Text>
+          </HStack>
+
+          <HStack spacing={2} overflowX="auto" py={1}>
+            {summary.participants.map((p: any, i: number) => {
+              const isCurrent = Number(p?.user_id ?? p?.id) === Number(user?.id || 0)
+              return (
+                <HStack key={`${p?.user_id || p?.id || i}-${i}`} spacing={2} flexShrink={0}>
+                  <VStack spacing={1}>
+                    <Avatar size="sm" name={p?.user_name || `User ${i + 1}`} src={getImageUrl(p?.profile_picture || p?.avatar || '')} borderWidth={isCurrent ? '2px' : '1px'} borderColor={isCurrent ? 'green.500' : 'gray.200'} />
+                    <Text fontSize="10px" fontWeight={isCurrent ? '800' : '600'} color={isCurrent ? 'green.700' : 'gray.600'} maxW="72px" noOfLines={1}>
+                      {isCurrent ? 'You' : (p?.user_name || `User ${i + 1}`)}
+                    </Text>
+                  </VStack>
+                  <Text color="green.500" fontWeight="800">{i === summary.participants.length - 1 ? '→ You' : '→'}</Text>
+                </HStack>
+              )
+            })}
+          </HStack>
+
+          <SimpleGrid columns={{ base: 1, md: compact ? 2 : 4 }} spacing={2}>
+            <Box bg="white" borderRadius="lg" p={2.5} borderWidth="1px" borderColor="green.100">
+              <Text fontSize="10px" color="gray.500" fontWeight="800" textTransform="uppercase">You gave</Text>
+              <Text fontSize="sm" fontWeight="700" color="gray.800" noOfLines={1}>{summary.gave || 'Item unavailable'}</Text>
+            </Box>
+            <Box bg="white" borderRadius="lg" p={2.5} borderWidth="1px" borderColor="green.100">
+              <Text fontSize="10px" color="gray.500" fontWeight="800" textTransform="uppercase">You received</Text>
+              <Text fontSize="sm" fontWeight="700" color="gray.800" noOfLines={1}>{summary.received || 'Item unavailable'}</Text>
+            </Box>
+            <Box bg="white" borderRadius="lg" p={2.5} borderWidth="1px" borderColor="green.100">
+              <Text fontSize="10px" color="gray.500" fontWeight="800" textTransform="uppercase">Where</Text>
+              <Text fontSize="sm" fontWeight="700" color="gray.800" noOfLines={1}>{summary.where}</Text>
+            </Box>
+            <Box bg="white" borderRadius="lg" p={2.5} borderWidth="1px" borderColor="green.100">
+              <Text fontSize="10px" color="gray.500" fontWeight="800" textTransform="uppercase">When</Text>
+              <Text fontSize="sm" fontWeight="700" color="gray.800" noOfLines={1}>{summary.when.date} {summary.when.time}</Text>
+            </Box>
+          </SimpleGrid>
+
+          <HStack justify="space-between" align="center">
+            <Text fontSize="xs" color="gray.600" noOfLines={1}>
+              {summary.statusLabel === 'Completed'
+                ? 'The loop closed successfully for everyone involved.'
+                : summary.statusLabel === 'Cancelled'
+                  ? 'This loop stopped before everyone completed.'
+                  : 'This loop did not finish. You can review the last known chain.'}
+            </Text>
+            <Button size="sm" colorScheme="green" variant="outline" onClick={() => setMultiwayDetailsTrade(trade)} flexShrink={0}>
+              View Full Details
+            </Button>
+          </HStack>
+        </VStack>
+      </Box>
+    )
+  }
 
   const allCompletedTrades = useMemo(() => {
     const completed = [...tradeHistory]
@@ -4762,100 +4901,23 @@ const Dashboard: React.FC = () => {
                                   All
                                 </Button>
                               </HStack>
-                              <HStack spacing={1}>
-                                {selectedProductIds.size > 0 && (
-                                  <Button
-                                    size="xs"
-                                    bg="red.500"
-                                    color="white"
-                                    fontWeight="semibold"
-                                    px={3}
-                                    h="28px"
-                                    borderRadius="lg"
-                                    _hover={{ bg: 'red.400' }}
-                                    leftIcon={<DeleteIcon boxSize={2.5} />}
-                                    onClick={handleBatchDelete}
-                                    isLoading={deleting}
-                                  >
-                                    Delete
-                                  </Button>
-                                )}
-                                <Button
-                                  size="xs"
-                                  variant="ghost"
-                                  color="white"
-                                  fontWeight="semibold"
-                                  px={2}
-                                  h="28px"
-                                  _hover={{ bg: 'whiteAlpha.200' }}
-                                  onClick={() => {
-                                    setSelectedProductIds(new Set())
-                                    setIsProductSelectMode(false)
-                                  }}
-                                >
-                                  Cancel
-                                </Button>
-                              </HStack>
+                              <Button
+                                size="xs"
+                                variant="ghost"
+                                color="white"
+                                fontWeight="semibold"
+                                px={2}
+                                h="28px"
+                                _hover={{ bg: 'whiteAlpha.200' }}
+                                onClick={() => {
+                                  setSelectedProductIds(new Set())
+                                  setIsProductSelectMode(false)
+                                }}
+                              >
+                                Cancel
+                              </Button>
                             </Flex>
                           )}
-                          {/* Desktop: select-all row + bulk actions */}
-                          <Flex
-                            display={{ base: 'none', md: 'flex' }}
-                            align="center"
-                            gap={3}
-                            px={3} py={2.5}
-                            borderBottom="1px"
-                            borderColor={selectedProductIds.size > 0 ? 'brand.200' : borderColor}
-                            bg={selectedProductIds.size > 0 ? 'brand.50' : 'gray.50'}
-                            transition="background 0.2s"
-                          >
-                            <Checkbox
-                              isChecked={currentPageSelectableProducts.length > 0 && currentPageSelectableProducts.every(p => selectedProductIds.has(p.id))}
-                              isIndeterminate={
-                                currentPageSelectableProducts.some(p => selectedProductIds.has(p.id)) &&
-                                !currentPageSelectableProducts.every(p => selectedProductIds.has(p.id))
-                              }
-                              onChange={toggleSelectAllProducts}
-                              colorScheme="brand"
-                              flexShrink={0}
-                            />
-                            <Text fontSize="sm" color={selectedProductIds.size > 0 ? 'brand.700' : 'gray.600'} fontWeight={selectedProductIds.size > 0 ? '600' : 'medium'} flex={1}>
-                              {selectedProductIds.size > 0 ? `${selectedProductIds.size} item${selectedProductIds.size > 1 ? 's' : ''} selected` : 'Select all on page'}
-                            </Text>
-                            {selectedProductIds.size > 0 && (
-                              <HStack spacing={2}>
-                                <Button
-                                  size="sm"
-                                  colorScheme="red"
-                                  variant="solid"
-                                  leftIcon={<DeleteIcon />}
-                                  onClick={handleBatchDelete}
-                                  isLoading={deleting}
-                                  borderRadius="lg"
-                                >
-                                  Delete Selected
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  colorScheme="brand"
-                                  variant="outline"
-                                  onClick={handleBatchLock}
-                                  isLoading={deleting}
-                                  borderRadius="lg"
-                                >
-                                  Lock / Unlock
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="ghost"
-                                  colorScheme="gray"
-                                  onClick={() => setSelectedProductIds(new Set())}
-                                >
-                                  Clear
-                                </Button>
-                              </HStack>
-                            )}
-                          </Flex>
                           {paginatedProducts.map((product) => (
                             <ProductListRow
                               key={product.id}
@@ -6090,6 +6152,13 @@ const Dashboard: React.FC = () => {
                             What � Who � Where � When � Action
                           </Box>
                           {paginatedTradeHistory.map((trade, idx) => {
+                            if (isMultiwayHistoryTrade(trade)) {
+                              return (
+                                <Box key={trade.id} p={3} borderBottom={idx < paginatedTradeHistory.length - 1 ? '1px' : 'none'} borderColor={borderColor}>
+                                  <MultiwayHistorySummaryCard trade={trade} compact />
+                                </Box>
+                              )
+                            }
                             const partner = getTradePartnerInfo(trade)
                             const where = getTradeWhere(trade)
                             const when = getTradeWhen(trade)
@@ -6178,6 +6247,9 @@ const Dashboard: React.FC = () => {
                                 </Text>
                                 <VStack spacing={2.5} align="stretch">
                                   {groups[group].map(trade => {
+                                    if (isMultiwayHistoryTrade(trade)) {
+                                      return <MultiwayHistorySummaryCard key={trade.id} trade={trade} compact />
+                                    }
                                     const partner = getTradePartnerInfo(trade)
                                     const where = getTradeWhere(trade)
                                     const when = getTradeWhen(trade)
@@ -6307,6 +6379,13 @@ const Dashboard: React.FC = () => {
                           </HStack>
                           {/* Trade Rows */}
                           {paginatedTradeHistory.map((trade, idx) => {
+                            if (isMultiwayHistoryTrade(trade)) {
+                              return (
+                                <Box key={trade.id} w="full" p={3} borderBottomWidth={idx < paginatedTradeHistory.length - 1 ? "1px" : "0px"} borderColor={borderColor}>
+                                  <MultiwayHistorySummaryCard trade={trade} />
+                                </Box>
+                              )
+                            }
                             const partner = getTradePartnerInfo(trade)
                             const where = getTradeWhere(trade)
                             const when = getTradeWhen(trade)
@@ -6443,6 +6522,9 @@ const Dashboard: React.FC = () => {
                                 </Text>
                                 <VStack spacing={2.5} align="stretch">
                                   {groups[group].map(trade => {
+                                    if (isMultiwayHistoryTrade(trade)) {
+                                      return <MultiwayHistorySummaryCard key={trade.id} trade={trade} compact />
+                                    }
                                     const partner = getTradePartnerInfo(trade)
                                     const where = getTradeWhere(trade)
                                     const when = getTradeWhen(trade)
@@ -6567,6 +6649,63 @@ const Dashboard: React.FC = () => {
           </Box>
 
           {/* Popup Modal System */}
+          <Modal isOpen={!!multiwayDetailsTrade} onClose={() => setMultiwayDetailsTrade(null)} size="2xl" isCentered scrollBehavior="inside">
+            <ModalOverlay />
+            <ModalContent borderRadius="2xl" overflow="hidden">
+              <Box px={5} py={4} bg="green.50" borderBottomWidth="1px" borderColor="green.100">
+                <HStack justify="space-between" align="start">
+                  <Box>
+                    <Text fontWeight="900" color="gray.800">Multiway Trade Details</Text>
+                    <Text fontSize="sm" color="gray.600">Full loop breakdown and final exchange path.</Text>
+                  </Box>
+                  <ModalCloseButton position="static" />
+                </HStack>
+              </Box>
+              <ModalBody p={5}>
+                {multiwayDetailsTrade && (() => {
+                  const summary = getMultiwaySummary(multiwayDetailsTrade)
+                  const edges = summary.edges.length > 0
+                    ? summary.edges
+                    : summary.participants.map((p: any, i: number) => {
+                        const next = summary.participants[(i + 1) % summary.participants.length]
+                        return {
+                          from_user_name: p?.user_name,
+                          to_user_name: next?.user_name,
+                          product_title: p?.product_title,
+                          status: p?.trade_status || p?.status || summary.statusLabel,
+                        }
+                      })
+                  return (
+                    <VStack spacing={4} align="stretch">
+                      <MultiwayHistorySummaryCard trade={multiwayDetailsTrade} />
+                      <Box>
+                        <Text fontSize="xs" fontWeight="900" color="gray.500" textTransform="uppercase" mb={2}>Cycle Flow</Text>
+                        <VStack spacing={2} align="stretch">
+                          {edges.map((edge: any, idx: number) => (
+                            <HStack key={`${edge.from_user_name}-${edge.to_user_name}-${idx}`} p={3} bg="gray.50" borderRadius="lg" borderWidth="1px" borderColor="gray.100" align="start">
+                              <Badge colorScheme="green" borderRadius="full">{idx + 1}</Badge>
+                              <Box flex={1} minW={0}>
+                                <Text fontSize="sm" fontWeight="800" color="gray.800" noOfLines={1}>
+                                  {edge.from_user_name || 'A trader'} gives to {edge.to_user_name || 'next trader'}
+                                </Text>
+                                <Text fontSize="xs" color="gray.600" noOfLines={1}>
+                                  Item: {edge.product_title || 'Final exchanged item'}
+                                </Text>
+                              </Box>
+                              <Badge colorScheme={String(edge.status || '').includes('cancel') ? 'orange' : summary.statusLabel === 'Completed' ? 'green' : 'gray'} variant="subtle">
+                                {String(edge.status || summary.statusLabel).replace(/_/g, ' ')}
+                              </Badge>
+                            </HStack>
+                          ))}
+                        </VStack>
+                      </Box>
+                    </VStack>
+                  )
+                })()}
+              </ModalBody>
+            </ModalContent>
+          </Modal>
+
           <PopupModal />
 
           {/* Offers Modals */}
@@ -6894,77 +7033,6 @@ const Dashboard: React.FC = () => {
         altText={zoomAltText}
       />
 
-      {/* ── Mobile sticky bulk action bar ── */}
-      <Box
-        display={{ base: 'block', md: 'none' }}
-        position="fixed"
-        bottom={0}
-        left={0}
-        right={0}
-        zIndex={150}
-        transform={selectedProductIds.size > 0 && activeTab === 0 ? 'translateY(0)' : 'translateY(110%)'}
-        transition="transform 0.25s cubic-bezier(0.4, 0, 0.2, 1)"
-        bg="white"
-        borderTop="2px solid"
-        borderColor="brand.500"
-        px={4}
-        pt={3}
-        pb="calc(12px + env(safe-area-inset-bottom, 0px))"
-        boxShadow="0 -6px 24px rgba(0,0,0,0.12)"
-      >
-        <HStack justify="space-between" align="center" mb={2}>
-          <HStack spacing={1.5}>
-            <Box w={5} h={5} bg="brand.500" borderRadius="full" display="flex" alignItems="center" justifyContent="center">
-              <Text fontSize="10px" color="white" fontWeight="800" lineHeight={1}>{selectedProductIds.size}</Text>
-            </Box>
-            <Text fontSize="sm" fontWeight="700" color="gray.800">
-              {selectedProductIds.size} item{selectedProductIds.size !== 1 ? 's' : ''} selected
-            </Text>
-          </HStack>
-          <Button
-            size="xs"
-            variant="ghost"
-            colorScheme="gray"
-            color="gray.500"
-            fontSize="xs"
-            onClick={() => {
-              setSelectedProductIds(new Set())
-              setIsProductSelectMode(false)
-            }}
-          >
-            Clear
-          </Button>
-        </HStack>
-        <HStack spacing={2}>
-          <Button
-            flex={1}
-            h="44px"
-            colorScheme="red"
-            variant="solid"
-            leftIcon={<DeleteIcon />}
-            onClick={handleBatchDelete}
-            isLoading={deleting}
-            fontWeight="700"
-            fontSize="sm"
-            borderRadius="xl"
-          >
-            Delete Selected
-          </Button>
-          <Button
-            h="44px"
-            colorScheme="brand"
-            variant="outline"
-            onClick={handleBatchLock}
-            isLoading={deleting}
-            fontWeight="600"
-            fontSize="sm"
-            borderRadius="xl"
-            px={4}
-          >
-            Lock / Unlock
-          </Button>
-        </HStack>
-      </Box>
 
     </Box>
   )

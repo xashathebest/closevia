@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useMemo, useRef } from 'react'
 import {
   Modal,
   ModalOverlay,
@@ -28,6 +28,7 @@ import {
   Button,
 } from '@chakra-ui/react'
 import VerifiedAvatar from './VerifiedAvatar'
+import TransactionTrackingLayout from './TransactionTrackingLayout'
 import {
   FaTruck,
   FaMapMarkerAlt,
@@ -53,6 +54,11 @@ const DeliveryTracking: React.FC<DeliveryTrackingProps> = ({ isOpen, onClose, de
   const [delivery, setDelivery] = useState<Delivery | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [viewerLocation, setViewerLocation] = useState<{ lat: number; lng: number } | null>(null)
+  const [routeCoords, setRouteCoords] = useState<Array<[number, number]>>([])
+  const [routeMetrics, setRouteMetrics] = useState<{ distanceM: number; durationS: number } | null>(null)
+  const [routeLoading, setRouteLoading] = useState(false)
+  const [routeMessage, setRouteMessage] = useState<string | null>(null)
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const cardBg = useColorModeValue('white', 'gray.800')
@@ -171,6 +177,21 @@ const DeliveryTracking: React.FC<DeliveryTrackingProps> = ({ isOpen, onClose, de
     return `${hours}h ${mins}m`
   }
 
+  useEffect(() => {
+    if (!isOpen || !navigator.geolocation) {
+      if (isOpen) setRouteMessage('Enable location to view ETA and route.')
+      return
+    }
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        setViewerLocation({ lat: position.coords.latitude, lng: position.coords.longitude })
+        setRouteMessage(null)
+      },
+      () => setRouteMessage('Enable location to view ETA and route.'),
+      { enableHighAccuracy: true, timeout: 12000, maximumAge: 10000 },
+    )
+  }, [isOpen])
+
   if (loading && !delivery) {
     return (
       <Modal isOpen={isOpen} onClose={onClose} isCentered size="xl">
@@ -208,17 +229,112 @@ const DeliveryTracking: React.FC<DeliveryTrackingProps> = ({ isOpen, onClose, de
   const statusSteps = getStatusSteps(!!delivery.trade_id)
   const currentStep = getCurrentStepIndex(statusSteps)
   const progress = ((currentStep + 1) / statusSteps.length) * 100
+  const deliveryDestination = (() => {
+    const useDropoff = delivery.status === 'picked_up' || delivery.status === 'in_transit' || delivery.status === 'delivered'
+    const lat = Number(useDropoff ? delivery.delivery_latitude : delivery.pickup_latitude)
+    const lng = Number(useDropoff ? delivery.delivery_longitude : delivery.pickup_longitude)
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null
+    return {
+      lat,
+      lng,
+      label: useDropoff ? 'Delivery address' : 'Pickup location',
+      address: useDropoff ? delivery.delivery_address : delivery.pickup_address,
+    }
+  })()
+  const trackingOrigin = useMemo(() => {
+    const riderLat = Number(delivery.rider_latitude)
+    const riderLng = Number(delivery.rider_longitude)
+    if (Number.isFinite(riderLat) && Number.isFinite(riderLng)) return { lat: riderLat, lng: riderLng, label: 'Rider location' }
+    if (viewerLocation) return { ...viewerLocation, label: 'Your location' }
+    return null
+  }, [delivery.rider_latitude, delivery.rider_longitude, viewerLocation])
+  const distanceLabel = routeLoading
+    ? 'Calculating distance...'
+    : routeMetrics
+      ? routeMetrics.distanceM < 1000 ? `${Math.round(routeMetrics.distanceM)} m` : `${(routeMetrics.distanceM / 1000).toFixed(1)} km`
+      : 'Distance unavailable'
+  const etaLabel = routeLoading
+    ? 'Calculating ETA...'
+    : routeMetrics
+      ? `${Math.max(1, Math.round(routeMetrics.durationS / 60))} min`
+      : delivery.estimated_eta
+        ? formatETA(delivery.estimated_eta)
+        : 'ETA unavailable'
+
+  useEffect(() => {
+    if (!isOpen || !deliveryDestination || !trackingOrigin) {
+      setRouteCoords([])
+      setRouteMetrics(null)
+      return
+    }
+    let cancelled = false
+    const fallbackRoute: Array<[number, number]> = [[trackingOrigin.lat, trackingOrigin.lng], [deliveryDestination.lat, deliveryDestination.lng]]
+    const fetchRoute = async () => {
+      setRouteLoading(true)
+      setRouteMessage(null)
+      try {
+        const url = `https://router.project-osrm.org/route/v1/driving/${trackingOrigin.lng},${trackingOrigin.lat};${deliveryDestination.lng},${deliveryDestination.lat}?overview=full&geometries=geojson`
+        const res = await fetch(url)
+        const data = await res.json()
+        const route = data?.routes?.[0]
+        const coords = route?.geometry?.coordinates || []
+        const mapped = coords.map((c: number[]) => [c[1], c[0]] as [number, number])
+        if (!cancelled) {
+          setRouteCoords(mapped.length > 1 ? mapped : fallbackRoute)
+          const distanceM = Number(route?.distance)
+          const durationS = Number(route?.duration)
+          setRouteMetrics(Number.isFinite(distanceM) && Number.isFinite(durationS) ? { distanceM, durationS } : null)
+          if (!route) setRouteMessage('Route could not be calculated right now.')
+        }
+      } catch {
+        if (!cancelled) {
+          setRouteCoords(fallbackRoute)
+          setRouteMetrics(null)
+          setRouteMessage('Route could not be calculated right now.')
+        }
+      } finally {
+        if (!cancelled) setRouteLoading(false)
+      }
+    }
+    fetchRoute()
+    return () => {
+      cancelled = true
+    }
+  }, [isOpen, deliveryDestination?.lat, deliveryDestination?.lng, trackingOrigin?.lat, trackingOrigin?.lng])
+
+  const openMaps = () => {
+    if (!deliveryDestination) return
+    const origin = trackingOrigin ? `&origin=${trackingOrigin.lat},${trackingOrigin.lng}` : ''
+    window.open(`https://www.google.com/maps/dir/?api=1${origin}&destination=${deliveryDestination.lat},${deliveryDestination.lng}`, '_blank', 'noopener,noreferrer')
+  }
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} isCentered size="xl">
       <ModalOverlay />
-      <ModalContent>
+      <ModalContent maxW={{ base: '100vw', md: '720px' }} overflow="hidden">
         <ModalHeader>Delivery Tracking</ModalHeader>
         <ModalCloseButton />
-        <ModalBody>
-          <VStack spacing={4} align="stretch">
-            {/* Status Progress */}
-            <Box>
+        <ModalBody p={0}>
+          <TransactionTrackingLayout
+            title="Delivery tracking"
+            subtitle={deliveryDestination?.address || routeMessage || 'Tracking delivery progress'}
+            destination={deliveryDestination}
+            currentLocation={trackingOrigin}
+            route={routeCoords}
+            distanceLabel={distanceLabel}
+            etaLabel={etaLabel}
+            fallbackMessage={!deliveryDestination ? 'This delivery has no mapped stop yet.' : routeMessage || undefined}
+            onOpenExternal={openMaps}
+            externalDisabled={!deliveryDestination}
+            minContent={(
+              <Box minW={0}>
+                <Text fontWeight="900" color="gray.800" fontSize="sm">{delivery.status.replace(/_/g, ' ')}</Text>
+                <Text fontSize="xs" color="gray.500" noOfLines={1}>{etaLabel} · {distanceLabel}</Text>
+              </Box>
+            )}
+            halfContent={(
+              <VStack spacing={4} align="stretch">
+                <Box>
               <HStack justify="space-between" mb={2}>
                 <Text fontWeight="semibold">Status</Text>
                 <Badge colorScheme={getStatusColor(delivery.status)} fontSize="sm" px={2} py={1}>
@@ -248,12 +364,9 @@ const DeliveryTracking: React.FC<DeliveryTrackingProps> = ({ isOpen, onClose, de
                   )
                 })}
               </SimpleGrid>
-            </Box>
+                </Box>
 
-            <Divider />
-
-            {/* Delivery Details */}
-            <Card bg={cardBg} borderWidth="1px" borderColor={borderColor}>
+                <Card bg={cardBg} borderWidth="1px" borderColor={borderColor}>
               <CardBody>
                 <VStack spacing={3} align="stretch">
                   <HStack justify="space-between">
@@ -284,12 +397,12 @@ const DeliveryTracking: React.FC<DeliveryTrackingProps> = ({ isOpen, onClose, de
                   )}
                 </VStack>
               </CardBody>
-            </Card>
-
-            {/* Rider Information (if claimed) */}
-            {delivery.status !== 'pending' && delivery.rider_id && (
-              <>
-                <Divider />
+                </Card>
+              </VStack>
+            )}
+            fullContent={(
+              <VStack spacing={4} align="stretch">
+                {delivery.status !== 'pending' && delivery.rider_id && (
                 <Card bg={cardBg} borderWidth="1px" borderColor={borderColor}>
                   <CardBody>
                     <VStack spacing={3} align="stretch">
@@ -326,29 +439,9 @@ const DeliveryTracking: React.FC<DeliveryTrackingProps> = ({ isOpen, onClose, de
                     </VStack>
                   </CardBody>
                 </Card>
-              </>
-            )}
+                )}
 
-            {/* ETA */}
-            {delivery.estimated_eta && (
-              <>
-                <Divider />
-                <HStack spacing={2}>
-                  <Icon as={FaClock} color="brand.500" />
-                  <Text fontWeight="semibold">Estimated Arrival</Text>
-                </HStack>
-                <Text fontSize="lg" color="brand.600">
-                  {formatETA(delivery.estimated_eta)}
-                </Text>
-                <Text fontSize="xs" color="gray.500">
-                  {new Date(delivery.estimated_eta).toLocaleString()}
-                </Text>
-              </>
-            )}
-
-            {/* Addresses */}
-            <Divider />
-            <VStack spacing={3} align="stretch">
+                <VStack spacing={3} align="stretch">
               <Box>
                 <HStack mb={2}>
                   <Icon as={FaMapMarkerAlt} color="green.500" />
@@ -377,12 +470,9 @@ const DeliveryTracking: React.FC<DeliveryTrackingProps> = ({ isOpen, onClose, de
                   </Text>
                 )}
               </Box>
-            </VStack>
+                </VStack>
 
-            {/* Special Instructions */}
-            {delivery.special_instructions && (
-              <>
-                <Divider />
+                {delivery.special_instructions && (
                 <Box>
                   <Text fontWeight="semibold" mb={2}>
                     Special Instructions
@@ -391,45 +481,39 @@ const DeliveryTracking: React.FC<DeliveryTrackingProps> = ({ isOpen, onClose, de
                     {delivery.special_instructions}
                   </Text>
                 </Box>
-              </>
-            )}
+                )}
 
-            {/* Status Messages */}
-            {delivery.status === 'pending' && (
+                {delivery.status === 'pending' && (
               <Alert status="info" borderRadius="md">
                 <AlertIcon />
                 <AlertDescription fontSize="sm">
                   Waiting for a rider to claim your delivery. You'll be notified once a rider picks it up.
                 </AlertDescription>
               </Alert>
-            )}
-            {delivery.delivery_type === 'standard' && (
+                )}
+                {delivery.delivery_type === 'standard' && (
               <Alert status="warning" borderRadius="md" size="sm">
                 <AlertIcon />
                 <AlertDescription fontSize="xs">
                   Shared batch – avoid for fragile items.
                 </AlertDescription>
               </Alert>
-            )}
-            {delivery.delivery_type === 'express' && (
+                )}
+                {delivery.delivery_type === 'express' && (
               <Alert status="success" borderRadius="md" size="sm">
                 <AlertIcon />
                 <AlertDescription fontSize="xs">
                   Exclusive handling – maximum care.
                 </AlertDescription>
               </Alert>
+                )}
+              </VStack>
             )}
-          </VStack>
+          />
         </ModalBody>
-        <ModalFooter>
-          <Button colorScheme="brand" onClick={onClose}>
-            Close
-          </Button>
-        </ModalFooter>
       </ModalContent>
     </Modal>
   )
 }
 
 export default DeliveryTracking
-

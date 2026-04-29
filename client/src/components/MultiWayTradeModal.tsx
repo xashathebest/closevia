@@ -80,6 +80,7 @@ import { getImageUrl } from '../utils/imageUtils'
 import { api } from '../services/api'
 import { useAuth } from '../contexts/AuthContext'
 import TradeCompletionModal from './TradeCompletionModal'
+import TransactionTrackingLayout from './TransactionTrackingLayout'
 import {
   acceptMultiWayTrade,
   declineMultiWayTrade,
@@ -152,6 +153,53 @@ const formatTimePH = (time?: string | null): string => {
 const buildMeetupKey = (location?: string | null, date?: string | null, time?: string | null): string | null => {
   if (!location || !date || !time) return null
   return `${location.trim().toLowerCase()}|${date.trim()}|${time.trim()}`
+}
+
+const MEETUP_CONFIRM_RADIUS_M = 10
+const MAX_GPS_ACCURACY_M = 10
+
+const calculateDistanceMeters = (lat1: number, lng1: number, lat2: number, lng2: number) => {
+  const toRad = (value: number) => value * Math.PI / 180
+  const earthRadiusM = 6371000
+  const dLat = toRad(lat2 - lat1)
+  const dLng = toRad(lng2 - lng1)
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+    Math.sin(dLng / 2) * Math.sin(dLng / 2)
+  return earthRadiusM * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+}
+
+const getDistanceStatusMessage = (distanceM: number, pointLabel: string) => {
+  if (distanceM <= MEETUP_CONFIRM_RADIUS_M) return "You're at the location. You can now confirm."
+  if (distanceM <= 15) return 'Walk a little more to confirm.'
+  if (distanceM <= 50) return "You're almost there."
+  return `You are ${Math.round(distanceM)}m away from the ${pointLabel}.`
+}
+
+const formatTrackingDistance = (meters: number | null) => {
+  if (meters === null) return 'Calculating distance...'
+  if (meters < 1000) return `${Math.round(meters)} m`
+  return `${(meters / 1000).toFixed(1)} km`
+}
+
+const estimateTravelWindow = (meters: number | null, durationSeconds?: number | null) => {
+  if (durationSeconds && durationSeconds > 0) {
+    return `${Math.max(1, Math.round(durationSeconds / 60))} min`
+  }
+  if (meters === null) return 'Calculating ETA...'
+  const minutes = Math.max(2, Math.round(meters / 67))
+  return `${Math.max(1, minutes - 4)}-${minutes + 6} mins`
+}
+
+const parseLatLngFromText = (value?: string | null): { lat: number; lng: number } | null => {
+  if (!value) return null
+  const match = value.match(/(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/)
+  if (!match) return null
+  const lat = Number(match[1])
+  const lng = Number(match[2])
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null
+  return { lat, lng }
 }
 
 interface MeetupLocation {
@@ -334,6 +382,14 @@ const MultiWayTradeModal: React.FC<MultiWayTradeModalProps> = ({
   const [resettingMeetup, setResettingMeetup] = useState(false)
   const [confirmingMeetupDone, setConfirmingMeetupDone] = useState(false)
   const [agreeingToSchedule, setAgreeingToSchedule] = useState(false)
+  const [multiwayMeetupPoint, setMultiwayMeetupPoint] = useState<{ lat: number; lng: number } | null>(null)
+  const [userGeoPoint, setUserGeoPoint] = useState<{ lat: number; lng: number; accuracy: number } | null>(null)
+  const [geoChecking, setGeoChecking] = useState(false)
+  const [geoPermissionDenied, setGeoPermissionDenied] = useState(false)
+  const [geoMessage, setGeoMessage] = useState<string | null>(null)
+  const [routeCoords, setRouteCoords] = useState<Array<[number, number]>>([])
+  const [routeMetrics, setRouteMetrics] = useState<{ distanceM: number; durationS: number } | null>(null)
+  const [routeLoading, setRouteLoading] = useState(false)
 
   const [meetupInDispute, setMeetupInDispute] = useState(false)
   const [meetupDisputeReason, setMeetupDisputeReason] = useState<
@@ -820,7 +876,7 @@ const MultiWayTradeModal: React.FC<MultiWayTradeModalProps> = ({
         params.set('lng', String(user.longitude))
       }
       const res = await api.get(`/api/places/search?${params.toString()}`)
-      setPlaceResults(res.data?.results || [])
+      setPlaceResults(res.data?.results || res.data?.data || [])
     } catch {
       setPlaceResults([])
     } finally {
@@ -1166,8 +1222,60 @@ const MultiWayTradeModal: React.FC<MultiWayTradeModalProps> = ({
     }
   }
 
+  const checkMultiwayMeetupLocation = async (): Promise<{ lat: number; lng: number; accuracy: number } | null> => {
+    const activeMeetupPoint = multiwayMeetupPoint || await resolveMultiwayMeetupPoint()
+    if (!activeMeetupPoint) return null
+    if (!navigator.geolocation) {
+      setGeoMessage('Enable location to view ETA and route.')
+      return null
+    }
+
+    setGeoChecking(true)
+    setGeoPermissionDenied(false)
+    setGeoMessage(null)
+    try {
+      const position = await new Promise<GeolocationPosition>((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(resolve, reject, {
+          enableHighAccuracy: true,
+          timeout: 12000,
+          maximumAge: 0,
+        })
+      })
+      const point = {
+        lat: position.coords.latitude,
+        lng: position.coords.longitude,
+        accuracy: position.coords.accuracy,
+      }
+      setUserGeoPoint(point)
+      const distance = calculateDistanceMeters(point.lat, point.lng, activeMeetupPoint.lat, activeMeetupPoint.lng)
+      if (point.accuracy > MAX_GPS_ACCURACY_M) {
+        setGeoMessage('Waiting for a more accurate location...')
+      } else if (distance > MEETUP_CONFIRM_RADIUS_M) {
+        setGeoMessage(getDistanceStatusMessage(distance, 'multiway meetup point'))
+      } else {
+        setGeoMessage("You're at the meetup spot. You can now confirm.")
+      }
+      return point
+    } catch (error: any) {
+      if (error?.code === 1) setGeoPermissionDenied(true)
+      setGeoMessage('Enable location to view ETA and route.')
+      return null
+    } finally {
+      setGeoChecking(false)
+    }
+  }
+
   const confirmMeetupDone = async () => {
     if (!multiWayTrade.loop_id || confirmingMeetupDone) return
+    const activeMeetupPoint = multiwayMeetupPoint || await resolveMultiwayMeetupPoint()
+    const point = userGeoPoint || await checkMultiwayMeetupLocation()
+    const distance = point && activeMeetupPoint
+      ? calculateDistanceMeters(point.lat, point.lng, activeMeetupPoint.lat, activeMeetupPoint.lng)
+      : Number.POSITIVE_INFINITY
+    if (!activeMeetupPoint || !point || point.accuracy > MAX_GPS_ACCURACY_M || distance > MEETUP_CONFIRM_RADIUS_M) {
+      setGeoMessage(!point ? 'Confirm unlocks near the meetup location.' : getDistanceStatusMessage(distance, 'multiway meetup point'))
+      return
+    }
     try {
       setConfirmingMeetupDone(true)
       await updateTradeLoopMeetup(multiWayTrade.loop_id, 'confirm_meetup_done')
@@ -1210,7 +1318,7 @@ const MultiWayTradeModal: React.FC<MultiWayTradeModalProps> = ({
         }
         const res = await api.get(`/api/places/search?${params.toString()}`)
         if (!cancelled) {
-          setPlaceResults(res.data?.results || [])
+          setPlaceResults(res.data?.results || res.data?.data || [])
         }
       } catch {
         if (!cancelled) setPlaceResults([])
@@ -1238,6 +1346,77 @@ const MultiWayTradeModal: React.FC<MultiWayTradeModalProps> = ({
     [searchedLocations]
   )
 
+  const participantCoordinatePoints = useMemo(() => {
+    return sortedParticipants
+      .map((participant) => {
+        const raw = participant as any
+        const lat = Number(raw.latitude ?? raw.user_latitude ?? raw.location_latitude ?? raw.last_latitude)
+        const lng = Number(raw.longitude ?? raw.user_longitude ?? raw.location_longitude ?? raw.last_longitude)
+        return Number.isFinite(lat) && Number.isFinite(lng) ? { lat, lng } : null
+      })
+      .filter(Boolean) as Array<{ lat: number; lng: number }>
+  }, [sortedParticipants])
+
+  const midpointLocation = useMemo<MeetupLocation | null>(() => {
+    const points = [...participantCoordinatePoints]
+    if (user?.latitude && user?.longitude) {
+      points.push({ lat: Number(user.latitude), lng: Number(user.longitude) })
+    }
+    if (points.length < 2) return null
+    const lat = points.reduce((sum, point) => sum + point.lat, 0) / points.length
+    const lng = points.reduce((sum, point) => sum + point.lng, 0) / points.length
+    return {
+      name: `Suggested midpoint (${lat.toFixed(5)}, ${lng.toFixed(5)})`,
+      address: 'Balanced from available participant locations',
+      type: 'public',
+      lat,
+      lng,
+    }
+  }, [participantCoordinatePoints, user?.latitude, user?.longitude])
+
+  const smartLocationSuggestions = useMemo(() => {
+    const publicSuggestions = suggestedLocations.filter((loc) => ['mall', 'cafe', 'public'].includes(loc.type))
+    return [...(midpointLocation ? [midpointLocation] : []), ...publicSuggestions].slice(0, 8)
+  }, [midpointLocation, suggestedLocations])
+
+  function getPointForLocationLabel(label?: string | null) {
+    if (!label) return null
+    const fromText = parseLatLngFromText(label)
+    if (fromText) return fromText
+    const known = suggestedLocations.find((loc) => loc.name === label || `${loc.name} - ${loc.address}` === label)
+    if (known?.lat && known?.lng) return { lat: known.lat, lng: known.lng }
+    return null
+  }
+
+  async function resolveMultiwayMeetupPoint() {
+    const label = agreedMeetup?.meetup_location || selectedLocation
+    const known = getPointForLocationLabel(label)
+    if (known) {
+      setMultiwayMeetupPoint(known)
+      return known
+    }
+    if (!label) {
+      setGeoMessage('Choose a mapped location before tracking can start.')
+      return null
+    }
+    try {
+      const res = await api.get('/api/places/search', { params: { q: label } })
+      const places = res.data?.results || res.data?.data || []
+      const first = Array.isArray(places) ? places[0] : null
+      const lat = Number(first?.latitude)
+      const lng = Number(first?.longitude)
+      if (Number.isFinite(lat) && Number.isFinite(lng)) {
+        const point = { lat, lng }
+        setMultiwayMeetupPoint(point)
+        return point
+      }
+    } catch (error) {
+      console.warn('Failed to resolve multiway meetup point:', error)
+    }
+    setGeoMessage('We could not find a map pin for this meetup yet. Pick a mapped public place to view ETA and route.')
+    return null
+  }
+
   const getDistance = (lat1?: number, lon1?: number, lat2?: number, lon2?: number) => {
     if (!lat1 || !lon1 || !lat2 || !lon2) return Infinity
     const R = 6371
@@ -1263,6 +1442,78 @@ const MultiWayTradeModal: React.FC<MultiWayTradeModalProps> = ({
     }
     return nearest
   }, [user?.latitude, user?.longitude, suggestedLocations])
+
+  useEffect(() => {
+    if (!isOpen || activeTab !== 2 || !meetupAgreed || !agreedMeetup) return
+    void resolveMultiwayMeetupPoint()
+    void checkMultiwayMeetupLocation()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, activeTab, meetupAgreed, agreedMeetup?.meetup_location, agreedMeetup?.meetup_date, agreedMeetup?.meetup_time])
+
+  useEffect(() => {
+    if (!meetupAgreed || !multiwayMeetupPoint || !userGeoPoint) {
+      setRouteCoords([])
+      setRouteMetrics(null)
+      setRouteLoading(false)
+      return
+    }
+
+    let cancelled = false
+    const fallbackRoute: Array<[number, number]> = [[userGeoPoint.lat, userGeoPoint.lng], [multiwayMeetupPoint.lat, multiwayMeetupPoint.lng]]
+    const fetchRoute = async () => {
+      setRouteLoading(true)
+      try {
+        const url = `https://router.project-osrm.org/route/v1/driving/${userGeoPoint.lng},${userGeoPoint.lat};${multiwayMeetupPoint.lng},${multiwayMeetupPoint.lat}?overview=full&geometries=geojson`
+        const res = await fetch(url)
+        const data = await res.json()
+        const routeData = data?.routes?.[0]
+        const coords = routeData?.geometry?.coordinates || []
+        const route = coords.map((coord: number[]) => [coord[1], coord[0]] as [number, number])
+        if (!cancelled) {
+          setRouteCoords(route.length > 1 ? route : fallbackRoute)
+          const distanceM = Number(routeData?.distance)
+          const durationS = Number(routeData?.duration)
+          setRouteMetrics(Number.isFinite(distanceM) && Number.isFinite(durationS) ? { distanceM, durationS } : null)
+        }
+      } catch {
+        if (!cancelled) {
+          setRouteCoords(fallbackRoute)
+          setRouteMetrics(null)
+        }
+      } finally {
+        if (!cancelled) setRouteLoading(false)
+      }
+    }
+
+    fetchRoute()
+    return () => {
+      cancelled = true
+    }
+  }, [meetupAgreed, multiwayMeetupPoint?.lat, multiwayMeetupPoint?.lng, userGeoPoint?.lat, userGeoPoint?.lng])
+
+  const multiwayDistanceM = useMemo(() => {
+    if (routeMetrics?.distanceM) return routeMetrics.distanceM
+    if (!userGeoPoint || !multiwayMeetupPoint) return null
+    return calculateDistanceMeters(userGeoPoint.lat, userGeoPoint.lng, multiwayMeetupPoint.lat, multiwayMeetupPoint.lng)
+  }, [multiwayMeetupPoint, routeMetrics, userGeoPoint])
+  const multiwayDistanceLabel = routeLoading ? 'Calculating distance...' : formatTrackingDistance(multiwayDistanceM)
+  const multiwayEtaLabel = routeLoading ? 'Calculating ETA...' : estimateTravelWindow(multiwayDistanceM, routeMetrics?.durationS)
+  const multiwayLocationVerified = !!userGeoPoint && !!multiwayMeetupPoint && userGeoPoint.accuracy <= MAX_GPS_ACCURACY_M && multiwayDistanceM !== null && multiwayDistanceM <= MEETUP_CONFIRM_RADIUS_M
+  const multiwayTrackingFallback = !multiwayMeetupPoint
+    ? 'Pick a mapped public place to view ETA and route.'
+    : !userGeoPoint
+      ? 'Enable location to view ETA and route.'
+      : geoMessage
+
+  const openMultiwayGoogleMaps = async () => {
+    const destination = multiwayMeetupPoint || await resolveMultiwayMeetupPoint()
+    if (!destination) return
+    const point = userGeoPoint || await checkMultiwayMeetupLocation()
+    const url = point
+      ? `https://www.google.com/maps/dir/?api=1&origin=${point.lat},${point.lng}&destination=${destination.lat},${destination.lng}&travelmode=walking`
+      : `https://www.google.com/maps/search/?api=1&query=${destination.lat},${destination.lng}`
+    window.open(url, '_blank', 'noopener,noreferrer')
+  }
 
   useEffect(() => {
     // Prefill the picker from the current user's confirmed selection
@@ -1413,6 +1664,161 @@ const MultiWayTradeModal: React.FC<MultiWayTradeModalProps> = ({
       return suggestions
     }
   }, [])
+
+  const renderMultiwayTrackingPanel = () => {
+    if (!agreedMeetup) return null
+
+    const confirmDisabled = myMetConfirmed || !multiwayLocationVerified
+    const confirmReason = myMetConfirmed
+      ? 'You already confirmed.'
+      : geoPermissionDenied || !userGeoPoint
+        ? 'Enable location to view ETA and route.'
+        : !multiwayLocationVerified
+          ? 'Confirm unlocks near the meetup location.'
+          : ''
+    const confirmedCount = meetupStatus?.participants?.filter((p) => p.met_confirmed).length || 0
+    const minContent = (
+      <VStack align="start" spacing={0}>
+        <HStack spacing={2}>
+          <Badge colorScheme={allMetConfirmed ? 'green' : 'teal'} borderRadius="full">
+            {allMetConfirmed ? 'All confirmed' : 'Shared meetup locked'}
+          </Badge>
+          <Text fontSize="xs" fontWeight="800" color="gray.700">
+            {multiwayEtaLabel} - {multiwayDistanceLabel}
+          </Text>
+        </HStack>
+        <Text fontSize="xs" color="gray.500" noOfLines={1}>{agreedMeetup.meetup_location}</Text>
+      </VStack>
+    )
+    const halfContent = (
+      <VStack spacing={3} align="stretch">
+        <SimpleGrid columns={[1, 2]} spacing={2}>
+          <Box p={2.5} bg="gray.50" borderRadius="lg" borderWidth="1px" borderColor="gray.200">
+            <Text fontSize="2xs" fontWeight="900" color="gray.500" textTransform="uppercase">Location</Text>
+            <Text fontSize="sm" fontWeight="700" color="gray.800" noOfLines={2}>{agreedMeetup.meetup_location}</Text>
+          </Box>
+          <Box p={2.5} bg="gray.50" borderRadius="lg" borderWidth="1px" borderColor="gray.200">
+            <Text fontSize="2xs" fontWeight="900" color="gray.500" textTransform="uppercase">Date and time</Text>
+            <Text fontSize="sm" fontWeight="700" color="gray.800">
+              {formatDateLabel(agreedMeetup.meetup_date)} - {formatTimePH(agreedMeetup.meetup_time)}
+            </Text>
+          </Box>
+        </SimpleGrid>
+        <Box p={3} bg={multiwayLocationVerified || myMetConfirmed ? 'green.50' : 'gray.50'} borderRadius="xl" borderWidth="1px" borderColor={multiwayLocationVerified || myMetConfirmed ? 'green.200' : 'gray.200'}>
+          <VStack align="stretch" spacing={2}>
+            <HStack justify="space-between">
+              <Text fontSize="xs" fontWeight="900" color="gray.500" textTransform="uppercase">Your arrival</Text>
+              <Badge colorScheme={myMetConfirmed ? 'green' : multiwayLocationVerified ? 'teal' : 'orange'} borderRadius="full">
+                {myMetConfirmed ? 'Confirmed' : multiwayLocationVerified ? 'Nearby' : 'Not arrived'}
+              </Badge>
+            </HStack>
+            <Progress value={(confirmedCount / Math.max(1, participantIds.length)) * 100} colorScheme="green" borderRadius="full" size="sm" />
+            <Text fontSize="sm" fontWeight="700" color={multiwayLocationVerified || myMetConfirmed ? 'green.700' : 'gray.700'}>
+              {myMetConfirmed ? 'Thanks, your arrival is confirmed.' : geoMessage || 'You can confirm once you are at the shared meetup spot.'}
+            </Text>
+            {confirmDisabled && confirmReason && <Text fontSize="xs" color="gray.600">{confirmReason}</Text>}
+            {geoPermissionDenied && (
+              <Button size="sm" variant="outline" colorScheme="green" onClick={checkMultiwayMeetupLocation} isLoading={geoChecking}>
+                Retry location access
+              </Button>
+            )}
+          </VStack>
+        </Box>
+      </VStack>
+    )
+    const fullContent = (
+      <VStack spacing={3} align="stretch">
+        <Box p={3} bg="white" borderRadius="xl" borderWidth="1px" borderColor="gray.200">
+          <Text fontSize="xs" fontWeight="900" color="gray.500" textTransform="uppercase" mb={2}>Participant status</Text>
+          <VStack spacing={2} align="stretch">
+            {sortedParticipants.map((participant) => {
+              const selection = meetupByUserId[participant.user_id]
+              const isMe = participant.user_id === viewerUserId
+              const status = selection?.met_confirmed
+                ? 'Confirmed'
+                : isMe && multiwayLocationVerified
+                  ? 'Nearby'
+                  : 'Not arrived'
+              return (
+                <HStack key={participant.user_id} justify="space-between" spacing={3}>
+                  <HStack spacing={2} minW={0}>
+                    <Avatar size="xs" name={participant.user_name} src={resolveAvatarSrc(userAvatarById[participant.user_id])} />
+                    <Text fontSize="sm" fontWeight="700" noOfLines={1}>{participant.user_name}{isMe ? ' (you)' : ''}</Text>
+                  </HStack>
+                  <Badge colorScheme={status === 'Confirmed' ? 'green' : status === 'Nearby' ? 'teal' : 'gray'} borderRadius="full">
+                    {status}
+                  </Badge>
+                </HStack>
+              )
+            })}
+          </VStack>
+        </Box>
+        <Box p={3} bg="blue.50" borderRadius="xl" borderWidth="1px" borderColor="blue.200">
+          <Text fontSize="xs" fontWeight="800" color="blue.800">
+            For everyone's comfort, meet in the agreed public spot and confirm only after you arrive.
+          </Text>
+        </Box>
+        {allMetConfirmed && reviewSubmitted && !allParticipantsReviewed && (
+          <Box p={4} bg="blue.50" borderRadius="2xl" borderWidth="1px" borderColor="blue.200" textAlign="center">
+            <VStack spacing={1}>
+              <Icon as={FaCheckCircle} color="blue.500" boxSize={6} />
+              <Text fontWeight="600" color="blue.800" fontSize="md">Your review has been submitted</Text>
+              <Text fontSize="xs" color="blue.700">Waiting for the remaining participants to complete their reviews.</Text>
+            </VStack>
+          </Box>
+        )}
+      </VStack>
+    )
+    const actions = allMetConfirmed ? (
+      <Button
+        colorScheme="green"
+        size="lg"
+        onClick={() => setIsReviewModalOpen(true)}
+        isLoading={submittingReview}
+        loadingText="Completing..."
+        leftIcon={<FaCheckCircle />}
+        isDisabled={reviewSubmitted}
+        w="full"
+        borderRadius="xl"
+      >
+        {reviewSubmitted ? 'Review Submitted' : 'Leave a Review and Complete Trade'}
+      </Button>
+    ) : (
+      <Button
+        colorScheme="green"
+        size="lg"
+        onClick={confirmMeetupDone}
+        isLoading={confirmingMeetupDone || geoChecking}
+        leftIcon={<FaCheckCircle />}
+        isDisabled={confirmDisabled}
+        w="full"
+        borderRadius="xl"
+      >
+        {myMetConfirmed ? 'Arrival Confirmed' : 'Confirm Arrival'}
+      </Button>
+    )
+
+    return (
+      <TransactionTrackingLayout
+        title="Multiway Meetup"
+        subtitle={`${participantIds.length}-way plan - everyone agreed`}
+        destination={multiwayMeetupPoint ? { ...multiwayMeetupPoint, label: agreedMeetup.meetup_location } : null}
+        currentLocation={userGeoPoint ? { lat: userGeoPoint.lat, lng: userGeoPoint.lng, label: 'Your location' } : null}
+        route={routeCoords}
+        distanceLabel={multiwayDistanceLabel}
+        etaLabel={multiwayEtaLabel}
+        fallbackMessage={multiwayTrackingFallback || undefined}
+        radiusMeters={MEETUP_CONFIRM_RADIUS_M}
+        minContent={minContent}
+        halfContent={halfContent}
+        fullContent={fullContent}
+        actions={actions}
+        onOpenExternal={openMultiwayGoogleMaps}
+        initialSnap="half"
+        height={{ base: '70vh', md: '72vh' }}
+      />
+    )
+  }
 
   return (
     <>
@@ -2211,6 +2617,53 @@ const MultiWayTradeModal: React.FC<MultiWayTradeModalProps> = ({
                       Select a safe, public location. Everyone must confirm the same selection to proceed.
                     </Text>
 
+                    <Box mb={4}>
+                      <HStack justify="space-between" mb={2}>
+                        <Text fontSize="xs" fontWeight="800" color="gray.500" textTransform="uppercase" letterSpacing="wider">
+                          Smart public suggestions
+                        </Text>
+                        <Badge colorScheme="green" borderRadius="full">
+                          {participantIds.length}-way approval
+                        </Badge>
+                      </HStack>
+                      <SimpleGrid columns={[1, 2]} spacing={2}>
+                        {smartLocationSuggestions.map((location) => {
+                          const isSelected = selectedLocation === location.name
+                          return (
+                            <Button
+                              key={`smart-${location.name}`}
+                              size="sm"
+                              variant={isSelected ? 'solid' : 'outline'}
+                              colorScheme={location.name.startsWith('Suggested midpoint') ? 'teal' : 'green'}
+                              justifyContent="flex-start"
+                              h="auto"
+                              py={2}
+                              whiteSpace="normal"
+                              textAlign="left"
+                              leftIcon={<Icon as={location.name.startsWith('Suggested midpoint') ? FaLightbulb : location.type === 'mall' ? FaStore : FaMapMarkerAlt} />}
+                              onClick={() => {
+                                setSelectedLocation(location.name)
+                                if (!searchedLocations.find((item) => item.name === location.name) && location.name.startsWith('Suggested midpoint')) {
+                                  setSearchedLocations((prev) => [location, ...prev].slice(0, 5))
+                                }
+                                setValidationError(null)
+                              }}
+                            >
+                              <Box>
+                                <Text fontSize="xs" fontWeight="800" noOfLines={1}>{location.name}</Text>
+                                <Text fontSize="2xs" fontWeight="500" opacity={0.82} noOfLines={1}>{location.address}</Text>
+                              </Box>
+                            </Button>
+                          )
+                        })}
+                      </SimpleGrid>
+                      {!midpointLocation && (
+                        <Text fontSize="xs" color="gray.500" mt={2}>
+                          Enable location, then choose a mapped place to improve midpoint suggestions.
+                        </Text>
+                      )}
+                    </Box>
+
                     <Box mb={4} position="relative" zIndex={1500}>
                       <InputGroup size="sm">
                         <InputLeftElement pointerEvents="none">
@@ -2313,7 +2766,7 @@ const MultiWayTradeModal: React.FC<MultiWayTradeModalProps> = ({
                         <MapClickPicker
                           onPick={(lat, lng) => {
                             const loc: MeetupLocation = {
-                              name: 'Pinned location',
+                              name: `Pinned location (${lat.toFixed(5)}, ${lng.toFixed(5)})`,
                               address: `${lat.toFixed(5)}, ${lng.toFixed(5)}`,
                               type: 'other',
                               lat,
@@ -2321,7 +2774,7 @@ const MultiWayTradeModal: React.FC<MultiWayTradeModalProps> = ({
                             }
                             setPinnedLocation(loc)
                             setSearchedLocations((prev) => {
-                              const filtered = prev.filter((p) => p.name !== 'Pinned location')
+                              const filtered = prev.filter((p) => !p.name.startsWith('Pinned location'))
                               return [loc, ...filtered].slice(0, 5)
                             })
                             setSelectedLocation(loc.name)
@@ -2720,18 +3173,20 @@ const MultiWayTradeModal: React.FC<MultiWayTradeModalProps> = ({
                           </VStack>
                         )}
 
-                        {getMeetupState() === 'finalized' && (
+                        {getMeetupState() === 'finalized' && renderMultiwayTrackingPanel()}
+
+                        {getMeetupState() === 'finalized' && Boolean(false) && agreedMeetup && (
                           <VStack spacing={3} align="stretch">
                             <Box p={[2, 3]} bg="green.100" borderRadius="md" borderWidth="2px" borderColor="green.400" textAlign="center">
                               <Icon as={FaCheckCircle} color="green.500" boxSize={6} mb={1} />
                               <Text fontWeight="600" color="green.700" fontSize={['sm', 'md']}>
                                 {participantIds.length <= 2 ? 'You Both Agreed!' : 'Everyone Agreed!'}
                               </Text>
-                              {agreedMeetup && (
+                              {agreedMeetup ? (
                                 <Text fontSize={['xs', 'sm']} color="green.600" mt={0.5}>
                                   {agreedMeetup.meetup_location} · {new Date(agreedMeetup.meetup_date + 'T00:00:00').toLocaleDateString()} · {formatTimePH(agreedMeetup.meetup_time)}
                                 </Text>
-                              )}
+                              ) : null}
                             </Box>
 
                             <Button
@@ -2784,11 +3239,13 @@ const MultiWayTradeModal: React.FC<MultiWayTradeModalProps> = ({
                           </VStack>
                         )}
 
-                        <HStack justify="flex-start" pt={1}>
-                          <Button size="sm" variant="outline" onClick={resetMeetupSelection} isLoading={resettingMeetup}>
-                            Change My Selection
-                          </Button>
-                        </HStack>
+                        {getMeetupState() !== 'finalized' && (
+                          <HStack justify="flex-start" pt={1}>
+                            <Button size="sm" variant="outline" onClick={resetMeetupSelection} isLoading={resettingMeetup}>
+                              Change My Selection
+                            </Button>
+                          </HStack>
+                        )}
 
                         <AlertDialog
                           isOpen={showDisputeDialog}

@@ -654,19 +654,6 @@ const Home: React.FC = () => {
       return Number(b.id || 0) - Number(a.id || 0)
     })
 
-    if (process.env.NODE_ENV !== 'production') {
-      console.log(
-        '[HOME SORT] final rendered order (first 30):',
-        sorted.slice(0, 30).map((p: any) => ({
-          id: p.id,
-          title: String(p.title || '').slice(0, 25),
-          distanceKm: p.distanceKm,
-          distance: p.distance,
-          isBoosted: getBoostStatus(p).isBoosted,
-        }))
-      )
-    }
-
     return sorted
   }, [products])
 
@@ -1833,9 +1820,7 @@ const Home: React.FC = () => {
         </ModalContent>
       </Modal>
 
-      <Box mb={{ base: 5, md: 0 }}>
-        <FloatingTab />
-      </Box>
+      <FloatingTab />
 
       {/* Location Reminder Modal */}
       <Modal isOpen={showLocationReminder} onClose={() => setShowLocationReminder(false)} isCentered>

@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Link as RouterLink } from 'react-router-dom'
 import {
   Box,
@@ -43,31 +44,10 @@ const FloatingTab: React.FC<FloatingTabProps> = ({
   const { onOpen: openMobileNav } = useMobileNav()
   const navigate = useNavigate()
   const prefersReducedMotion = useReducedMotion()
-  const [hidden, setHidden] = useState(false)
   const [notificationPulseKey, setNotificationPulseKey] = useState(0)
   const [offerPulseKey, setOfferPulseKey] = useState(0)
   const previousNotificationCount = React.useRef(notificationCount)
   const previousOfferCount = React.useRef(offerCount)
-
-  useEffect(() => {
-    let lastY = window.scrollY
-    let ticking = false
-    const onScroll = () => {
-      if (ticking) return
-      ticking = true
-      window.requestAnimationFrame(() => {
-        const nextY = window.scrollY
-        const delta = nextY - lastY
-        if (Math.abs(delta) > 8) {
-          setHidden(delta > 0 && nextY > 120)
-          lastY = nextY
-        }
-        ticking = false
-      })
-    }
-    window.addEventListener('scroll', onScroll, { passive: true })
-    return () => window.removeEventListener('scroll', onScroll)
-  }, [])
 
   useEffect(() => {
     if (notificationCount > previousNotificationCount.current) {
@@ -90,7 +70,7 @@ const FloatingTab: React.FC<FloatingTabProps> = ({
     },
   }
 
-  return (
+  return createPortal(
     <>
       {/* Mobile Bottom Navigation Bar - Floating Tab */}
       <MotionBox
@@ -105,8 +85,8 @@ const FloatingTab: React.FC<FloatingTabProps> = ({
         initial={false}
         animate={{
           x: '-50%',
-          y: (hidden || isSelectMode) && !prefersReducedMotion ? 120 : 0,
-          opacity: (hidden || isSelectMode) && !prefersReducedMotion ? 0 : 1,
+          y: isSelectMode && !prefersReducedMotion ? 120 : 0,
+          opacity: isSelectMode && !prefersReducedMotion ? 0 : 1,
           scale: isSelectMode && !prefersReducedMotion ? 0.85 : 1,
           pointerEvents: isSelectMode ? 'none' : 'auto',
         }}
@@ -315,7 +295,8 @@ const FloatingTab: React.FC<FloatingTabProps> = ({
           }}
         />
       )}
-    </>
+    </>,
+    document.body,
   )
 }
 

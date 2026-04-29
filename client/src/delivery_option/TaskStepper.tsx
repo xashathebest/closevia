@@ -32,6 +32,7 @@ import 'leaflet/dist/leaflet.css'
 import L from 'leaflet'
 import { api } from '../services/api'
 import { Delivery, DeliveryStop, Trade } from '../types'
+import TransactionTrackingLayout from '../components/TransactionTrackingLayout'
 
 // Fix generic leaflet icon URLs (guarded to avoid runtime import issues)
 if (L?.Icon?.Default) {
@@ -296,6 +297,22 @@ const TaskStepper: React.FC = () => {
   const etaMinutes = routeSteps.length > 0
     ? Math.max(1, Math.round(routeSteps.reduce((sum, step) => sum + step.duration, 0) / 60))
     : null
+  const routeDistanceM = routeSteps.length > 0 ? routeSteps.reduce((sum, step) => sum + step.distance, 0) : null
+  const routeDistanceLabel = routeLoading
+    ? 'Calculating distance...'
+    : routeDistanceM != null
+      ? routeDistanceM < 1000 ? `${Math.round(routeDistanceM)} m` : `${(routeDistanceM / 1000).toFixed(1)} km`
+      : 'Distance unavailable'
+  const routeEtaLabel = routeLoading
+    ? 'Calculating ETA...'
+    : etaMinutes != null
+      ? `${etaMinutes} min`
+      : 'ETA unavailable'
+  const openCurrentStopMaps = () => {
+    if (destinationLat == null || destinationLng == null) return
+    const origin = userLocation ? `&origin=${userLocation.lat},${userLocation.lng}` : ''
+    window.open(`https://www.google.com/maps/dir/?api=1${origin}&destination=${destinationLat},${destinationLng}`, '_blank', 'noopener,noreferrer')
+  }
 
   useEffect(() => {
     const lat = destinationLat
@@ -887,12 +904,64 @@ const TaskStepper: React.FC = () => {
                   )}
                 </VStack>
 
-                {/* Map Guidance */}
-                <VStack spacing={2} align="stretch">
+                <TransactionTrackingLayout
+                  title="Current route"
+                  subtitle={destinationAddress || routeError || 'Next delivery stop'}
+                  destination={destinationLat != null && destinationLng != null ? { lat: destinationLat, lng: destinationLng, label: getTaskTitle(currentTask) } : null}
+                  currentLocation={userLocation ? { ...userLocation, label: 'Your location' } : null}
+                  route={routeCoords}
+                  distanceLabel={routeDistanceLabel}
+                  etaLabel={routeEtaLabel}
+                  fallbackMessage={routeError || (!userLocation ? 'Enable location to view ETA and route.' : undefined)}
+                  onOpenExternal={openCurrentStopMaps}
+                  externalDisabled={destinationLat == null || destinationLng == null}
+                  height="360px"
+                  minContent={(
+                    <Box minW={0}>
+                      <Text fontWeight="900" color="gray.800" fontSize="sm">{getTaskTitle(currentTask)}</Text>
+                      <Text fontSize="xs" color="gray.500" noOfLines={1}>{routeEtaLabel} · {routeDistanceLabel}</Text>
+                    </Box>
+                  )}
+                  halfContent={(
+                    <VStack spacing={2} align="stretch">
+                      <Text fontSize="xs" color="gray.600" noOfLines={2}>{destinationAddress || 'Destination address unavailable'}</Text>
+                      {routeSteps.length > 0 && (
+                        <HStack justify="space-between">
+                          <Text fontSize="xs" color="gray.600">Route steps</Text>
+                          <Text fontSize="xs" color="gray.500">{routeSteps.length}</Text>
+                        </HStack>
+                      )}
+                    </VStack>
+                  )}
+                  fullContent={routeSteps.length > 0 ? (
+                    <VStack spacing={2} align="stretch">
+                      <VStack spacing={2} align="stretch" maxH={showAllSteps ? '280px' : '180px'} overflowY="auto">
+                        {(showAllSteps ? routeSteps : routeSteps.slice(0, 10)).map((step, idx) => (
+                          <HStack key={`step-${idx}`} justify="space-between" align="start">
+                            <Text fontSize="xs" color="gray.700" flex={1}>
+                              {idx + 1}. {step.instruction}
+                            </Text>
+                            <Text fontSize="xs" color="gray.500" flexShrink={0}>
+                              {Math.round(step.distance)}m
+                            </Text>
+                          </HStack>
+                        ))}
+                      </VStack>
+                      {routeSteps.length > 10 && (
+                        <Button size="xs" variant="ghost" onClick={() => setShowAllSteps((prev) => !prev)}>
+                          {showAllSteps ? 'Hide steps' : 'Show all steps'}
+                        </Button>
+                      )}
+                    </VStack>
+                  ) : null}
+                />
+
+                {/* Legacy map hidden: route UI now uses shared tracking layout above. */}
+                {destinationLat != null && destinationLng != null && false && <VStack spacing={2} align="stretch">
                   {destinationLat != null && destinationLng != null ? (
                     <Box borderRadius="md" overflow="hidden" borderWidth="1px" borderColor="gray.200">
                       <MapContainer
-                        center={[destinationLat, destinationLng]}
+                        center={[destinationLat || 0, destinationLng || 0]}
                         zoom={15}
                         style={{ height: '240px', width: '100%' }}
                         scrollWheelZoom={false}
@@ -902,14 +971,14 @@ const TaskStepper: React.FC = () => {
                           <Polyline positions={routeCoords} color="#2F855A" weight={4} />
                         )}
                         {userLocation && (
-                          <Marker position={[userLocation.lat, userLocation.lng]} />
+                          <Marker position={[userLocation!.lat, userLocation!.lng]} />
                         )}
-                        <Marker position={[destinationLat, destinationLng]} />
+                        <Marker position={[destinationLat || 0, destinationLng || 0]} />
                         <FitBounds
                           points={[
                             ...(routeCoords || []),
-                            userLocation ? [userLocation.lat, userLocation.lng] : null,
-                            [destinationLat, destinationLng],
+                            userLocation ? [userLocation!.lat, userLocation!.lng] : null,
+                            [destinationLat || 0, destinationLng || 0],
                           ].filter(Boolean) as Array<[number, number]>}
                         />
                       </MapContainer>
@@ -973,7 +1042,7 @@ const TaskStepper: React.FC = () => {
                       Destination: {destinationAddress}
                     </Text>
                   )}
-                </VStack>
+                </VStack>}
 
                 <Divider />
 

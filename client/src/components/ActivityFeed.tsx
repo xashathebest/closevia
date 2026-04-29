@@ -3,6 +3,7 @@ import { Box, HStack, Text, Icon, Skeleton } from '@chakra-ui/react';
 import { keyframes } from '@emotion/react';
 import { FaExchangeAlt, FaTag, FaMapMarkerAlt } from 'react-icons/fa';
 import { api } from '../services/api';
+import { useAuth } from '../contexts/AuthContext';
 
 const scrollAnimation = keyframes`
   0% { transform: translateX(0); }
@@ -18,6 +19,7 @@ interface Activity {
 }
 
 const ActivityFeed = () => {
+    const { user } = useAuth();
     const [activities, setActivities] = useState<Activity[]>(() => {
         try {
             const raw = sessionStorage.getItem('home_activity_feed_cache');
@@ -76,28 +78,20 @@ const ActivityFeed = () => {
             intervalId = setInterval(() => fetchActivities(pollLat, pollLng), 30000);
         };
 
-        // Fetch immediately so the feed does not wait on geolocation permissions.
-        fetchActivities();
-        startPolling();
-
-        // Enhance with location in parallel when available.
-        if (navigator.geolocation) {
-            navigator.geolocation.getCurrentPosition(
-                (pos) => {
-                    pollLat = pos.coords.latitude;
-                    pollLng = pos.coords.longitude;
-                    fetchActivities(pollLat, pollLng);
-                },
-                () => {},
-                { enableHighAccuracy: true, timeout: 4000, maximumAge: 60000 }
-            );
+        // Use stored profile coordinates — no unsolicited geolocation prompt.
+        if (user?.latitude && user?.longitude) {
+            pollLat = user.latitude as number;
+            pollLng = user.longitude as number;
         }
+
+        fetchActivities(pollLat, pollLng);
+        startPolling();
 
         return () => {
             isMounted = false;
             if (intervalId) clearInterval(intervalId);
         };
-    }, []);
+    }, [user?.latitude, user?.longitude]);
 
     if (isLoading) {
         return (
