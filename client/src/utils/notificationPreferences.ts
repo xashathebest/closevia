@@ -51,7 +51,7 @@ export const getNotificationPreferenceKey = (notification: { type?: string; mess
   if (type === 'trade_loop') {
     return Number(notification.participant_count || 0) === 2 ? 'trade_matches' : 'multiway_trades'
   }
-  if (type === 'trade_offer') return 'offers_received'
+  if (type === 'trade_offer' || type === 'offer_received') return 'offers_received'
   if (type === 'chat_message' || type === 'trade_message') return 'chat_messages'
   if (type === 'account' || type === 'security') return 'account_security'
   if (type === 'system' || type === 'announcement') return 'system_announcements'

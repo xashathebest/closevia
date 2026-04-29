@@ -18,6 +18,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/xashathebest/clovia/database"
 	"github.com/xashathebest/clovia/models"
+	"github.com/xashathebest/clovia/services"
 )
 
 type AdminHandler struct {
@@ -56,6 +57,7 @@ type AdminStats struct {
 	RevenueBreakdown     []RevenueBreakdown `json:"revenue_breakdown"`
 	RevenueBySource      map[string]float64 `json:"revenue_by_source"`
 	RecentActivity       []RecentActivity   `json:"recent_activity"`
+	MonitoringSummary    map[string]int     `json:"monitoring_summary"`
 	LastUpdated          string             `json:"last_updated"`
 }
 
@@ -142,6 +144,13 @@ func (h *AdminHandler) GetAdminStats(c *fiber.Ctx) error {
 	var newUsersToday, newListingsToday, verifiedUsers int
 	var pendingApprovals, pendingVerifications, reportsFiled, suspendedUsers int
 	var totalIncome float64
+	monitoringSummary := map[string]int{
+		"reported_users_items": 0,
+		"stuck_trades":         0,
+		"failed_payments":      0,
+		"suspicious_users":     0,
+		"recent_errors":        services.RecentBackendErrorCount(),
+	}
 
 	if v, err := queryInt(`SELECT COUNT(*) FROM users`); err == nil {
 		totalUsers = v
@@ -186,12 +195,29 @@ func (h *AdminHandler) GetAdminStats(c *fiber.Ctx) error {
 	}
 	if v, err := queryInt(`SELECT COUNT(*) FROM reports`); err == nil {
 		reportsFiled = v
+		monitoringSummary["reported_users_items"] = v
 	}
 	// Suspended users: older/newer schemas might use role='suspended' or is_suspended boolean.
 	if v, err := queryInt(`SELECT COUNT(*) FROM users WHERE role = 'suspended'`); err == nil {
 		suspendedUsers = v
 	} else if v2, err2 := queryInt(`SELECT COUNT(*) FROM users WHERE is_suspended = true`); err2 == nil {
 		suspendedUsers = v2
+	}
+	monitoringSummary["suspicious_users"] = suspendedUsers
+	if v, err := queryInt(`
+		SELECT COUNT(*)
+		FROM trades
+		WHERE status IN ('pending','pending_multiway','accepted_by_one','accepted','active','ongoing','awaiting_confirmation','multiway_active')
+		  AND updated_at < DATE_SUB(NOW(), INTERVAL 7 DAY)
+	`); err == nil {
+		monitoringSummary["stuck_trades"] = v
+	}
+	if v, err := queryInt(`
+		SELECT COUNT(*)
+		FROM rider_remittance_payments
+		WHERE status = 'rejected' AND created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+	`); err == nil {
+		monitoringSummary["failed_payments"] = v
 	}
 
 	// Storage Usage (prefer information_schema for fast metadata-based estimate)
@@ -332,6 +358,7 @@ func (h *AdminHandler) GetAdminStats(c *fiber.Ctx) error {
 		RevenueBreakdown:     revenueBreakdown,
 		RevenueBySource:      revenueBySource,
 		RecentActivity:       recentActivity,
+		MonitoringSummary:    monitoringSummary,
 		LastUpdated:          now.Format("2006-01-02 15:04:05"),
 	}
 

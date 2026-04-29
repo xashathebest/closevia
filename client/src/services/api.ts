@@ -159,6 +159,7 @@ api.interceptors.response.use(
   async (error: AxiosError) => {
     const cfg = error.config as (AxiosRequestConfig & { _retry?: boolean }) | undefined
     const status = error.response?.status
+    const requestId = error.response?.headers?.['x-request-id'] || error.response?.headers?.['X-Request-ID']
     const url = cfg?.url || ''
     const method = String(cfg?.method || 'get').toLowerCase()
     const isUnsafeApiRequest = !safeMethods.has(method) && String(url).startsWith('/api/')
@@ -184,6 +185,11 @@ api.interceptors.response.use(
           console.groupEnd()
         }
       } catch { }
+    }
+    ;(error as any).requestId = requestId
+    if (requestId && (status ?? 0) >= 400) {
+      // eslint-disable-next-line no-console
+      console.warn(`[API ERROR] request_id=${requestId} status=${status ?? 'ERR'} url=${url}`)
     }
 
     // On 401 after retry failed, let route guards and component-level handlers decide UX.

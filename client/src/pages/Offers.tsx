@@ -10,6 +10,10 @@ import OfferDetailsModal from '../components/OfferDetailsModal'
 import TradeCompletionModal from '../components/TradeCompletionModal'
 import ViewTradeModal from '../components/ViewTradeModal'
 import AnimatedEmptyState from '../components/AnimatedEmptyState'
+import { motion, useReducedMotion } from 'framer-motion'
+import { motionDurations, motionEasings } from '../utils/motion'
+
+const MotionBox = motion(Box)
 
 const Offers: React.FC = () => {
   const navigate = useNavigate()
@@ -36,6 +40,7 @@ const Offers: React.FC = () => {
   const bgColor = useColorModeValue('#FEFEFE', 'gray.900')
   const cardBg = useColorModeValue('#FDFDFD', 'gray.800')
   const softAccent = useColorModeValue('#F8F9FA', 'gray.700')
+  const prefersReducedMotion = useReducedMotion()
 
   const fetchAll = async (isBackground = false) => {
     try {
@@ -688,6 +693,60 @@ const Offers: React.FC = () => {
     )
   }
 
+  const TradeProgressRail = React.memo(({ trade }: { trade: Trade }) => {
+    const status = String(trade.status || '').toLowerCase()
+    const hasSchedule =
+      Boolean((trade as any).meetup_date || (trade as any).meetup_time || (trade as any).scheduled_at || (trade as any).pickup_date || (trade as any).pickup_time)
+    const activeIndex = status === 'completed'
+      ? 3
+      : hasSchedule
+        ? 1
+        : status === 'accepted' || status === 'active'
+          ? 0
+          : -1
+    const steps = ['Accepted', 'Schedule', 'Meetup', 'Done']
+
+    return (
+      <HStack spacing={1.5} w="full" py={1} aria-label="Trade progress">
+        {steps.map((step, index) => {
+          const complete = index <= activeIndex
+          const current = index === Math.max(0, activeIndex)
+          return (
+            <React.Fragment key={step}>
+              <VStack spacing={1} minW="38px" flexShrink={0}>
+                <MotionBox
+                  w="16px"
+                  h="16px"
+                  borderRadius="full"
+                  bg={complete ? 'green.400' : 'gray.200'}
+                  borderWidth="2px"
+                  borderColor={current ? 'green.200' : complete ? 'green.400' : 'gray.200'}
+                  animate={prefersReducedMotion || !current ? undefined : { scale: [1, 1.12, 1] }}
+                  transition={{ duration: 0.42, ease: motionEasings.easeOut }}
+                  boxShadow={complete ? '0 0 0 3px rgba(72, 187, 120, 0.12)' : 'none'}
+                />
+                <Text fontSize="8px" color={complete ? 'green.700' : 'gray.500'} fontWeight={complete ? '800' : '600'} noOfLines={1}>
+                  {step}
+                </Text>
+              </VStack>
+              {index < steps.length - 1 && (
+                <MotionBox
+                  flex="1"
+                  h="2px"
+                  borderRadius="full"
+                  bg={index < activeIndex ? 'green.300' : 'gray.200'}
+                  initial={false}
+                  animate={prefersReducedMotion ? undefined : { opacity: index < activeIndex ? 1 : 0.75 }}
+                  transition={{ duration: motionDurations.uiSlow, ease: motionEasings.easeOut }}
+                />
+              )}
+            </React.Fragment>
+          )
+        })}
+      </HStack>
+    )
+  })
+
   // Grid Card Component for offers
   const OfferGridCard = React.memo(({ trade, type, onViewDetails, onAction, onSecondaryAction }: {
     trade: Trade
@@ -792,6 +851,8 @@ const Offers: React.FC = () => {
                   )}
                 </VStack>
               )}
+
+              {type === 'progress' && <TradeProgressRail trade={trade} />}
 
               {/* User Info */}
               <Box w="100%" fontSize="11px" color="gray.600">
@@ -1519,7 +1580,7 @@ const Offers: React.FC = () => {
                   const pickupInfo = getPickupScheduleInfo(t)
                   return (
                   <ScaleFade in={true} key={t.id}>
-                    <Box 
+                    <MotionBox 
                       bg="white" 
                       borderWidth="1px"
                       borderLeftWidth="4px"
@@ -1533,7 +1594,7 @@ const Offers: React.FC = () => {
                       p={3}
                       position="relative"
                       boxShadow="sm"
-                      h="160px"
+                      minH="178px"
                       display="flex"
                       flexDirection="column"
                       _hover={{
@@ -1544,6 +1605,7 @@ const Offers: React.FC = () => {
                                    t.status === 'accepted' || t.status === 'active' ? 'green.500' : 'gray.300'
                       }}
                       transition="all 0.2s cubic-bezier(0.4, 0, 0.2, 1)"
+                      layout={!prefersReducedMotion}
                     >
                       {/* Top row: badges and status */}
                       <HStack justify="space-between" mb={1} spacing={1} flexShrink={0}>
@@ -1592,6 +1654,8 @@ const Offers: React.FC = () => {
                         <Text fontSize="10px" color="gray.600" noOfLines={1}><Text as="span" fontWeight="medium">{(t.buyer_name || 'Trader').substring(0, 12)}</Text> ↔ <Text as="span" fontWeight="medium">{(t.seller_name || 'Trader').substring(0, 12)}</Text></Text>
                       </VStack>
 
+                      <TradeProgressRail trade={t} />
+
                       {/* Actions positioned at bottom */}
                       <HStack spacing={1} mt="auto" flexShrink={0}>
                         <Button 
@@ -1618,7 +1682,7 @@ const Offers: React.FC = () => {
                           Done
                         </Button>
                       </HStack>
-                    </Box>
+                    </MotionBox>
                   </ScaleFade>
                 )})}
               </VStack>

@@ -1517,6 +1517,26 @@ func (h *TradeHandler) CreateTrade(c *fiber.Ctx) error {
 		_ = tx.Rollback()
 		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "This product is no longer available for trading"})
 	}
+
+	// Re-check inside the transaction so two quick taps cannot create duplicate
+	// active offers for the same product before either request commits.
+	var duplicateTradeID int
+	err = tx.QueryRow(`
+		SELECT id FROM trades
+		WHERE buyer_id = ? AND target_product_id = ?
+		  AND status IN ('pending', 'pending_multiway', 'countered', 'accepted', 'accepted_by_one', 'active', 'ongoing', 'awaiting_confirmation', 'multiway_active')
+		LIMIT 1
+		FOR UPDATE
+	`, userID, payload.TargetProductID).Scan(&duplicateTradeID)
+	if err == nil {
+		_ = tx.Rollback()
+		return c.Status(409).JSON(models.APIResponse{Success: false, Error: "You already have an active offer or trade for this product"})
+	}
+	if err != sql.ErrNoRows {
+		_ = tx.Rollback()
+		log.Printf("Error checking duplicate trade inside transaction: %v", err)
+		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to check existing trades"})
+	}
 	if err := h.ensureOfferedProductsAvailableForUserTx(tx, userID, payload.OfferedProductIDs, 0); err != nil {
 		_ = tx.Rollback()
 		return c.Status(409).JSON(models.APIResponse{Success: false, Error: err.Error()})
@@ -1710,8 +1730,9 @@ func (h *TradeHandler) CreateTrade(c *fiber.Ctx) error {
 		publishNotification(userID, mismatchMsgToBuyer, "trade_update")
 		publishNotification(sellerID, mismatchMsgToSeller, "trade_update")
 	} else {
-		_, _ = h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_offer', ?, FALSE)", sellerID, notifMsg)
+		insertTradeNotification(h.db, sellerID, "trade_offer", notifMsg, tradeID)
 		publishNotification(sellerID, notifMsg, "trade_offer")
+		sendPushToUser(sellerID, "Offer received", notifMsg, offerDeepLink(tradeID), "offer_received")
 	}
 
 	// Ensure chat conversation exists and add a system message

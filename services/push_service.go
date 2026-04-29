@@ -182,7 +182,7 @@ func (s *PushService) pushAllowedForUser(userID int, notificationType string) bo
 
 func preferenceKeyForNotificationType(notificationType string) string {
 	switch strings.TrimSpace(notificationType) {
-	case "trade_offer":
+	case "trade_offer", "offer_received":
 		return "offers_received"
 	case "offer_accepted":
 		return "offers_accepted"

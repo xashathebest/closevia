@@ -84,7 +84,10 @@ import { formatEstimatedValueRange } from '../utils/currency'
 import { getCategoryLabel, normalizeWantedCategories } from '../utils/categories'
 import axios from 'axios';
 import { CloseIcon } from '@chakra-ui/icons'
-import { productImageTransitionName } from '../utils/motion'
+import { motion, useReducedMotion } from 'framer-motion'
+import { motionDurations, motionEasings, productImageTransitionName } from '../utils/motion'
+
+const MotionBox = motion(Box)
 
 const ProductDetail: React.FC = () => {
   const { id } = useParams<{ id: string }>()
@@ -139,6 +142,7 @@ const ProductDetail: React.FC = () => {
   const detailMuted = useColorModeValue('gray.600', 'gray.400')
   const detailBorder = useColorModeValue('gray.200', 'gray.700')
   const detailSurface = useColorModeValue('gray.50', 'gray.800')
+  const prefersReducedMotion = useReducedMotion()
 
   const handleSetCover = async (imageIndex: number) => {
     if (!product) return
@@ -403,12 +407,38 @@ const ProductDetail: React.FC = () => {
     }
   };
 
+  const cacheProductDetail = (identifier: string, nextProduct: Product, nextVotes: { under: number; over: number }, nextUserVote: string) => {
+    try {
+      const payload = JSON.stringify({ product: nextProduct, votes: nextVotes, user_vote: nextUserVote, cached_at: Date.now() })
+      localStorage.setItem(`clovia_product_detail_${identifier}`, payload)
+      localStorage.setItem(`clovia_product_detail_${nextProduct.id}`, payload)
+      if (nextProduct.slug) localStorage.setItem(`clovia_product_detail_${nextProduct.slug}`, payload)
+    } catch { }
+  }
+
+  const restoreCachedProductDetail = (identifier: string): boolean => {
+    try {
+      const raw = localStorage.getItem(`clovia_product_detail_${identifier}`)
+      if (!raw) return false
+      const cached = JSON.parse(raw)
+      if (!cached?.product) return false
+      setProduct(cached.product as Product)
+      setVotes(cached.votes || { under: 0, over: 0 })
+      setUserVote(cached.user_vote || '')
+      const cachedAt = cached.cached_at ? new Date(cached.cached_at).toLocaleString() : ''
+      setError(cachedAt ? `You're offline. Showing this item's last saved version from ${cachedAt}.` : "You're offline. Showing this item's last saved version.")
+      return true
+    } catch {
+      return false
+    }
+  }
+
   const fetchProduct = async () => {
+    const identifier = id!
     try {
       setLoading(true)
       setError('')
 
-      const identifier = id!
       // Direct API call so we can read vote counts and user_vote in the response
       const productId = parseInt(identifier)
       if (!isNaN(productId) && identifier === productId.toString()) {
@@ -420,6 +450,7 @@ const ProductDetail: React.FC = () => {
           setProduct(p)
           setVotes(data.votes || { under: 0, over: 0 })
           setUserVote(data.user_vote || '')
+          cacheProductDetail(identifier, p, data.votes || { under: 0, over: 0 }, data.user_vote || '')
           if (p.slug) {
             navigate(`/products/${p.slug}`, { replace: true })
             return
@@ -429,6 +460,7 @@ const ProductDetail: React.FC = () => {
           setProduct(p)
           setVotes({ under: 0, over: 0 })
           setUserVote('')
+          cacheProductDetail(identifier, p, { under: 0, over: 0 }, '')
         } else {
           setError("Hmm, we couldn't find this item. It may have been removed.")
         }
@@ -440,16 +472,21 @@ const ProductDetail: React.FC = () => {
           setProduct(p)
           setVotes(data.votes || { under: 0, over: 0 })
           setUserVote(data.user_vote || '')
+          cacheProductDetail(identifier, p, data.votes || { under: 0, over: 0 }, data.user_vote || '')
         } else if (data) {
           const p = data as Product
           setProduct(p)
           setVotes({ under: 0, over: 0 })
           setUserVote('')
+          cacheProductDetail(identifier, p, { under: 0, over: 0 }, '')
         } else {
           setError("Hmm, we couldn't find this item. It may have been removed.")
         }
       }
     } catch (err: unknown) {
+      if (!navigator.onLine && restoreCachedProductDetail(identifier)) {
+        return
+      }
       if (axios.isAxiosError(err)) {
         const status = err.response?.status
         if (status === 403) {
@@ -1041,7 +1078,7 @@ const ProductDetail: React.FC = () => {
     )
   }
 
-  if (error || !product) {
+  if (!product) {
     return (
       <Box bg="#FFFDF1" minH="100vh" w="100%">
         <Container maxW="container.md" py={8}>
@@ -1180,6 +1217,12 @@ const ProductDetail: React.FC = () => {
     <Box bg="#FFFDF1" minH="100vh" w="100%" pb={{ base: '150px', md: '120px', lg: '100px' }}>
       <Container maxW="container.xl" pt={{ base: 2, md: 8 }} pb={{ base: 6, md: 10 }} px={{ base: 4, md: 4 }}>
         <VStack spacing={{ base: 3, md: 8 }} align="stretch">
+          {error && (
+            <Alert status="info" borderRadius="xl" bg="blue.50" color="blue.800">
+              <AlertIcon />
+              {error}
+            </Alert>
+          )}
           <Box bg="white" borderRadius={{ base: 'lg', md: '3xl' }} overflow="hidden" shadow={{ base: 'none', md: 'xl' }} p={{ base: 0, md: 4 }} borderWidth={{ base: '1px', md: 0 }} borderColor="gray.100">
             <SimpleGrid columns={{ base: 1, lg: 2 }} spacing={{ base: 2, md: 6 }}>
               {/* Product Media Gallery */}
@@ -1424,7 +1467,10 @@ const ProductDetail: React.FC = () => {
                                   w={{ base: '34px', md: '34px' }}
                                   minW={{ base: '34px', md: '34px' }}
                                   borderRadius="9px"
-                                  _hover={{ bg: 'var(--pd-surface)' }}
+                                  boxShadow={isSaved ? '0 0 0 3px rgba(229, 62, 62, 0.12)' : 'none'}
+                                  _hover={{ bg: 'var(--pd-surface)', transform: prefersReducedMotion ? undefined : 'translateY(-1px)' }}
+                                  _active={{ transform: prefersReducedMotion ? undefined : 'scale(0.96)', boxShadow: isSaved ? '0 0 0 5px rgba(229, 62, 62, 0.16)' : '0 0 0 4px rgba(49, 151, 149, 0.12)' }}
+                                  transition="transform 180ms ease-out, box-shadow 180ms ease-out, background-color 180ms ease-out"
                                 />
                               </Tooltip>
 
@@ -1662,7 +1708,10 @@ const ProductDetail: React.FC = () => {
                       fontSize="sm"
                       whiteSpace="pre-line"
                       wordBreak="break-word"
-                      noOfLines={isDescriptionExpanded ? undefined : 4}
+                      maxH={isDescriptionExpanded ? '520px' : { base: '6.4em', md: '6.8em' }}
+                      overflow="hidden"
+                      transition="max-height 240ms cubic-bezier(0.4, 0, 0.2, 1), opacity 180ms ease-out"
+                      opacity={isDescriptionExpanded ? 1 : 0.96}
                     >
                       {product.description}
                     </Text>
@@ -2271,7 +2320,7 @@ const ProductDetail: React.FC = () => {
           </Box>
 
           {/* Seller Products Section */}
-          <Box bg="white" p={6} rounded="lg" shadow="sm">
+          <MotionBox bg="white" p={6} rounded="lg" shadow="sm" layout={!prefersReducedMotion} transition={{ duration: motionDurations.uiSlow, ease: motionEasings.easeInOut }}>
             <Flex justify="space-between" align={{ base: 'stretch', sm: 'center' }} direction={{ base: 'column', sm: 'row' }} gap={3} mb={6}>
               <Heading size="md">
                 Trader Products
@@ -2288,6 +2337,7 @@ const ProductDetail: React.FC = () => {
                 <option value="all">All</option>
               </Select>
             </Flex>
+            <MotionBox layout={!prefersReducedMotion}>
             <SimpleGrid columns={{ base: 1, sm: 2, md: 3, lg: 4 }} spacing={4}>
               {displayedSellerProducts.length > 0 ? (
                 displayedSellerProducts.map((p) => (
@@ -2343,7 +2393,8 @@ const ProductDetail: React.FC = () => {
                 </Box>
               )}
             </SimpleGrid>
-          </Box>
+            </MotionBox>
+          </MotionBox>
         </VStack>
         <TradeModal isOpen={isTradeOpen} onClose={() => setIsTradeOpen(false)} targetProductId={tradeTargetProductId} />
         <BuyoutModal isOpen={isBuyoutOpen} onClose={() => setIsBuyoutOpen(false)} targetProductId={product?.id ?? null} />

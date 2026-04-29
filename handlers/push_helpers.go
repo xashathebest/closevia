@@ -17,6 +17,22 @@ func tradeDeepLink(tradeID int) string {
 	return fmt.Sprintf("/dashboard?tab=ongoing&trade_id=%d", tradeID)
 }
 
+func offerDeepLink(tradeID int) string {
+	if tradeID <= 0 {
+		return "/offers"
+	}
+	return fmt.Sprintf("/offers?trade_id=%d", tradeID)
+}
+
+func notificationDeepLink(notificationType string, tradeID int) string {
+	switch strings.TrimSpace(notificationType) {
+	case "trade_offer", "offer_received":
+		return offerDeepLink(tradeID)
+	default:
+		return tradeDeepLink(tradeID)
+	}
+}
+
 func insertTradeNotification(db *sql.DB, userID int, notificationType, message string, tradeID int) {
 	if db == nil || userID <= 0 {
 		return
@@ -32,7 +48,7 @@ func insertTradeNotification(db *sql.DB, userID int, notificationType, message s
 			notificationType,
 			message,
 			tradeID,
-			tradeDeepLink(tradeID),
+			notificationDeepLink(notificationType, tradeID),
 			string(metadata),
 		); err == nil {
 			return
