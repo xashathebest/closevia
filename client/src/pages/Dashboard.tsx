@@ -6866,7 +6866,7 @@ const Dashboard: React.FC = () => {
         </VStack>
       </Container>
 
-      <FloatingTab showAddButton={actualUserProducts.length > 0} />
+      <FloatingTab showAddButton={actualUserProducts.length > 0} isSelectMode={isProductSelectMode} />
 
 
       <SuggestedTradesModal

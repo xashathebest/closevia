@@ -36,7 +36,7 @@ import { isRunningStandalone } from '../serviceWorkerRegistration'
 const Sidebar: React.FC = () => {
   const location = useLocation()
   const navigate = useNavigate()
-  const logo = '/logo.svg'
+  const logo = '/icons/CloviaLogo.svg'
   const bgColor = useColorModeValue('white', 'gray.800')
   const borderColor = useColorModeValue('gray.200', 'gray.700')
   const iconColor = useColorModeValue('gray.600', 'gray.300')
@@ -395,7 +395,7 @@ const Sidebar: React.FC = () => {
                       _hover={{ bg: 'gray.50', borderRadius: 'xl' }}
                       mt={1}
                     >
-                      <Image src="/logo.svg" alt="ECODE" h="20px" objectFit="contain" loading="lazy" />
+                      <Image src="/icons/CloviaLogo.svg" alt="ECODE" h="20px" objectFit="contain" loading="lazy" />
                       <Text fontSize="xs" fontWeight="bold" color="gray.400" letterSpacing="wider">POWERED BY ECODE</Text>
                     </Flex>
                   </Box>
@@ -458,7 +458,7 @@ const Sidebar: React.FC = () => {
                 borderRadius="lg"
               />
               {/* <Image
-                src="/logo.svg"
+                src="/icons/CloviaLogo.svg"
                 alt="ECODE"
                 h="30px"
                 objectFit="contain"

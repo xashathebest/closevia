@@ -29,6 +29,7 @@ interface FloatingTabProps {
   homeLink?: string
   addProductLink?: string
   showAddButton?: boolean
+  isSelectMode?: boolean
 }
 
 const FloatingTab: React.FC<FloatingTabProps> = ({
@@ -36,6 +37,7 @@ const FloatingTab: React.FC<FloatingTabProps> = ({
   homeLink = '/home',
   addProductLink = '/add-product',
   showAddButton = true,
+  isSelectMode = false,
 }) => {
   const { notificationCount, offerCount } = useRealtime()
   const { onOpen: openMobileNav } = useMobileNav()
@@ -93,8 +95,7 @@ const FloatingTab: React.FC<FloatingTabProps> = ({
       {/* Mobile Bottom Navigation Bar - Floating Tab */}
       <MotionBox
         position="fixed"
-        bottom="env(safe-area-inset-bottom, 16px)"
-        mb={8}
+        bottom="calc(env(safe-area-inset-bottom, 0px) + 16px)"
         left="50%"
         display={{ base: 'block', md: 'none' }}
         zIndex={200}
@@ -104,8 +105,10 @@ const FloatingTab: React.FC<FloatingTabProps> = ({
         initial={false}
         animate={{
           x: '-50%',
-          y: hidden && !prefersReducedMotion ? 96 : 0,
-          opacity: hidden && !prefersReducedMotion ? 0 : 1,
+          y: (hidden || isSelectMode) && !prefersReducedMotion ? 120 : 0,
+          opacity: (hidden || isSelectMode) && !prefersReducedMotion ? 0 : 1,
+          scale: isSelectMode && !prefersReducedMotion ? 0.85 : 1,
+          pointerEvents: isSelectMode ? 'none' : 'auto',
         }}
         transition={{ duration: motionDurations.uiSlow, ease: motionEasings.easeOut }}
         style={{ willChange: 'transform, opacity' }}
@@ -291,7 +294,7 @@ const FloatingTab: React.FC<FloatingTabProps> = ({
           aria-label="Add product"
           icon={<AddIcon />}
           position="fixed"
-          bottom={12}
+          bottom="calc(env(safe-area-inset-bottom, 0px) + 48px)"
           right={6}
           h={14}
           w={14}

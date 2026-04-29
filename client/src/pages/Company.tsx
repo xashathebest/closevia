@@ -154,14 +154,14 @@ const Company: React.FC = () => {
             {/* Logo Section */}
             <HStack spacing={2} cursor="pointer" onClick={() => navigate('/')} flex={1}>
               <Image
-                src="/logo.svg"
+                src="/icons/CloviaLogo.svg"
                 alt="Logo"
                 h={{ base: '32px', md: '40px', lg: '44px' }}
                 objectFit="contain"
               />
               {/* ECODE Logo - Mobile Only */}
               <Image
-                src="/logo.svg"
+                src="/icons/CloviaLogo.svg"
                 alt="ECODE Logo"
                 h={{ base: '28px', md: '0' }}
                 objectFit="contain"

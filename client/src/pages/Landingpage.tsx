@@ -50,7 +50,7 @@ const Navbar = ({ navigate, onGetStarted, isLoggedIn }: { navigate: ReturnType<t
       >
         {/* Logo - Use actual SVG */}
         <HStack spacing={2} cursor="pointer" onClick={() => navigate('/')} _hover={{ opacity: 0.8 }} transition="opacity 0.2s">
-          <Image src="/logo.svg" alt="CloviaPH" h={{ base: '32px', md: '36px' }} w="auto" />
+          <Image src="/icons/CloviaLogo.svg" alt="CloviaPH" h={{ base: '32px', md: '36px' }} w="auto" />
         </HStack>
 
         {/* Desktop Nav */}
@@ -115,7 +115,7 @@ const Navbar = ({ navigate, onGetStarted, isLoggedIn }: { navigate: ReturnType<t
           <DrawerContent bg={C.bg}>
             <DrawerCloseButton color={C.textDark} />
             <DrawerHeader>
-              <Image src="/logo.svg" alt="CloviaPH" h="32px" w="auto" />
+              <Image src="/icons/CloviaLogo.svg" alt="CloviaPH" h="32px" w="auto" />
             </DrawerHeader>
             <DrawerBody>
               <Stack spacing={4}>
@@ -862,7 +862,7 @@ const LandingPage: React.FC = () => {
             gap={6}
           >
             <HStack spacing={2}>
-              <Image src="/logo.svg" alt="CloviaPH" h="28px" w="auto" />
+              <Image src="/icons/CloviaLogo.svg" alt="CloviaPH" h="28px" w="auto" />
               <Text fontSize="xs" color={C.textMuted} fontWeight="600">Zamboanga's Student Trading Platform</Text>
             </HStack>
             <Text fontSize="sm" color={C.textMuted} fontWeight="500">

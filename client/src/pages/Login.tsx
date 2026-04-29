@@ -211,7 +211,7 @@ const Login: React.FC = () => {
             mb={8}
             boxShadow="0 2px 10px rgba(0,0,0,0.25)"
           >
-            <Image src="/logo.svg" w="100%" h="100%" objectFit="contain" draggable={false} />
+            <Image src="/icons/CloviaLogo.svg" w="100%" h="100%" objectFit="contain" draggable={false} />
           </Box>
 
           <Heading
@@ -281,7 +281,7 @@ const Login: React.FC = () => {
           zIndex={0}
           filter="blur(3px)"
         >
-          <Image src="/logo.svg" w="100%" h="100%" objectFit="contain" draggable={false} />
+          <Image src="/icons/CloviaLogo.svg" w="100%" h="100%" objectFit="contain" draggable={false} />
         </Box>
 
         {/* Mobile top brand section */}
@@ -302,7 +302,7 @@ const Login: React.FC = () => {
             boxShadow="0 4px 18px rgba(21,134,146,0.22)"
             mb={2.5}
           >
-            <Image src="/logo.svg" w="100%" h="100%" objectFit="contain" draggable={false} />
+            <Image src="/icons/CloviaLogo.svg" w="100%" h="100%" objectFit="contain" draggable={false} />
           </Box>
           <Text fontSize="13px" color="gray.500" fontWeight="500" letterSpacing="0.1px">
             Start trading smarter today
@@ -343,7 +343,7 @@ const Login: React.FC = () => {
                 },
               }}
             >
-              <Image src="/logo.svg" w="100%" h="100%" objectFit="contain" draggable={false} />
+              <Image src="/icons/CloviaLogo.svg" w="100%" h="100%" objectFit="contain" draggable={false} />
             </Box>
           </Box>
 
