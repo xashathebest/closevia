@@ -13,6 +13,7 @@ import {
   Icon,
   useColorModeValue,
   useToast,
+  useBreakpointValue,
 } from '@chakra-ui/react'
 import { EditIcon, StarIcon, ViewIcon } from '@chakra-ui/icons'
 import { FaMoneyBillWave, FaHandshake, FaExchangeAlt, FaCheckCircle, FaHeart, FaRegHeart } from 'react-icons/fa'
@@ -61,6 +62,7 @@ const ProductCard: React.FC<ProductCardProps> = ({
   const navigate = useNavigate()
   const toast = useToast()
   const { user } = useAuth()
+  const isMobile = useBreakpointValue({ base: true, md: false })
   const [boostTimeRemaining, setBoostTimeRemaining] = useState<string | null>(null)
   const [isBoosted, setIsBoosted] = useState(false)
   const [isSaved, setIsSaved] = useState(Boolean(product.is_saved))
@@ -465,7 +467,7 @@ const ProductCard: React.FC<ProductCardProps> = ({
           />
         </Box>
 
-        {/* Mobile-only condition badge overlay — bottom right of image */}
+        {/* Mobile-only condition badge overlay — bottom right of image, avoids sold badge */}
         {product.condition && product.status !== 'sold' && (
           <Badge
             display={{ base: 'flex', md: 'none' }}
@@ -490,6 +492,11 @@ const ProductCard: React.FC<ProductCardProps> = ({
             py={0.5}
             zIndex={2}
             opacity={0.9}
+            maxW="calc(100% - 16px)"
+            noOfLines={1}
+            overflow="hidden"
+            textOverflow="ellipsis"
+            whiteSpace="nowrap"
           >
             {product.condition}
           </Badge>
@@ -763,7 +770,8 @@ const ProductCard: React.FC<ProductCardProps> = ({
             <HStack spacing={{ base: 1, md: 2 }} w="full">
               <Button
                 size="sm"
-                h={{ base: '30px', md: '36px' }}
+                h={{ base: '40px', md: '40px' }}
+                minH="40px"
                 leftIcon={<EditIcon />}
                 flex={1}
                 px={{ base: 1, md: 3 }}
@@ -778,7 +786,8 @@ const ProductCard: React.FC<ProductCardProps> = ({
               </Button>
               <Button
                 size="sm"
-                h={{ base: '30px', md: '36px' }}
+                h={{ base: '40px', md: '40px' }}
+                minH="40px"
                 leftIcon={<ViewIcon />}
                 flex={1}
                 px={{ base: 1, md: 3 }}
@@ -793,16 +802,18 @@ const ProductCard: React.FC<ProductCardProps> = ({
             </HStack>
           </VStack>
         ) : (
-          <HStack spacing={{ base: 1, md: 2 }} mt="auto" pt={{ base: 1, md: 2 }} w="full">
+          <HStack spacing={{ base: 1, md: 2 }} mt="auto" pt={{ base: 1, md: 2 }} w="full" overflow="hidden">
             <Tooltip label="Trade" placement="top">
               <Button
                 size="sm"
-                h={{ base: '30px', md: '36px' }}
+                h={{ base: '40px', md: '40px' }}
+                minH="40px"
                 bg={useColorModeValue('brand.50', 'brand.900')}
                 color={useColorModeValue('brand.600', 'brand.200')}
-                leftIcon={<Icon as={FaExchangeAlt} />}
+                leftIcon={isMobile ? undefined : <Icon as={FaExchangeAlt} boxSize="13px" />}
                 flex={1}
-                px={{ base: 1, md: 3 }}
+                minW={0}
+                px={{ base: '6px', md: 3 }}
                 borderRadius="xl"
                 fontSize={{ base: '10px', md: '13px' }}
                 fontWeight="700"
@@ -818,12 +829,14 @@ const ProductCard: React.FC<ProductCardProps> = ({
 
             <Button
               size="sm"
-              h={{ base: '30px', md: '36px' }}
+              h={{ base: '40px', md: '40px' }}
+              minH="40px"
               bg={useColorModeValue('orange.50', 'orange.900')}
               color={useColorModeValue('orange.600', 'orange.200')}
-              leftIcon={<Icon as={FaMoneyBillWave} />}
+              leftIcon={isMobile ? undefined : <Icon as={FaMoneyBillWave} boxSize="13px" />}
               flex={1}
-              px={{ base: 1, md: 3 }}
+              minW={0}
+              px={{ base: '6px', md: 3 }}
               borderRadius="xl"
               fontSize={{ base: '10px', md: '13px' }}
               fontWeight="700"
@@ -842,9 +855,9 @@ const ProductCard: React.FC<ProductCardProps> = ({
                   aria-label="View offers"
                   icon={<FaHandshake />}
                   size="sm"
-                  h={{ base: '30px', md: '36px' }}
-                  w={{ base: '30px', md: '36px' }}
-                  minW={{ base: '30px', md: '36px' }}
+                  h={{ base: '40px', md: '40px' }}
+                  w={{ base: '40px', md: '40px' }}
+                  minW={{ base: '40px', md: '40px' }}
                   bg={useColorModeValue('brand.50', 'brand.900')}
                   color={useColorModeValue('brand.600', 'brand.200')}
                   borderRadius="xl"

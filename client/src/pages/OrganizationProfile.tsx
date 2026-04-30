@@ -253,9 +253,8 @@ const OrganizationProfile: React.FC = () => {
         })
       }
 
-      const res = await api.post(`/api/organizations/${handle}/posts`, formData, {
-        headers: { 'Content-Type': 'multipart/form-data' }
-      })
+      // Do NOT manually set Content-Type — axios sets it with the correct multipart boundary
+      const res = await api.post(`/api/organizations/${handle}/posts`, formData)
       
       if (res.data?.success) {
         setPostContent('')
@@ -334,19 +333,51 @@ const OrganizationProfile: React.FC = () => {
               <Image src={getImageUrl((communityOrg?.logo_url || org?.org_logo_url || org?.profile_picture))} alt={(communityOrg?.name || org?.org_name || org?.name || 'Organization')} w="full" h="full" objectFit="cover" />
             </Box>
 
-            <VStack align="start" spacing={{ base: 3, md: 4 }}>
-              <VStack align="start" spacing={1} w="full">
-                <HStack spacing={3} wrap="wrap" w="full">
-                  <Heading size={{ base: 'lg', md: 'xl' }} fontWeight="800" color="gray.800" letterSpacing="tight">{communityOrg?.name || org?.org_name || org?.name}</Heading>
-                  <Badge bg="brand.50" color="brand.600" px={3} py={1} borderRadius="full" fontSize="xs" fontWeight="800" textTransform="uppercase" letterSpacing="wider">{communityOrg?.category || (org as any)?.org_category || 'Community'}</Badge>
+            <VStack align="start" spacing={{ base: 3, md: 4 }} w="full" minW={0} overflow="hidden">
+              <VStack align="start" spacing={1} w="full" minW={0}>
+                <HStack spacing={2} wrap="wrap" w="full" align="flex-start">
+                  <Heading
+                    size={{ base: 'md', md: 'xl' }}
+                    fontWeight="800"
+                    color="gray.800"
+                    letterSpacing="tight"
+                    wordBreak="break-word"
+                    overflowWrap="anywhere"
+                    maxW="full"
+                    flex={1}
+                    minW={0}
+                  >
+                    {communityOrg?.name || org?.org_name || org?.name}
+                  </Heading>
+                  <Badge bg="brand.50" color="brand.600" px={3} py={1} borderRadius="full" fontSize="xs" fontWeight="800" textTransform="uppercase" letterSpacing="wider" flexShrink={0} whiteSpace="nowrap">{communityOrg?.category || (org as any)?.org_category || 'Community'}</Badge>
                 </HStack>
-                <Text color="brand.500" fontWeight="700" fontSize={{ base: 'sm', md: 'md' }}>@{communityOrg?.slug || org?.org_handle || handle}</Text>
+                <Text
+                  color="brand.500"
+                  fontWeight="700"
+                  fontSize={{ base: 'sm', md: 'md' }}
+                  wordBreak="break-all"
+                  overflowWrap="anywhere"
+                  maxW="full"
+                >
+                  @{communityOrg?.slug || org?.org_handle || handle}
+                </Text>
               </VStack>
-              
-              <Text color="gray.600" fontSize={{ base: 'sm', md: 'md' }} lineHeight="tall" fontWeight="500">{communityOrg?.description || org?.bio || 'No description yet.'}</Text>
+
+              <Text
+                color="gray.600"
+                fontSize={{ base: 'sm', md: 'md' }}
+                lineHeight="tall"
+                fontWeight="500"
+                wordBreak="break-word"
+                overflowWrap="anywhere"
+                noOfLines={6}
+                maxW="full"
+              >
+                {communityOrg?.description || org?.bio || 'No description yet.'}
+              </Text>
 
               <VStack spacing={3} w="full" align="stretch" pt={2}>
-                {(communityOrg?.creator_user_id || org?.id) && !isCreator ? <Button as={RouterLink} to={`/users/${communityOrg?.creator_user_id || org?.id}`} variant="outline" size={{ base: 'sm', md: 'md' }} h="44px" borderRadius="xl" fontWeight="700" _hover={{ bg: 'gray.50' }} w="full">View Owner Profile</Button> : null}
+                {(communityOrg?.creator_user_id || org?.id) && !isCreator ? <Button as={RouterLink} to={`/users/${communityOrg?.creator_user_id || org?.id}`} variant="outline" size={{ base: 'sm', md: 'md' }} h="44px" borderRadius="xl" fontWeight="700" _hover={{ bg: 'gray.50' }} w="full" whiteSpace="normal" overflow="hidden" textOverflow="ellipsis">View Owner Profile</Button> : null}
                 {!user ? <Button as={RouterLink} to="/login" bg="brand.500" color="white" h="44px" borderRadius="xl" fontWeight="800" shadow="sm" _hover={{ bg: 'brand.600', transform: 'translateY(-2px)', shadow: 'md' }} transition="all 0.2s" size={{ base: 'sm', md: 'md' }} w="full">Login to Join</Button> : null}
                 {user && !isCreator && membershipStatus === 'none' ? <Button bg="brand.500" color="white" h="44px" borderRadius="xl" fontWeight="800" shadow="sm" _hover={{ bg: 'brand.600', transform: 'translateY(-2px)', shadow: 'md' }} transition="all 0.2s" size={{ base: 'sm', md: 'md' }} onClick={handleJoinRequest} isLoading={joinLoading} w="full">Request to Join</Button> : null}
                 
@@ -467,9 +498,17 @@ const OrganizationProfile: React.FC = () => {
                       </Box>
                     )}
 
-                    {/* File Input - Action Buttons */}
-                    <HStack justify="space-between" w="full" pt={1}>
-                      <Box as="label" htmlFor="org-post-images" cursor="pointer">
+                    {/* File Input - Action Buttons — stack on narrow screens */}
+                    <Box
+                      display="flex"
+                      flexDirection={{ base: 'column', sm: 'row' }}
+                      gap={2}
+                      pt={1}
+                      w="full"
+                      alignItems={{ base: 'stretch', sm: 'center' }}
+                      justifyContent={{ sm: 'space-between' }}
+                    >
+                      <Box as="label" htmlFor="org-post-images" cursor="pointer" flexShrink={0}>
                         <Input
                           type="file"
                           multiple
@@ -489,14 +528,15 @@ const OrganizationProfile: React.FC = () => {
                           fontWeight="700"
                           color="gray.600"
                           _hover={{ bg: 'gray.100' }}
+                          w={{ base: 'full', sm: 'auto' }}
                         >
-                          Add Photos
+                          {postImages.length > 0 ? `Photos (${postImages.length})` : 'Add Photos'}
                         </Button>
                       </Box>
-                      <Button 
-                        bg="brand.500" 
-                        color="white" 
-                        size="md" 
+                      <Button
+                        bg="brand.500"
+                        color="white"
+                        size="md"
                         h="44px"
                         px={8}
                         borderRadius="xl"
@@ -504,12 +544,14 @@ const OrganizationProfile: React.FC = () => {
                         shadow="sm"
                         _hover={{ transform: 'translateY(-2px)', shadow: 'md', bg: 'brand.600' }}
                         transition="all 0.2s"
-                        onClick={handleCreatePost} 
+                        onClick={handleCreatePost}
                         isLoading={posting}
+                        w={{ base: 'full', sm: 'auto' }}
+                        loadingText="Publishing..."
                       >
                         Publish Post
                       </Button>
-                    </HStack>
+                    </Box>
                   </VStack>
                 </Box>
 

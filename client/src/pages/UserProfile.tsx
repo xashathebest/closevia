@@ -725,9 +725,20 @@ const UserProfile: React.FC<UserProfileProps> = ({ userId }) => {
   }, [products, user, sellerStats])
 
   const displayRating = sellerStats?.avg_rating ?? user?.rating ?? 0
-  const displayTotalReviews = sellerStats?.total_feedback ?? user?.total_reviews ?? reviews.length ?? 0
-  const displayPositivePercent = sellerStats?.positive_percent ?? user?.positive_feedback
-  const displayPositivePercentValue = typeof displayPositivePercent === 'number' ? displayPositivePercent : 0
+
+  // Use sellerStats as source of truth; fall back to actual reviews array length (not user.total_reviews which may be stale)
+  const displayTotalReviews = sellerStats?.total_feedback ?? (reviews.filter(r => !r.id?.toString().startsWith('mock')).length) ?? 0
+
+  // Derive positive percent from reviews when stats are missing
+  const derivedPositivePercent = React.useMemo(() => {
+    if (typeof sellerStats?.positive_percent === 'number') return sellerStats.positive_percent
+    if (typeof user?.positive_feedback === 'number') return user.positive_feedback
+    if (reviews.length === 0) return null
+    const positiveCount = reviews.filter(r => (r.rating ?? r.score ?? 0) >= 4).length
+    return Math.round((positiveCount / reviews.length) * 100)
+  }, [sellerStats, user, reviews])
+
+  const displayPositivePercentValue = derivedPositivePercent ?? 0
 
   // Fetch real trade history from backend for this specific user
   const [userTrades, setUserTrades] = useState<any[]>([])
@@ -815,6 +826,9 @@ const UserProfile: React.FC<UserProfileProps> = ({ userId }) => {
       return acc
     }, { total: 0, completed: 0, cancelled: 0, pending: 0 })
   }, [userTrades])
+
+  // Completed trades count: prefer sellerStats, then tradeActivityCounts computed from real API data
+  const displayCompletedTrades = sellerStats?.completed_trades ?? sellerStats?.successful_trades ?? tradeActivityCounts.completed
 
   const tradeHistoryItems = useMemo(() => {
     return [...userTrades].sort((a, b) => {
@@ -1257,16 +1271,24 @@ const UserProfile: React.FC<UserProfileProps> = ({ userId }) => {
 
               {/* Condensed rating/status line */}
               <HStack spacing={2} flexWrap="wrap" fontSize="sm" color="gray.600" mb={2}>
-                {displayTotalReviews === 0 ? (
-                  <Text color="gray.500">Positive: 0% (0 trades)</Text>
+                {displayTotalReviews === 0 && displayCompletedTrades === 0 && derivedPositivePercent === null ? (
+                  <Text color="gray.500">No reviews yet · {tradeActivityCounts.completed} completed trades</Text>
                 ) : (
                   <>
-                    <Icon as={FiStar} color="yellow.400" />
-                    <Text fontWeight="semibold" color="gray.800">{displayRating.toFixed(1)}</Text>
-                    <Text color="gray.500">({displayTotalReviews} reviews)</Text>
-                    <Text color="gray.300">•</Text>
-                    <Text fontWeight="semibold" color="green.500">Positive: {Math.round(displayPositivePercentValue)}%</Text>
-                    <Text color="gray.800">({stats.completed} trades)</Text>
+                    {displayRating > 0 && (
+                      <>
+                        <Icon as={FiStar} color="yellow.400" />
+                        <Text fontWeight="semibold" color="gray.800">{displayRating.toFixed(1)}</Text>
+                      </>
+                    )}
+                    {displayTotalReviews > 0 && (
+                      <Text color="gray.500">({displayTotalReviews} {displayTotalReviews === 1 ? 'review' : 'reviews'})</Text>
+                    )}
+                    {(displayTotalReviews > 0 || displayCompletedTrades > 0) && <Text color="gray.300">•</Text>}
+                    <Text fontWeight="semibold" color="green.500">
+                      Positive: {derivedPositivePercent !== null ? `${Math.round(displayPositivePercentValue)}%` : '—'}
+                    </Text>
+                    <Text color="gray.800">({displayCompletedTrades} {displayCompletedTrades === 1 ? 'trade' : 'trades'})</Text>
                   </>
                 )}
               </HStack>
@@ -1678,22 +1700,33 @@ const UserProfile: React.FC<UserProfileProps> = ({ userId }) => {
                   <HStack justify="space-between" align="flex-start" flexWrap="wrap">
                     <Box>
                       <Heading size="md" mb={1}>Traded Items</Heading>
-                      {displayTotalReviews === 0 ? (
-                        <Text fontSize="md" color="gray.500" mb={1}>⭐ No reviews yet</Text>
+                      {displayTotalReviews === 0 && displayCompletedTrades === 0 ? (
+                        <Text fontSize="sm" color="gray.500" mb={1}>No completed trades with reviews yet.</Text>
                       ) : (
                         <>
-                          <HStack spacing={1} mb={2}>
-                            <Icon as={FiStar} color="yellow.400" boxSize={5} />
-                            <Text fontSize="xl" fontWeight="bold">
-                              {displayRating.toFixed(1)}
-                              <Text as="span" fontSize="md" fontWeight="normal" color="gray.600" ml={1}>
-                                ({displayTotalReviews} reviews)
+                          {displayRating > 0 && (
+                            <HStack spacing={1} mb={1}>
+                              <Icon as={FiStar} color="yellow.400" boxSize={5} />
+                              <Text fontSize="xl" fontWeight="bold">
+                                {displayRating.toFixed(1)}
+                                {displayTotalReviews > 0 && (
+                                  <Text as="span" fontSize="md" fontWeight="normal" color="gray.600" ml={1}>
+                                    ({displayTotalReviews} {displayTotalReviews === 1 ? 'review' : 'reviews'})
+                                  </Text>
+                                )}
                               </Text>
+                            </HStack>
+                          )}
+                          {derivedPositivePercent !== null && (
+                            <Text color="green.600" fontSize="sm">
+                              {Math.round(displayPositivePercentValue)}% positive · {displayCompletedTrades} completed {displayCompletedTrades === 1 ? 'trade' : 'trades'}
                             </Text>
-                          </HStack>
-                          <Text color="green.600" fontSize="sm">
-                            {Math.round(displayPositivePercentValue)}% positive feedback
-                          </Text>
+                          )}
+                          {displayTotalReviews === 0 && displayCompletedTrades > 0 && (
+                            <Text color="gray.400" fontSize="sm">
+                              {displayCompletedTrades} completed {displayCompletedTrades === 1 ? 'trade' : 'trades'} · no reviews yet
+                            </Text>
+                          )}
                         </>
                       )}
                     </Box>

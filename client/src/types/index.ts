@@ -117,6 +117,13 @@ export interface Product {
 
 export type CollectionMethod = 'pickup' | 'meetup'
 
+export interface CollectionLocationPoint {
+  name: string
+  address: string
+  lat: number
+  lng: number
+}
+
 export interface CollectionSetup {
   methods: CollectionMethod[]
   pickup?: {
@@ -127,6 +134,7 @@ export interface CollectionSetup {
   }
   meetup?: {
     locations: string[]
+    location_points?: CollectionLocationPoint[]
     days: string[]
     time_start: string
     time_end: string

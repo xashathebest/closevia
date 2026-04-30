@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState, useRef } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { Box, Heading, VStack, HStack, Text, Badge, Button, Center, useToast, Tabs, TabList, TabPanels, Tab, TabPanel, Select, Image, Link, useColorModeValue, Slide, ScaleFade, Icon, Modal, ModalOverlay, ModalContent, ModalBody, ModalCloseButton, Textarea, VisuallyHidden, SimpleGrid, IconButton, Tooltip, Skeleton } from '@chakra-ui/react'
 import { FaHandshake, FaTimes, FaMapMarkerAlt, FaTruck } from 'react-icons/fa'
 import { FiGrid, FiList } from 'react-icons/fi'
@@ -14,9 +14,21 @@ import { motion, useReducedMotion } from 'framer-motion'
 import { motionDurations, motionEasings } from '../utils/motion'
 
 const MotionBox = motion(Box)
+const OFFERS_TAB_TO_INDEX: Record<string, number> = {
+  inbox: 0,
+  received: 0,
+  sent: 1,
+  progress: 2,
+  ongoing: 2,
+  history: 3,
+  archive: 4,
+}
+
+const getOffersTabIndex = (tab: string | null) => tab ? OFFERS_TAB_TO_INDEX[tab] ?? 0 : 0
 
 const Offers: React.FC = () => {
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
   const [incoming, setIncoming] = useState<Trade[]>([])
   const [outgoing, setOutgoing] = useState<Trade[]>([])
   const [loading, setLoading] = useState(true)
@@ -31,7 +43,8 @@ const Offers: React.FC = () => {
   const [declineModalOpen, setDeclineModalOpen] = useState(false)
   const [tradeToDecline, setTradeToDecline] = useState<Trade | null>(null)
   const [declineFeedback, setDeclineFeedback] = useState('')
-  const [activeTab, setActiveTab] = useState(0)
+  const [activeTab, setActiveTab] = useState(() => getOffersTabIndex(searchParams.get('tab')))
+  const openedTradeIdRef = useRef<number | null>(null)
   const [isProcessing, setIsProcessing] = useState(false)
   const [currentUserId, setCurrentUserId] = useState<number | undefined>()
   const [productTitles, setProductTitles] = useState<Map<number, string>>(new Map())
@@ -143,6 +156,10 @@ const Offers: React.FC = () => {
 
     return () => clearInterval(interval)
   }, [])
+
+  useEffect(() => {
+    setActiveTab(getOffersTabIndex(searchParams.get('tab')))
+  }, [searchParams])
 
   const updateTrade = async (id: number, action: TradeAction) => {
     // Prevent multiple concurrent requests
@@ -381,6 +398,28 @@ const Offers: React.FC = () => {
     ...outgoingSorted.filter(t => archiveStatuses.includes(t.status)).map(t => ({ ...t, source: 'Offers Sent' as const })),
   ]
   const ongoingItems = incomingSorted.concat(outgoingSorted).filter(isOngoingTrade)
+
+  useEffect(() => {
+    if (loading) return
+    const linkedTradeId = Number(searchParams.get('trade_id'))
+    if (!Number.isInteger(linkedTradeId) || linkedTradeId <= 0 || openedTradeIdRef.current === linkedTradeId) return
+
+    const tabLists = [
+      offersReceivedSorted,
+      offersSentSorted,
+      ongoingItems,
+      historyItems,
+      archiveItems,
+    ]
+    const tabIndex = tabLists.findIndex(list => list.some(trade => Number(trade.id) === linkedTradeId))
+    const linkedTrade = tabIndex >= 0 ? tabLists[tabIndex].find(trade => Number(trade.id) === linkedTradeId) : null
+
+    if (linkedTrade) {
+      openedTradeIdRef.current = linkedTradeId
+      setActiveTab(tabIndex)
+      openTradeDetails(linkedTrade)
+    }
+  }, [archiveItems, historyItems, loading, offersReceivedSorted, offersSentSorted, ongoingItems, searchParams])
 
   const needsCurrentUserAcceptance = (trade: Trade) => {
     if (!currentUserId) return false
@@ -704,7 +743,7 @@ const Offers: React.FC = () => {
         : status === 'accepted' || status === 'active'
           ? 0
           : -1
-    const steps = ['Accepted', 'Schedule', 'Meetup', 'Done']
+    const steps = ['Accepted', 'Schedule', trade.meeting_type === 'pickup' ? 'Pickup' : 'Meetup', 'Done']
 
     return (
       <HStack spacing={1.5} w="full" py={1} aria-label="Trade progress">
@@ -946,7 +985,7 @@ const Offers: React.FC = () => {
         <Slide direction="top" in={!loading}>
           <HStack justify="space-between" mb={4} pl={24} mt={4} zIndex={10}>
             <Heading size="lg" color="brand.500" fontWeight="bold">
-              Trade Management
+              Offers
             </Heading>
             <HStack spacing={3} mt={2}>
               <Text fontSize="sm" color="gray.500" fontWeight="medium">Sort:</Text>
@@ -995,7 +1034,14 @@ const Offers: React.FC = () => {
           colorScheme="blue" 
           variant="soft-rounded" 
           index={activeTab} 
-          onChange={setActiveTab}
+          onChange={(index) => {
+            setActiveTab(index)
+            const next = new URLSearchParams(searchParams)
+            const tabNames = ['inbox', 'sent', 'progress', 'history', 'archive']
+            next.set('tab', tabNames[index] || 'inbox')
+            next.delete('trade_id')
+            setSearchParams(next, { replace: true })
+          }}
           bg={cardBg}
           borderRadius="lg"
           boxShadow="sm"

@@ -103,6 +103,8 @@ import {
   FaBullhorn,
   FaCalendarCheck,
   FaStar,
+  FaUserSlash,
+  FaPauseCircle,
 } from 'react-icons/fa'
 import { FiSettings, FiSave, FiMapPin } from 'react-icons/fi'
 import { motion, useAnimation, useDragControls, AnimationControls, DragControls } from 'framer-motion'
@@ -191,7 +193,8 @@ const SettingsSheet: React.FC<SettingsSheetProps> = ({ children }) => {
 
   return (
     <Box h="100dvh" w="100%" bg={pageBg} display="flex" flexDirection="column" overflow="hidden">
-      <Box flex={1} overflowY="auto" overflowX="hidden" pb={{ base: '100px', md: '80px' }}>
+      {/* Extra bottom padding accounts for: floating nav (~80px) + save bar (~72px) + safe area */}
+      <Box flex={1} overflowY="auto" overflowX="hidden" pb={{ base: 'calc(env(safe-area-inset-bottom, 0px) + 180px)', md: '80px' }}>
         {children}
       </Box>
     </Box>
@@ -288,6 +291,8 @@ const SettingsPage: React.FC = () => {
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
   const [changingPassword, setChangingPassword] = useState(false)
   const [deleteConfirmText, setDeleteConfirmText] = useState('')
+  const [deactivateDuration, setDeactivateDuration] = useState<'1_week' | '2_weeks' | '1_month' | 'indefinite'>('1_week')
+  const [isDeactivating, setIsDeactivating] = useState(false)
   const settingsTabs = useMemo(
     () => user?.role === 'admin' ? [...ADMIN_SETTINGS_TABS] : [...USER_SETTINGS_TABS],
     [user?.role]
@@ -309,6 +314,8 @@ const SettingsPage: React.FC = () => {
   const { isOpen: isIdentityConfirmOpen, onOpen: onIdentityConfirmOpen, onClose: onIdentityConfirmClose } = useDisclosure()
   const { isOpen: isLogoutModalOpen, onOpen: onLogoutModalOpen, onClose: onLogoutModalClose } = useDisclosure()
   const { isOpen: isDeleteAccountOpen, onOpen: onDeleteAccountOpen, onClose: onDeleteAccountClose } = useDisclosure()
+  const { isOpen: isDeactivateOpen, onOpen: onDeactivateOpen, onClose: onDeactivateClose } = useDisclosure()
+  const deactivateCancelRef = useRef<HTMLButtonElement>(null)
   const [identityChangeSummary, setIdentityChangeSummary] = useState<string[]>([])
   // Home Address state
   const [homeLocation, setHomeLocation] = useState<{ lat: number; lng: number } | null>(() => {
@@ -2477,74 +2484,121 @@ const SettingsPage: React.FC = () => {
               </Box>
               )}
 
-              {/* Delete Account Section - Subtle but Dangerous */}
+              {/* Danger Zone */}
               {activeTabKey === 'danger' && (
-              <Box p={0} m={0}>
-                <Card
-                  bg={useColorModeValue('red.50', 'rgba(245, 75, 85, 0.1)')}
-                  borderRadius="2xl"
-                  overflow="hidden"
-                  variant="outline"
-                  borderColor={useColorModeValue('red.200', 'red.700')}
-                  shadow="sm"
-                >
-                  <CardHeader pb={3}>
-                    <HStack spacing={3}>
-                      <Icon as={FaTrash} color="red.500" boxSize={5} />
-                      <Heading size="md" color="red.700">Delete Account</Heading>
-                    </HStack>
-                  </CardHeader>
-                  <CardBody pt={0}>
-                    <VStack spacing={4} align="stretch">
-                      <Text fontSize="sm" color={useColorModeValue('red.700', 'red.200')}>
-                        Permanently delete your account and all associated data. This action cannot be undone.
-                      </Text>
-                      <Button
-                        colorScheme="red"
-                        variant="outline"
-                        leftIcon={<FaTrash />}
-                        onClick={() => {
-                          setDeleteConfirmText('')
-                          onDeleteAccountOpen()
-                        }}
-                        w="fit-content"
-                        size="sm"
-                      >
-                        Delete Account
-                      </Button>
-                    </VStack>
-                  </CardBody>
-                </Card>
-              </Box>
+              <VStack spacing={4} align="stretch">
+                {/* Deactivate Account */}
+                <Box p={0} m={0}>
+                  <Card
+                    bg={useColorModeValue('orange.50', 'rgba(245, 140, 0, 0.08)')}
+                    borderRadius="2xl"
+                    overflow="hidden"
+                    variant="outline"
+                    borderColor={useColorModeValue('orange.200', 'orange.700')}
+                    shadow="sm"
+                  >
+                    <CardHeader pb={3}>
+                      <HStack spacing={3}>
+                        <Icon as={FaPauseCircle} color="orange.500" boxSize={5} />
+                        <Heading size="md" color="orange.700">Deactivate Account</Heading>
+                      </HStack>
+                    </CardHeader>
+                    <CardBody pt={0}>
+                      <VStack spacing={4} align="stretch">
+                        <Text fontSize="sm" color={useColorModeValue('orange.700', 'orange.200')}>
+                          Temporarily hide your profile, listings, and availability. You can reactivate anytime by logging back in.
+                        </Text>
+                        <HStack spacing={2} flexWrap="wrap">
+                          <Badge colorScheme="orange" variant="subtle" borderRadius="full" px={2}>Profile hidden</Badge>
+                          <Badge colorScheme="orange" variant="subtle" borderRadius="full" px={2}>Listings paused</Badge>
+                          <Badge colorScheme="orange" variant="subtle" borderRadius="full" px={2}>Trades paused</Badge>
+                          <Badge colorScheme="green" variant="subtle" borderRadius="full" px={2}>Reactivate anytime</Badge>
+                        </HStack>
+                        <Button
+                          colorScheme="orange"
+                          variant="outline"
+                          leftIcon={<Icon as={FaPauseCircle} />}
+                          onClick={onDeactivateOpen}
+                          w="fit-content"
+                          size="sm"
+                        >
+                          Deactivate Account
+                        </Button>
+                      </VStack>
+                    </CardBody>
+                  </Card>
+                </Box>
+
+                {/* Delete Account Section - Subtle but Dangerous */}
+                <Box p={0} m={0}>
+                  <Card
+                    bg={useColorModeValue('red.50', 'rgba(245, 75, 85, 0.1)')}
+                    borderRadius="2xl"
+                    overflow="hidden"
+                    variant="outline"
+                    borderColor={useColorModeValue('red.200', 'red.700')}
+                    shadow="sm"
+                  >
+                    <CardHeader pb={3}>
+                      <HStack spacing={3}>
+                        <Icon as={FaTrash} color="red.500" boxSize={5} />
+                        <Heading size="md" color="red.700">Delete Account</Heading>
+                      </HStack>
+                    </CardHeader>
+                    <CardBody pt={0}>
+                      <VStack spacing={4} align="stretch">
+                        <Text fontSize="sm" color={useColorModeValue('red.700', 'red.200')}>
+                          Permanently delete your account and all associated data. This action cannot be undone.
+                        </Text>
+                        <Button
+                          colorScheme="red"
+                          variant="outline"
+                          leftIcon={<FaTrash />}
+                          onClick={() => {
+                            setDeleteConfirmText('')
+                            onDeleteAccountOpen()
+                          }}
+                          w="fit-content"
+                          size="sm"
+                        >
+                          Delete Account
+                        </Button>
+                      </VStack>
+                    </CardBody>
+                  </Card>
+                </Box>
+              </VStack>
               )}
             </Box>
           </Tabs>
         </VStack>
       </Container>
 
-      {/* Sticky Save Button */}
+      {/* Sticky Save Button — sits above floating bottom nav on mobile */}
       {hasUnsavedChanges && (
         <Box
           position="fixed"
-          bottom={0}
+          bottom={{ base: 'calc(env(safe-area-inset-bottom, 0px) + 88px)', md: 0 }}
           left={0}
           right={0}
           bg={cardBg}
           borderTopWidth="1px"
           borderColor={borderColor}
-          boxShadow="lg"
-          py={4}
+          boxShadow="0 -4px 24px rgba(0,0,0,0.10)"
+          pt={3}
+          pb={{ base: 3, md: 'calc(env(safe-area-inset-bottom, 0px) + 12px)' }}
           px={4}
-          zIndex={1000}
+          zIndex={1001}
         >
           <Container maxW="container.lg">
-            <Flex justify="space-between" align="center" flexWrap="wrap" gap={4}>
-              <Text color={useColorModeValue('gray.600', 'gray.300')} fontSize="sm">
+            <Flex justify="space-between" align="center" flexWrap="wrap" gap={3}>
+              <Text color={useColorModeValue('gray.600', 'gray.300')} fontSize="sm" fontWeight="500">
                 You have unsaved changes
               </Text>
               <HStack spacing={3}>
                 <Button
                   variant="outline"
+                  size={{ base: 'sm', md: 'md' }}
                   onClick={() => {
                     // Reset to original values
                     if (user) {
@@ -2576,6 +2630,7 @@ const SettingsPage: React.FC = () => {
                 </Button>
                 <Button
                   colorScheme="brand"
+                  size={{ base: 'sm', md: 'md' }}
                   leftIcon={isSaving ? <Spinner size="sm" /> : <FiSave />}
                   onClick={() => handleSaveSettings()}
                   isLoading={isSaving}
@@ -2886,6 +2941,89 @@ const SettingsPage: React.FC = () => {
                 isDisabled={deleteConfirmText.trim() !== 'DELETE'}
               >
                 Delete Account
+              </Button>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialogOverlay>
+      </AlertDialog>
+
+      {/* Deactivate Account Confirmation Modal */}
+      <AlertDialog
+        isOpen={isDeactivateOpen}
+        leastDestructiveRef={deactivateCancelRef}
+        onClose={onDeactivateClose}
+        isCentered
+      >
+        <AlertDialogOverlay>
+          <AlertDialogContent borderRadius="2xl" mx={4}>
+            <AlertDialogHeader fontSize="lg" fontWeight="700">
+              <HStack spacing={2}>
+                <Icon as={FaPauseCircle} color="orange.500" />
+                <Text>Deactivate Account</Text>
+              </HStack>
+            </AlertDialogHeader>
+            <AlertDialogBody>
+              <VStack spacing={4} align="stretch">
+                <Text fontSize="sm" color="gray.600">
+                  Your profile, listings, and trade availability will be hidden. You can reactivate anytime by logging back in.
+                </Text>
+                <Alert status="info" borderRadius="xl" py={2}>
+                  <AlertIcon />
+                  <Text fontSize="xs">Auto-reactivation will occur after the selected duration, or you can log in anytime to reactivate immediately.</Text>
+                </Alert>
+                <Select
+                  value={deactivateDuration}
+                  onChange={(e) => setDeactivateDuration(e.target.value as typeof deactivateDuration)}
+                  borderRadius="xl"
+                  fontWeight="600"
+                >
+                  <option value="1_week">1 week</option>
+                  <option value="2_weeks">2 weeks</option>
+                  <option value="1_month">1 month</option>
+                  <option value="indefinite">Indefinite (until I log back in)</option>
+                </Select>
+              </VStack>
+            </AlertDialogBody>
+            <AlertDialogFooter>
+              <Button ref={deactivateCancelRef} variant="ghost" onClick={onDeactivateClose}>
+                Cancel
+              </Button>
+              <Button
+                colorScheme="orange"
+                ml={3}
+                isLoading={isDeactivating}
+                loadingText="Deactivating..."
+                leftIcon={<Icon as={FaUserSlash} />}
+                onClick={async () => {
+                  setIsDeactivating(true)
+                  try {
+                    await api.post('/api/users/deactivate', { duration: deactivateDuration })
+                    toast({
+                      id: 'account-deactivated',
+                      title: 'Account deactivated',
+                      description: 'Your account is now hidden. Log back in anytime to reactivate.',
+                      status: 'success',
+                      duration: 4000,
+                      isClosable: true,
+                    })
+                    onDeactivateClose()
+                    await logout()
+                    navigate('/login')
+                  } catch (err: any) {
+                    toast({
+                      id: 'deactivate-error',
+                      title: 'Could not deactivate account',
+                      description: err?.response?.data?.error || 'Please try again.',
+                      status: 'error',
+                      duration: 3000,
+                      isClosable: true,
+                    })
+                  } finally {
+                    setIsDeactivating(false)
+                  }
+                }}
+              >
+                Deactivate
               </Button>
             </AlertDialogFooter>
           </AlertDialogContent>

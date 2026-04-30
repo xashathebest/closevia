@@ -719,13 +719,27 @@ const RiderHome: React.FC = () => {
 
   // Tab state
   const [activeTab, setActiveTab] = useState<'home' | 'jobs' | 'earnings'>('home')
-  const [deliveryTab, setDeliveryTab] = useState(0) // 0: Available, 1: Active, 2: Completed
+  const [deliveryTab, setDeliveryTab] = useState(0) // 0: Available, 1: Active, 2: Completed, 3: Archived
 
   // Deliveries data
   const [availableDeliveries, setAvailableDeliveries] = useState<DeliveryWithBatch[]>([])
   const [activeDeliveries, setActiveDeliveries] = useState<DeliveryWithBatch[]>([])
   const [completedDeliveries, setCompletedDeliveries] = useState<DeliveryWithBatch[]>([])
   const [completedLoaded, setCompletedLoaded] = useState(false)
+
+  // Archive threshold: deliveries completed more than 14 days ago move to Archived
+  const ARCHIVE_DAYS = 14
+  const archiveThreshold = new Date(Date.now() - ARCHIVE_DAYS * 24 * 60 * 60 * 1000)
+
+  const recentCompleted = completedDeliveries.filter(d => {
+    const completedAt = d.delivered_at ? new Date(d.delivered_at) : (d.updated_at ? new Date(d.updated_at) : null)
+    return completedAt ? completedAt >= archiveThreshold : true
+  })
+
+  const archivedDeliveries = completedDeliveries.filter(d => {
+    const completedAt = d.delivered_at ? new Date(d.delivered_at) : (d.updated_at ? new Date(d.updated_at) : null)
+    return completedAt ? completedAt < archiveThreshold : false
+  })
   const [loading, setLoading] = useState(true)
   const [accepting, setAccepting] = useState<number | null>(null)
   // Task 14: Express job lock message
@@ -747,7 +761,7 @@ const RiderHome: React.FC = () => {
     if (!riderState?.permissions?.can_view_jobs) return
 
     try {
-      const shouldLoadCompleted = deliveryTab === 2 || completedLoaded
+      const shouldLoadCompleted = deliveryTab === 2 || deliveryTab === 3 || completedLoaded
       const requests = [
         api.get('/api/deliveries/available'),
         api.get('/api/deliveries/my-jobs?status=active'),
@@ -928,10 +942,11 @@ const RiderHome: React.FC = () => {
 
       {/* Delivery Tabs */}
       <Tabs index={deliveryTab} onChange={setDeliveryTab} colorScheme="brand" px={4}>
-        <TabList>
-          <Tab fontSize="sm">Available ({availableDeliveries.length})</Tab>
-          <Tab fontSize="sm">Active ({activeDeliveries.length})</Tab>
-          <Tab fontSize="sm">Completed ({completedDeliveries.length})</Tab>
+        <TabList overflowX="auto" overflowY="hidden" sx={{ scrollbarWidth: 'none', '&::-webkit-scrollbar': { display: 'none' } }} flexShrink={0}>
+          <Tab fontSize="sm" whiteSpace="nowrap" flexShrink={0}>Available ({availableDeliveries.length})</Tab>
+          <Tab fontSize="sm" whiteSpace="nowrap" flexShrink={0}>Active ({activeDeliveries.length})</Tab>
+          <Tab fontSize="sm" whiteSpace="nowrap" flexShrink={0}>Completed ({recentCompleted.length})</Tab>
+          <Tab fontSize="sm" whiteSpace="nowrap" flexShrink={0}>Archived ({archivedDeliveries.length})</Tab>
         </TabList>
 
         <TabPanels>
@@ -1108,18 +1123,23 @@ const RiderHome: React.FC = () => {
             )}
           </TabPanel>
 
-          {/* Completed Tab */}
+          {/* Completed Tab — recent only (last 14 days) */}
           <TabPanel px={0}>
-            {completedDeliveries.length === 0 ? (
+            {recentCompleted.length === 0 ? (
               <Center py={12}>
                 <VStack spacing={3}>
-                  <Icon as={FaTruck} boxSize={12} color="gray.300" />
-                  <Text color="gray.500">No completed deliveries yet</Text>
+                  <Icon as={FaCheckCircle} boxSize={12} color="gray.300" />
+                  <Text color="gray.500">No recent completed deliveries</Text>
+                  {archivedDeliveries.length > 0 && (
+                    <Button size="sm" variant="outline" colorScheme="gray" onClick={() => setDeliveryTab(3)}>
+                      View Archived ({archivedDeliveries.length})
+                    </Button>
+                  )}
                 </VStack>
               </Center>
             ) : (
               <VStack spacing={3}>
-                {buildRiderOrders(completedDeliveries).map(order => {
+                {buildRiderOrders(recentCompleted).map(order => {
                   if (order.deliveries.length === 1) {
                     const delivery = order.deliveries[0]
                     return (
@@ -1189,6 +1209,81 @@ const RiderHome: React.FC = () => {
                           <Text fontSize="2xs" color="gray.400">
                             {lastDeliveredAt ? formatDateTime(lastDeliveredAt) : ''}
                           </Text>
+                        </VStack>
+                      </CardBody>
+                    </Card>
+                  )
+                })}
+              </VStack>
+            )}
+          </TabPanel>
+          {/* Archived Tab — completed deliveries older than 14 days */}
+          <TabPanel px={0}>
+            <Box px={1} py={2} mb={2}>
+              <Text fontSize="xs" color="gray.500" fontWeight="500">
+                Deliveries completed more than {ARCHIVE_DAYS} days ago · kept for history and earnings records
+              </Text>
+            </Box>
+            {archivedDeliveries.length === 0 ? (
+              <Center py={12}>
+                <VStack spacing={3}>
+                  <Icon as={FaTimesCircle} boxSize={12} color="gray.300" />
+                  <Text color="gray.500">No archived deliveries yet</Text>
+                  <Text fontSize="xs" color="gray.400" textAlign="center" maxW="240px">
+                    Completed deliveries older than {ARCHIVE_DAYS} days will appear here
+                  </Text>
+                </VStack>
+              </Center>
+            ) : (
+              <VStack spacing={3}>
+                {buildRiderOrders(archivedDeliveries).map(order => {
+                  if (order.deliveries.length === 1) {
+                    const delivery = order.deliveries[0]
+                    return (
+                      <Card key={order.key} bg="gray.50" border="1px" borderColor="gray.200" opacity={0.85}>
+                        <CardBody p={3}>
+                          <HStack justify="space-between">
+                            <VStack align="start" spacing={1}>
+                              <HStack>
+                                <Icon as={FaCheckCircle} color="gray.400" />
+                                <Text fontSize="sm" fontWeight="bold" color="gray.600">₱{delivery.total_cost}</Text>
+                                <Badge colorScheme="gray" variant="subtle" fontSize="xs">Archived</Badge>
+                              </HStack>
+                              {delivery.trade_id ? (
+                                <VStack align="start" spacing={0}>
+                                  <Text fontSize="xs" color="gray.500" noOfLines={1}>Buyer: {delivery.delivery_address}</Text>
+                                  <Text fontSize="xs" color="gray.500" noOfLines={1}>Pickup: {delivery.pickup_address}</Text>
+                                </VStack>
+                              ) : (
+                                <Text fontSize="xs" color="gray.500" noOfLines={1}>
+                                  {delivery.pickup_address} → {delivery.delivery_address}
+                                </Text>
+                              )}
+                              <Text fontSize="2xs" color="gray.400">
+                                {formatDateTime(delivery.delivered_at || delivery.updated_at)}
+                              </Text>
+                            </VStack>
+                          </HStack>
+                        </CardBody>
+                      </Card>
+                    )
+                  }
+                  const total = order.deliveries.reduce((sum, d) => sum + (d.total_cost || 0), 0)
+                  const lastDate = order.deliveries.map(d => d.delivered_at || d.updated_at).filter(Boolean).sort().slice(-1)[0]
+                  return (
+                    <Card key={order.key} bg="gray.50" border="1px" borderColor="gray.200" opacity={0.85}>
+                      <CardBody p={3}>
+                        <VStack spacing={2} align="stretch">
+                          <HStack justify="space-between">
+                            <HStack spacing={2}>
+                              <Icon as={FaCheckCircle} color="gray.400" />
+                              <Text fontSize="sm" fontWeight="bold" color="gray.600">Trade Delivery</Text>
+                              <Badge colorScheme="gray" variant="subtle">{order.deliveries.length} legs</Badge>
+                              <Badge colorScheme="gray" variant="subtle" fontSize="xs">Archived</Badge>
+                            </HStack>
+                            <Text fontSize="sm" fontWeight="bold" color="gray.600">₱{total}</Text>
+                          </HStack>
+                          <Text fontSize="2xs" color="gray.400">{lastDate ? formatDateTime(lastDate) : ''}</Text>
                         </VStack>
                       </CardBody>
                     </Card>

@@ -62,10 +62,11 @@ import {
   FiPackage,
 } from 'react-icons/fi'
 import { Circle, MapContainer, Marker, Polyline, Popup, TileLayer, useMap } from 'react-leaflet'
-import { motion, useReducedMotion } from 'framer-motion'
+import { motion, useDragControls, useReducedMotion } from 'framer-motion'
 import 'leaflet/dist/leaflet.css'
 import L from 'leaflet'
 import { motionDurations, motionEasings } from '../utils/motion'
+import { formatDuration, formatDurationRange } from '../utils/timeUtils'
 
 const MotionBox = motion(Box)
 
@@ -160,18 +161,18 @@ const approximatePoint = (point: { lat: number; lng: number } | null, offset = 0
 
 const formatTrackingDistance = (meters: number | null) => {
   if (meters === null) return 'Calculating distance...'
-  if (meters < 1000) return `${Math.round(meters)} m`
+  if (meters < 1000) return `${Math.round(meters)}m`
   return `${(meters / 1000).toFixed(1)} km`
 }
 
 const estimateTravelWindow = (meters: number | null, durationSeconds?: number | null) => {
   if (durationSeconds && durationSeconds > 0) {
     const minutes = Math.max(1, Math.round(durationSeconds / 60))
-    return `${minutes} min`
+    return formatDuration(minutes)
   }
   if (meters === null) return 'Calculating ETA...'
   const minutes = Math.max(2, Math.round(meters / 67))
-  return `${Math.max(1, minutes - 4)}-${minutes + 6} mins`
+  return formatDurationRange(Math.max(1, minutes - 4), minutes + 6)
 }
 
 const parseTradeDateTime = (value?: string | null): Date | null => {
@@ -187,10 +188,10 @@ const parseTradeDateTime = (value?: string | null): Date | null => {
 const formatArrivalCountdown = (deadline: Date | null, nowMs: number, mode: 'Pickup' | 'Meetup') => {
   if (!deadline) return `${mode} time not set`
   const diffMinutes = Math.round((deadline.getTime() - nowMs) / 60000)
-  if (diffMinutes > 0) return `${mode} in ${diffMinutes} minute${diffMinutes === 1 ? '' : 's'}`
+  if (diffMinutes > 0) return `${mode} in ${formatDuration(diffMinutes)}`
   const lateMinutes = Math.abs(diffMinutes)
   if (lateMinutes === 0) return `${mode} time is now`
-  return `You are ${lateMinutes} minute${lateMinutes === 1 ? '' : 's'} late`
+  return `Late by ${formatDuration(lateMinutes)}`
 }
 
 import { Trade, Product, TradeOption, Delivery } from '../types'
@@ -1263,6 +1264,8 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
   const [pickupRouteMetrics, setPickupRouteMetrics] = useState<{ distanceM: number; durationS: number } | null>(null)
   const [pickupRouteLoading, setPickupRouteLoading] = useState(false)
   const [trackingSheetSnap, setTrackingSheetSnap] = useState<'collapsed' | 'half' | 'full'>('half')
+  const trackingDragControls = useDragControls()
+  const prefersTrackingReducedMotion = useReducedMotion()
   const [arrivalClockNow, setArrivalClockNow] = useState(() => Date.now())
   const [confirmingMeetupDone, setConfirmingMeetupDone] = useState(false)
   const [isReviewModalOpen, setIsReviewModalOpen] = useState(false)
@@ -1355,7 +1358,7 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
   const resolveMeetupPointFromLabel = async () => {
     if (meetupPoint) return meetupPoint
     if (trade?.meeting_type === 'pickup') {
-      setGeoMessage('This pickup location has no map pin yet. Ask the product owner to update the location before confirmation.')
+      setGeoMessage('No pickup location set yet. Ask the owner to add a map pin before you can confirm arrival.')
       return null
     }
     const label = meetupDisplayLabel === 'Agreed meetup point' ? '' : meetupDisplayLabel.trim()
@@ -1387,7 +1390,7 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
       return null
     }
     if (!navigator.geolocation) {
-      setGeoMessage('Location access is required to confirm meetup.')
+      setGeoMessage(`Location access is required to confirm ${trade?.meeting_type === 'pickup' ? 'pickup arrival' : 'meetup'}.`)
       return null
     }
 
@@ -1458,6 +1461,11 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
 
   const isUserBuyer = !!(trade && currentUserId != null && buyerId != null && buyerId === currentUserId)
   const isUserSeller = !!(trade && currentUserId != null && sellerId != null && sellerId === currentUserId)
+  const isPickupTrade = trade?.meeting_type === 'pickup'
+  const isPickupTraveler = isPickupTrade && isUserBuyer
+  const isPickupOwner = isPickupTrade && isUserSeller
+  const flowLabel = isPickupTrade ? 'Pickup' : 'Meetup'
+  const flowLabelLower = isPickupTrade ? 'pickup' : 'meetup'
 
   const buyerMeetupKey = buildMeetupKey(buyerMeetupLocation, buyerMeetupDate, buyerMeetupTime)
   const sellerMeetupKey = buildMeetupKey(sellerMeetupLocation, sellerMeetupDate, sellerMeetupTime)
@@ -1469,13 +1477,15 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
   const currentUserMeetupConfirmed = (isUserBuyer && buyerMeetupConfirmed) || (isUserSeller && sellerMeetupConfirmed)
   const agreedArrivalDeadline = useMemo(() => (
     parseTradeDateTime((trade as any)?.agreed_arrival_deadline)
+    || parseTradeDateTime(buyerMeetupDate && buyerMeetupTime ? `${buyerMeetupDate}T${buyerMeetupTime}` : null)
     || parseTradeDateTime(trade?.meetup_time)
-    || parseTradeDateTime(buyerMeetupTime)
-    || parseTradeDateTime(sellerMeetupTime)
+    || parseTradeDateTime(sellerMeetupDate && sellerMeetupTime ? `${sellerMeetupDate}T${sellerMeetupTime}` : null)
   ), [
     (trade as any)?.agreed_arrival_deadline,
-    trade?.meetup_time,
+    buyerMeetupDate,
     buyerMeetupTime,
+    trade?.meetup_time,
+    sellerMeetupDate,
     sellerMeetupTime,
   ])
   const gracePeriodMinutes = Number((trade as any)?.grace_period_minutes || MEETUP_GRACE_PERIOD_MINUTES)
@@ -1488,8 +1498,9 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
 
   useEffect(() => {
     if (!isOpen || !meetupAgreed || bothMetConfirmed || userMetConfirmed) return
+    if (isPickupTrade && !isPickupTraveler) return
     void checkMeetupLocation()
-  }, [isOpen, meetupAgreed, bothMetConfirmed, userMetConfirmed, meetupPoint?.lat, meetupPoint?.lng])
+  }, [isOpen, meetupAgreed, bothMetConfirmed, userMetConfirmed, isPickupTrade, isPickupTraveler, meetupPoint?.lat, meetupPoint?.lng])
 
   const incomingMeetupProposal = useMemo(() => {
     if (meetupAgreed) return null
@@ -1565,11 +1576,12 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
     sellerMeetupTime,
   ])
 
-  // Pickup trade: location is locked to the seller's pickup_address.
+  // Pickup trade: location is locked to User B's product pickup address.
+  // User A (the buyer/initiator) is the traveler; distance and ETA are always
+  // calculated from User A's current location to this product-owner location.
   // The target product's pickup address is surfaced at the trade level
   // (target_product_pickup_address). Fall back to a seller trade_item only
   // if older payloads still carry it there.
-  const isPickupTrade = trade?.meeting_type === 'pickup'
   const pickupLat = Number((trade as any)?.target_product_pickup_latitude ?? requestedProduct?.pickup_latitude)
   const pickupLng = Number((trade as any)?.target_product_pickup_longitude ?? requestedProduct?.pickup_longitude)
   const pickupPoint = isPickupTrade && Number.isFinite(pickupLat) && Number.isFinite(pickupLng)
@@ -1597,16 +1609,16 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
       setGeoMessage(null)
     } else {
       setMeetupPoint(null)
-      setGeoMessage('This pickup location has no map pin yet. Ask the product owner to update the location before confirmation.')
+      setGeoMessage('No pickup location set yet. Ask the owner to add a map pin before you can confirm arrival.')
     }
   }, [isPickupTrade, pickupPoint?.lat, pickupPoint?.lng])
 
-  const pickupTrackingActive = isOpen && isPickupTrade && isUserBuyer && meetupAgreed && !bothMetConfirmed && !buyerMetConfirmed && !!pickupPoint && trade?.status !== 'cancelled'
+  const pickupTrackingActive = isOpen && isPickupTraveler && meetupAgreed && !bothMetConfirmed && !buyerMetConfirmed && !!pickupPoint && trade?.status !== 'cancelled'
 
   useEffect(() => {
-    if (!isOpen || !isPickupTrade || !meetupAgreed || !pickupPoint || userGeoPoint) return
+    if (!isOpen || !isPickupTraveler || !meetupAgreed || !pickupPoint || userGeoPoint) return
     void checkMeetupLocation()
-  }, [isOpen, isPickupTrade, meetupAgreed, pickupPoint?.lat, pickupPoint?.lng, userGeoPoint?.lat, userGeoPoint?.lng])
+  }, [isOpen, isPickupTraveler, meetupAgreed, pickupPoint?.lat, pickupPoint?.lng, userGeoPoint?.lat, userGeoPoint?.lng])
 
   useEffect(() => {
     if (!pickupTrackingActive) {
@@ -1661,7 +1673,7 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
   }, [pickupTrackingActive, pickupPoint?.lat, pickupPoint?.lng])
 
   useEffect(() => {
-    if (!isPickupTrade || !pickupPoint || !userGeoPoint) {
+    if (!isPickupTraveler || !pickupPoint || !userGeoPoint) {
       setPickupRouteCoords([])
       setPickupRouteMetrics(null)
       setPickupRouteLoading(false)
@@ -1699,7 +1711,7 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
     return () => {
       cancelled = true
     }
-  }, [isPickupTrade, pickupPoint?.lat, pickupPoint?.lng, userGeoPoint?.lat, userGeoPoint?.lng])
+  }, [isPickupTraveler, pickupPoint?.lat, pickupPoint?.lng, userGeoPoint?.lat, userGeoPoint?.lng])
 
   // Auto-select the pickup address for pickup trades so the existing
   // date/time confirm flow still works without the meetup location picker.
@@ -1825,7 +1837,7 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
   const sellerApproxPoint = approximatePoint(parseLatLngString(trade?.seller_location), -0.0004)
   const currentExactPoint = userGeoPoint ? { lat: userGeoPoint.lat, lng: userGeoPoint.lng } : null
   const currentApproxPoint = approximatePoint(currentExactPoint)
-  const trackingCurrentPoint = isPickupTrade ? currentExactPoint : currentApproxPoint
+  const trackingCurrentPoint = isPickupTrade ? (isPickupTraveler ? currentExactPoint : null) : currentApproxPoint
   const meetupTrackingPoint = isPickupTrade ? pickupPoint : meetupPoint
   const trackingCenter = meetupTrackingPoint || currentApproxPoint || buyerApproxPoint || sellerApproxPoint || { lat: 6.9214, lng: 122.0790 }
   const trackingRoute = (pickupRouteCoords.length > 1 && isPickupTrade)
@@ -1839,14 +1851,52 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
     ...(buyerApproxPoint ? [[buyerApproxPoint.lat, buyerApproxPoint.lng] as [number, number]] : []),
     ...(sellerApproxPoint ? [[sellerApproxPoint.lat, sellerApproxPoint.lng] as [number, number]] : []),
   ]
-  const trackingDistanceM = isPickupTrade ? (pickupRouteMetrics?.distanceM ?? meetupDistanceM) : meetupDistanceM
-  const trackingEtaLabel = pickupRouteLoading ? 'Calculating ETA...' : estimateTravelWindow(trackingDistanceM, isPickupTrade ? pickupRouteMetrics?.durationS : null)
-  const trackingDistanceLabel = pickupRouteLoading ? 'Calculating distance...' : formatTrackingDistance(trackingDistanceM)
+  const trackingDistanceM = isPickupTrade
+    ? (isPickupTraveler ? (pickupRouteMetrics?.distanceM ?? meetupDistanceM) : null)
+    : meetupDistanceM
+  const trackingEtaLabel = isPickupTrade && !isPickupTraveler
+    ? 'Traveler ETA'
+    : pickupRouteLoading
+      ? 'Calculating ETA...'
+      : estimateTravelWindow(trackingDistanceM, isPickupTrade ? pickupRouteMetrics?.durationS : null)
+  const trackingDistanceLabel = isPickupTrade && !isPickupTraveler
+    ? 'Waiting for route'
+    : pickupRouteLoading
+      ? 'Calculating distance...'
+      : formatTrackingDistance(trackingDistanceM)
   const trackingSheetHeight = trackingSheetSnap === 'full'
-    ? '76%'
+    ? '94%'
     : trackingSheetSnap === 'half'
-      ? '46%'
-      : '124px'
+      ? '55%'
+      : '25%'
+  const trackingSheetIsFull = trackingSheetSnap === 'full'
+  const snapTrackingSheet = (offsetY: number, velocityY: number) => {
+    const snaps: Array<'collapsed' | 'half' | 'full'> = ['collapsed', 'half', 'full']
+    const currentIndex = snaps.indexOf(trackingSheetSnap)
+    if (velocityY > 650) {
+      setTrackingSheetSnap(snaps[Math.max(0, currentIndex - 1)])
+      return
+    }
+    if (velocityY < -650) {
+      setTrackingSheetSnap(snaps[Math.min(snaps.length - 1, currentIndex + 1)])
+      return
+    }
+    const projectedOffset = offsetY + velocityY * 0.12
+    if (projectedOffset > 80) setTrackingSheetSnap(snaps[Math.max(0, currentIndex - 1)])
+    else if (projectedOffset < -80) setTrackingSheetSnap(snaps[Math.min(snaps.length - 1, currentIndex + 1)])
+  }
+
+  const showTrackingActionBar = meetupAgreed && meetupSelectionMatches && !bothMetConfirmed
+  const pickupConfirmDisabled = isPickupTrade
+    ? (isPickupTraveler
+      ? buyerMetConfirmed || pickupMapMissing || geoPermissionDenied || !meetupLocationVerified
+      : sellerMetConfirmed || !buyerMetConfirmed)
+    : userMetConfirmed || !meetupLocationVerified
+  const trackingConfirmLabel = isPickupTrade
+    ? (isUserBuyer
+      ? (buyerMetConfirmed ? 'Arrival Confirmed' : 'Confirm Pickup')
+      : (sellerMetConfirmed ? 'Confirmed' : 'Confirm Pickup'))
+    : (userMetConfirmed ? 'Confirmed' : 'Confirm Meetup')
 
   const resolveAvatarSrc = (raw?: string | null): string | undefined => {
     if (!raw) return undefined
@@ -2564,7 +2614,7 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
     maxDate.setDate(maxDate.getDate() + 6) // 7 days starting from today (0-6)
 
     if (selectedDate < today) return 'Cannot select a past date'
-    if (selectedDate > maxDate) return 'Meetup must be scheduled within 7 days'
+    if (selectedDate > maxDate) return `${flowLabel} must be scheduled within 7 days`
 
     // Check if time is not in the past for today
     if (selectedDate.getTime() === today.getTime()) {
@@ -2657,7 +2707,7 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
     if (!agreeLocation) {
       toast({
         title: 'Missing Location',
-        description: 'No meetup location found to accept.',
+        description: `No ${flowLabelLower} location found to accept.`,
         status: 'warning',
         duration: 3000,
       })
@@ -2701,7 +2751,7 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
 
       toast({
         title: 'G�� Schedule Accepted!',
-        description: 'You have agreed to the proposed date and time.',
+        description: `You have agreed to the proposed ${flowLabelLower} date and time.`,
         status: 'success',
         duration: 3000,
       })
@@ -2740,8 +2790,8 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
     setDisputeNotes('')
 
     toast({
-      title: 'G��n+� Meetup marked as in dispute',
-      description: 'The other party has been notified. You can propose alternative times or discuss the issue.',
+      title: `${flowLabel} marked as in dispute`,
+      description: `The other party has been notified. You can propose alternative ${flowLabelLower} times or discuss the issue.`,
       status: 'info',
       position: 'top',
       duration: 3000
@@ -2813,8 +2863,8 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
         if (currentKey && otherKey && currentKey === otherKey) {
           toast({
             id: "viewtrademodal-meetup-agreed",
-            title: 'Meetup Agreed!',
-            description: 'Both parties have agreed on the same location and time. The trade can now proceed!',
+            title: `${flowLabel} Agreed!`,
+            description: `Both parties have agreed on the same ${flowLabelLower} details. The trade can now proceed!`,
             status: 'success',
             duration: 5000,
           })
@@ -3324,13 +3374,13 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
                     })()}
 
 
-                    {/* Meetup Status (for meetup trades) */}
+                    {/* Status for pickup/meetup trades */}
                     {trade?.trade_option === 'meetup' && (
                       <Box p={4} bg={meetupInfoBg} borderRadius="md" borderWidth="1px" borderColor="gray.200">
                         <HStack justify="space-between">
                           <HStack>
                             <Text fontSize="sm" fontWeight="medium" color="gray.600">
-                              Meetup Status:
+                              {flowLabel} Status:
                             </Text>
                             {getMeetupState() === 'proposed' && (
                               <Badge colorScheme="blue" fontSize="xs" px={2} py={1}>
@@ -3373,7 +3423,7 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
                           <Icon as={FaExclamationTriangle} color="orange.500" boxSize={5} mt={0.5} />
                           <VStack align="start" spacing={1}>
                             <Text fontWeight="semibold" fontSize="sm" color="orange.700">
-                              Meetup Policy Reminder
+                              {flowLabel} Policy Reminder
                             </Text>
                             <Text fontSize="xs" color="orange.600">
                               • Arriving late or not showing up (no-show) may result in strikes on your account.
@@ -3974,7 +4024,11 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
                             </Text>
                             <Text fontSize="sm" fontWeight="800" color="gray.800" noOfLines={1}>{meetupDisplayLabel}</Text>
                             <Text fontSize="xs" color="gray.600">
-                              {isPickupTrade && !userGeoPoint ? 'Enable location to view ETA and route.' : isPickupTrade ? 'Live route to pickup point' : 'Approximate locations only'}
+                              {isPickupTrade
+                                ? (isPickupTraveler
+                                  ? (!userGeoPoint ? 'Enable location to view ETA and route.' : 'Route from your location to User B.')
+                                  : 'User A travels to this pickup point.')
+                                : 'Approximate locations only'}
                             </Text>
                           </Box>
                           <VStack spacing={2} align="stretch" pointerEvents="auto">
@@ -3995,23 +4049,36 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
                         right={0}
                         bottom={0}
                         zIndex={600}
-                        h={trackingSheetHeight}
                         bg={useColorModeValue('white', 'gray.900')}
                         borderTopRadius="2xl"
                         shadow="2xl"
                         display="flex"
                         flexDirection="column"
                         drag="y"
+                        dragControls={trackingDragControls}
+                        dragListener={false}
                         dragConstraints={{ top: 0, bottom: 0 }}
-                        dragElastic={0.08}
+                        dragElastic={0.12}
                         onDragEnd={(_, info) => {
-                          if (info.offset.y > 80) setTrackingSheetSnap('collapsed')
-                          else if (info.offset.y < -80) setTrackingSheetSnap('full')
-                          else setTrackingSheetSnap('half')
+                          snapTrackingSheet(info.offset.y, info.velocity.y)
                         }}
-                        transition={{ duration: 0.18, ease: 'easeOut' }}
+                        animate={{ height: trackingSheetHeight }}
+                        initial={false}
+                        transition={prefersTrackingReducedMotion ? { duration: 0.01 } : { type: 'spring', stiffness: 360, damping: 36, mass: 0.85 }}
                       >
-                        <VStack spacing={2} align="stretch" px={4} pt={2} pb={3} borderBottomWidth="1px" borderColor="gray.100" flexShrink={0}>
+                        <VStack
+                          spacing={2}
+                          align="stretch"
+                          px={4}
+                          pt={2}
+                          pb={2.5}
+                          borderBottomWidth="1px"
+                          borderColor="gray.100"
+                          flexShrink={0}
+                          cursor="grab"
+                          sx={{ touchAction: 'none' }}
+                          onPointerDown={(event) => trackingDragControls.start(event)}
+                        >
                           <Box w="44px" h="5px" bg="gray.300" borderRadius="full" mx="auto" />
                           <HStack justify="space-between" align="center">
                             <Box minW={0}>
@@ -4027,28 +4094,26 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
                                         : 'Head to the meetup point'}
                               </Text>
                               <Text fontSize="xs" color="gray.500" noOfLines={1}>
-                                {geoMessage || (isPickupTrade && !userGeoPoint ? 'Enable location to view ETA and route.' : 'Confirm unlocks near the pickup location.')}
+                                {geoMessage || (isPickupTrade
+                                  ? (isPickupTraveler
+                                    ? (!userGeoPoint ? 'Enable location to view ETA and route.' : 'Confirmation unlocks when you arrive at User B.')
+                                    : 'Waiting for User A to arrive at your pickup location.')
+                                  : 'Meetup confirmation unlocks near the meetup location.')}
                               </Text>
                             </Box>
-                            <HStack spacing={1}>
-                              {(['collapsed', 'half', 'full'] as const).map(snap => (
-                                <Button
-                                  key={snap}
-                                  size="xs"
-                                  variant={trackingSheetSnap === snap ? 'solid' : 'ghost'}
-                                  colorScheme="brand"
-                                  onClick={() => setTrackingSheetSnap(snap)}
-                                  borderRadius="full"
-                                >
-                                  {snap === 'collapsed' ? 'Min' : snap === 'half' ? 'Half' : 'Full'}
-                                </Button>
-                              ))}
-                            </HStack>
                           </HStack>
                         </VStack>
 
-                        <Box overflowY="auto" px={{ base: 3, md: 5 }} py={4} flex={1}>
-                          <VStack spacing={6} align="stretch">
+                        <Box
+                          overflowY={trackingSheetIsFull ? 'auto' : 'hidden'}
+                          overscrollBehavior="contain"
+                          px={{ base: 3, md: 5 }}
+                          pt={3}
+                          pb={showTrackingActionBar ? '92px' : 4}
+                          flex={1}
+                          minH={0}
+                        >
+                          <VStack spacing={4} align="stretch">
 
                       {/* ── 1. MY PROPOSAL CARD (proposer's waiting view) ── */}
                       {!meetupAgreed && myMeetupProposal && !incomingMeetupProposal && (
@@ -4058,7 +4123,7 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
                               <HStack spacing={2} align="center">
                                 <Icon as={FaHandshake} color="brand.500" boxSize={4} />
                                 <Text fontWeight="700" color={useColorModeValue('gray.800', 'gray.100')}>
-                                  Your Proposed Meetup
+                                  Your Proposed {flowLabel}
                                 </Text>
                                 <Badge colorScheme="gray" variant="subtle" borderRadius="full" ml="auto">
                                   Waiting for response
@@ -4066,7 +4131,7 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
                               </HStack>
                               <Box p={2.5} bg={useColorModeValue('gray.100', 'gray.700')} borderRadius="md" borderLeft="3px solid" borderColor="gray.300">
                                 <Text fontSize="sm" color={useColorModeValue('gray.700', 'gray.300')}>
-                                  You proposed this meetup. Waiting for {tradingPartner} to confirm.
+                                  You proposed this {flowLabelLower}. Waiting for {tradingPartner} to confirm.
                                 </Text>
                               </Box>
                               <SimpleGrid columns={[1, 3]} spacing={2}>
@@ -4125,7 +4190,7 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
                                 <HStack spacing={2}>
                                   <Icon as={FaHandshake} color="brand.500" boxSize={4} />
                                   <Text fontWeight="700" color={useColorModeValue('gray.800', 'white')}>
-                                    Proposed Meetup
+                                    Proposed {flowLabel}
                                   </Text>
                                 </HStack>
                                 <Badge colorScheme="purple" variant="subtle" borderRadius="full">
@@ -4137,13 +4202,13 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
                               {!currentUserMeetupConfirmed ? (
                                 <Box p={2.5} bg={useColorModeValue('orange.50', 'orange.900')} borderRadius="md" borderLeft="3px solid" borderColor="orange.400">
                                   <Text fontSize="sm" color={useColorModeValue('orange.800', 'orange.200')}>
-                                    {incomingMeetupProposal.proposer} proposed this meetup. You can accept it or suggest changes.
+                                    {incomingMeetupProposal.proposer} proposed this {flowLabelLower}. You can accept it or suggest changes.
                                   </Text>
                                 </Box>
                               ) : (
                                 <Box p={2.5} bg={useColorModeValue('gray.50', 'gray.700')} borderRadius="md" borderLeft="3px solid" borderColor="gray.300">
                                   <Text fontSize="sm" color={useColorModeValue('gray.600', 'gray.400')}>
-                                    You already confirmed this meetup. Waiting for {tradingPartner} to respond.
+                                    You already confirmed this {flowLabelLower}. Waiting for {tradingPartner} to respond.
                                   </Text>
                                 </Box>
                               )}
@@ -4189,7 +4254,7 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
                                     title={!incomingMeetupProposal.time ? 'No time set — use Suggest Changes to add a time' : ''}
                                     flex={1}
                                   >
-                                    Accept Meetup
+                                    Accept {flowLabel}
                                   </Button>
                                   <Button
                                     variant="outline"
@@ -4593,8 +4658,8 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
                             <Text fontSize="sm" color="gray.600">
                               {isPickupTrade
                                 ? (isUserBuyer
-                                  ? 'You set the pickup date and time. The other trader can accept or propose a reschedule.'
-                                  : 'The other trader picks a date and time. You can accept it or propose a reschedule.')
+                                  ? 'You set the pickup date and time. The other trader can accept or propose a pickup reschedule.'
+                                  : 'The other trader picks a pickup date and time. You can accept it or propose a pickup reschedule.')
                                 : hasMeetupProposal
                                   ? 'Adjust the location, date, or time and submit as a counter-proposal.'
                                   : 'Pick a date within the next 7 days and a time that works for both of you.'}
@@ -4631,7 +4696,7 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
                                 ⏳ Waiting for the other trader to propose a pickup time
                               </Text>
                               <Text fontSize="sm" color="gray.600">
-                                The other trader chooses when to come by. You'll be able to accept their proposal or suggest a different time once it's submitted.
+                                The other trader chooses when to come by for pickup. You'll be able to accept their proposal or suggest a different pickup time once it's submitted.
                               </Text>
                             </VStack>
                           </Box>
@@ -4651,7 +4716,7 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
                               </Box>
                               <VStack align="start" spacing={0}>
                                 <Text fontWeight="bold" fontSize="sm" color="green.700">Your Selection Locked</Text>
-                                <Text fontSize="xs" color="gray.500">Waiting for the other party</Text>
+                              <Text fontSize="xs" color="gray.500">Waiting for the other party</Text>
                               </VStack>
                             </HStack>
                             <VStack spacing={2} align="stretch">
@@ -4780,7 +4845,7 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
                               _hover={{ transform: 'translateY(-2px)', shadow: 'lg' }}
                               transition="all 0.2s"
                             >
-                              Confirm Meetup
+                              Confirm {flowLabel}
                             </Button>
                           </VStack>
                         )}
@@ -4849,7 +4914,7 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
                             <AlertDialogOverlay>
                               <AlertDialogContent>
                                 <AlertDialogHeader fontSize="lg" fontWeight="bold">
-                                  Report Meetup Issue
+                                  Report {flowLabel} Issue
                                 </AlertDialogHeader>
                                 <AlertDialogBody>
                                   <VStack spacing={4} align="stretch">
@@ -4982,30 +5047,29 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
                                   const pickupStatusText = bothMetConfirmed || sellerMetConfirmed
                                     ? 'Pickup completed'
                                     : buyerMetConfirmed
-                                      ? 'Arrival is confirmed. Please confirm once you have met.'
+                                      ? (isPickupOwner ? 'User A has arrived. Confirm after handoff.' : 'Arrival confirmed. Meet User B to finish pickup.')
                                       : pickupMapMissing
-                                        ? 'This pickup location has no map pin yet. Ask the product owner to update the location before confirmation.'
-                                        : isUserBuyer
-                                          ? (geoMessage || 'You can confirm once you arrive at the pickup location.')
-                                          : 'Waiting for the other trader to arrive first.'
-                                  const pickupConfirmDisabled = isUserBuyer
-                                    ? buyerMetConfirmed || pickupMapMissing || geoPermissionDenied || !pickupWithinRadius
-                                    : sellerMetConfirmed || !buyerMetConfirmed
-                                  const pickupConfirmReason = isUserBuyer
-                                    ? buyerMetConfirmed
-                                      ? 'Arrival already confirmed.'
-                                      : pickupMapMissing
-                                        ? 'Pickup map pin is missing.'
-                                        : geoPermissionDenied || !userGeoPoint
-                                          ? 'Enable location to view ETA and route.'
-                                          : !pickupWithinRadius
-                                            ? 'Confirm unlocks near the pickup location.'
-                                            : ''
-                                    : !buyerMetConfirmed
-                                      ? 'Waiting for buyer arrival confirmation.'
-                                      : sellerMetConfirmed
-                                        ? 'Pickup already confirmed.'
-                                        : ''
+                                        ? 'No pickup location set yet. Ask the owner to add a map pin before you can confirm arrival.'
+                                        : isPickupTraveler
+                                          ? (geoMessage || 'On the way to User B pickup location.')
+                                          : 'Waiting for User A to arrive.'
+                                  const showPoorGpsAccuracy = Boolean(userGeoPoint && userGeoPoint.accuracy > MAX_GPS_ACCURACY_M)
+                                  const pickupMessage = pickupMapMissing
+                                    ? 'No pickup location set yet. Ask the owner to add a map pin before you can confirm arrival.'
+                                    : isPickupTraveler && (geoPermissionDenied || !userGeoPoint)
+                                      ? 'Enable location to see your route and unlock arrival confirmation.'
+                                    : pickupTrustWarning
+                                      ? pickupTrustWarning
+                                      : !pickupWithinRadius && isPickupTraveler
+                                        ? 'Confirmation unlocks when you are at the pickup location.'
+                                        : isPickupOwner && !buyerMetConfirmed
+                                          ? 'User A confirms arrival when they reach your pickup location.'
+                                          : null
+                                  const pickupMessageColor = pickupMapMissing || geoPermissionDenied
+                                    ? 'orange'
+                                    : pickupTrustWarning
+                                      ? 'red'
+                                      : 'green'
                                   const showHalfDetails = trackingSheetSnap !== 'collapsed'
                                   const showFullDetails = trackingSheetSnap === 'full'
                                   return (
@@ -5023,14 +5087,6 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
                                             Open in Google Maps
                                           </Button>
                                         </HStack>
-                                        <HStack spacing={2} mt={3} flexWrap="wrap">
-                                          <Badge colorScheme={pickupWithinRadius ? 'green' : 'orange'} borderRadius="full" px={2} py={1}>{pickupDistanceLabel}</Badge>
-                                          <Badge colorScheme="teal" borderRadius="full" px={2} py={1}>{pickupEtaLabel}</Badge>
-                                          <Badge colorScheme={(isUserBuyer && userIsPastGrace) || userWasLate ? 'red' : 'green'} borderRadius="full" px={2} py={1}>{pickupCountdownLabel}</Badge>
-                                        </HStack>
-                                        {!userGeoPoint && (
-                                          <Text fontSize="xs" color="gray.600" mt={2}>Enable location to view ETA and route.</Text>
-                                        )}
                                       </Box>
 
                                       {showHalfDetails && (
@@ -5049,63 +5105,49 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
                                       {showHalfDetails && (
                                       <Box p={3} bg={pickupWithinRadius || buyerMetConfirmed ? 'green.50' : 'gray.50'} borderRadius="xl" borderWidth="1px" borderColor={pickupWithinRadius || buyerMetConfirmed ? 'green.200' : 'gray.200'}>
                                         <VStack spacing={2} align="stretch">
-                                          <Text fontSize="2xs" fontWeight="900" color="gray.500" textTransform="uppercase">Arrival Status</Text>
                                           <HStack justify="space-between" align="center">
+                                            <Text fontSize="2xs" fontWeight="900" color="gray.500" textTransform="uppercase">Arrival Status</Text>
                                             <Text fontSize="xs" fontWeight="800" color="gray.700">Stage {pickupStage} of 5</Text>
                                             {buyerMetConfirmed && <Badge colorScheme="green" borderRadius="full">User B confirmed</Badge>}
                                           </HStack>
                                           <Progress value={(pickupStage / 5) * 100} colorScheme="green" borderRadius="full" size="sm" />
-                                          <Text fontSize="xs" fontWeight="800" color="gray.600">{pickupStageLabel}</Text>
-                                          <HStack spacing={2} flexWrap="wrap">
-                                            <Badge colorScheme={(isUserBuyer && userIsPastGrace) || userWasLate ? 'red' : 'green'} borderRadius="full">{pickupCountdownLabel}</Badge>
-                                            <Badge colorScheme={pickupWithinRadius ? 'green' : 'orange'} borderRadius="full">Unlocks within {MEETUP_CONFIRM_RADIUS_M}m</Badge>
-                                            {userGeoPoint && (
-                                              <Badge colorScheme={userGeoPoint.accuracy <= MAX_GPS_ACCURACY_M ? 'green' : 'orange'} borderRadius="full">
+                                          <Text fontSize="md" fontWeight="900" color={pickupWithinRadius || buyerMetConfirmed ? 'green.800' : 'gray.800'}>{pickupStageLabel}</Text>
+                                          <HStack spacing={2} flexWrap="wrap" align="center">
+                                            {isPickupTraveler && (
+                                              <>
+                                                <Badge colorScheme={pickupWithinRadius ? 'green' : 'orange'} borderRadius="full" px={2.5} py={1}>{pickupDistanceLabel}</Badge>
+                                                <Badge colorScheme="teal" borderRadius="full" px={2.5} py={1}>{pickupEtaLabel}</Badge>
+                                              </>
+                                            )}
+                                            <Badge colorScheme={(isUserBuyer && userIsPastGrace) || userWasLate ? 'red' : 'green'} borderRadius="full" px={2.5} py={1}>{pickupCountdownLabel}</Badge>
+                                            {showPoorGpsAccuracy && userGeoPoint && (
+                                              <Badge colorScheme="orange" borderRadius="full" px={2.5} py={1}>
                                                 GPS +/-{Math.round(userGeoPoint.accuracy)}m
                                               </Badge>
                                             )}
                                           </HStack>
-                                          <Text fontSize="sm" fontWeight="700" color={pickupWithinRadius || buyerMetConfirmed ? 'green.700' : 'gray.700'}>{pickupStatusText}</Text>
-                                          {isUserBuyer && meetupDistanceM !== null && !pickupWithinRadius && (
-                                            <Text fontSize="xs" color="gray.600">You can confirm once you arrive at the pickup location.</Text>
+                                          {!pickupMessage && (
+                                            <Text fontSize="sm" fontWeight="700" color={pickupWithinRadius || buyerMetConfirmed ? 'green.700' : 'gray.700'}>{pickupStatusText}</Text>
                                           )}
-                                          {pickupConfirmDisabled && pickupConfirmReason && (
-                                            <Text fontSize="xs" color="gray.600">{pickupConfirmReason}</Text>
+                                          {pickupMessage && (
+                                            <HStack spacing={2} align="start" p={2.5} borderRadius="lg" bg={`${pickupMessageColor}.50`} borderWidth="1px" borderColor={`${pickupMessageColor}.200`}>
+                                              <Icon as={pickupMessageColor === 'green' ? FaInfoCircle : FaExclamationTriangle} color={`${pickupMessageColor}.500`} boxSize={3.5} mt="2px" flexShrink={0} />
+                                              <Text fontSize="xs" fontWeight="700" color={`${pickupMessageColor}.800`}>{pickupMessage}</Text>
+                                            </HStack>
                                           )}
                                           {geoPermissionDenied && (
                                             <Button size="sm" variant="outline" colorScheme="green" onClick={checkMeetupLocation} isLoading={geoChecking}>
                                               Retry location access
                                             </Button>
                                           )}
-                                          {pickupTrustWarning && (
-                                            <Text fontSize="xs" color="red.600" fontWeight="700">{pickupTrustWarning}</Text>
-                                          )}
                                           {showFullDetails && (
-                                            <Text fontSize="2xs" color="gray.500">Your live location is only used to confirm arrival. Please try to arrive on time so the trade stays smooth for both of you.</Text>
+                                            <Text fontSize="2xs" color="gray.500">Your live location is only used to confirm arrival.</Text>
                                           )}
                                         </VStack>
                                       </Box>
                                       )}
 
-                                      {showHalfDetails && (!bothMetConfirmed && !sellerMetConfirmed ? (
-                                        <Box position="sticky" bottom={0} bg={meetupInfoBg} pt={2} pb={1} zIndex={2}>
-                                          <Button
-                                            colorScheme="green"
-                                            size="lg"
-                                            onClick={confirmMeetupDone}
-                                            isLoading={confirmingMeetupDone || (isUserBuyer && geoChecking)}
-                                            leftIcon={<FaCheckCircle />}
-                                            w="full"
-                                            minH="52px"
-                                            borderRadius="xl"
-                                            isDisabled={pickupConfirmDisabled}
-                                          >
-                                            {isUserBuyer
-                                              ? (buyerMetConfirmed ? 'Arrival Confirmed' : 'Confirm Pickup')
-                                              : (sellerMetConfirmed ? 'Confirmed' : 'Confirm Pickup')}
-                                          </Button>
-                                        </Box>
-                                      ) : (
+                                      {showHalfDetails && bothMetConfirmed && (
                                         <Button
                                           colorScheme="green"
                                           size={["sm", "md"]}
@@ -5117,7 +5159,7 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
                                         >
                                           Leave a Review and Complete Trade
                                         </Button>
-                                      ))}
+                                      )}
                                     </VStack>
                                   )
                                 })() : (
@@ -5231,11 +5273,8 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
                                               <Badge colorScheme={userIsPastGrace || userWasLate ? 'red' : 'green'} borderRadius="full">
                                                 {formatArrivalCountdown(agreedArrivalDeadline, arrivalClockNow, 'Meetup')}
                                               </Badge>
-                                              <Badge colorScheme={meetupLocationVerified ? 'green' : 'orange'} borderRadius="full">
-                                                Unlocks within {MEETUP_CONFIRM_RADIUS_M}m
-                                              </Badge>
-                                              {userGeoPoint && (
-                                                <Badge colorScheme={userGeoPoint.accuracy <= MAX_GPS_ACCURACY_M ? 'green' : 'orange'} borderRadius="full">
+                                              {userGeoPoint && userGeoPoint.accuracy > MAX_GPS_ACCURACY_M && (
+                                                <Badge colorScheme="orange" borderRadius="full">
                                                   GPS +/-{Math.round(userGeoPoint.accuracy)}m
                                                 </Badge>
                                               )}
@@ -5260,18 +5299,6 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
                                           </VStack>
                                         </Box>
                                       </Box>
-
-                                      <Button
-                                        colorScheme="green"
-                                        size={["sm", "md"]}
-                                        onClick={confirmMeetupDone}
-                                        isLoading={confirmingMeetupDone || geoChecking}
-                                        leftIcon={<FaCheckCircle />}
-                                        w="full"
-                                        isDisabled={userMetConfirmed || !meetupLocationVerified}
-                                      >
-                                        {userMetConfirmed ? 'Confirmed' : 'Confirm You Met'}
-                                      </Button>
 
                                       {userMetConfirmed && (
                                         <Text fontSize="xs" color="gray.600" textAlign="center">
@@ -5366,6 +5393,36 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
                         )}
                           </VStack>
                         </Box>
+                        {showTrackingActionBar && (
+                          <Box
+                            position="absolute"
+                            left={0}
+                            right={0}
+                            bottom={0}
+                            zIndex={5}
+                            px={{ base: 3, md: 5 }}
+                            pt={2.5}
+                            pb="calc(env(safe-area-inset-bottom, 0px) + 12px)"
+                            bg={useColorModeValue('whiteAlpha.950', 'gray.900')}
+                            borderTopWidth="1px"
+                            borderColor={useColorModeValue('gray.100', 'gray.700')}
+                            shadow="0 -10px 28px rgba(15, 23, 42, 0.10)"
+                          >
+                            <Button
+                              colorScheme="green"
+                              size="lg"
+                              onClick={confirmMeetupDone}
+                              isLoading={confirmingMeetupDone || ((isPickupTrade ? isPickupTraveler : true) && geoChecking)}
+                              leftIcon={<FaCheckCircle />}
+                              w="full"
+                              minH="52px"
+                              borderRadius="xl"
+                              isDisabled={pickupConfirmDisabled}
+                            >
+                              {trackingConfirmLabel}
+                            </Button>
+                          </Box>
+                        )}
                       </MotionBox>
                     </Box>
                   )}

@@ -33,6 +33,7 @@ import L from 'leaflet'
 import { api } from '../services/api'
 import { Delivery, DeliveryStop, Trade } from '../types'
 import TransactionTrackingLayout from '../components/TransactionTrackingLayout'
+import { formatDuration } from '../utils/timeUtils'
 
 // Fix generic leaflet icon URLs (guarded to avoid runtime import issues)
 if (L?.Icon?.Default) {
@@ -301,12 +302,12 @@ const TaskStepper: React.FC = () => {
   const routeDistanceLabel = routeLoading
     ? 'Calculating distance...'
     : routeDistanceM != null
-      ? routeDistanceM < 1000 ? `${Math.round(routeDistanceM)} m` : `${(routeDistanceM / 1000).toFixed(1)} km`
+      ? routeDistanceM < 1000 ? `${Math.round(routeDistanceM)}m` : `${(routeDistanceM / 1000).toFixed(1)} km`
       : 'Distance unavailable'
   const routeEtaLabel = routeLoading
     ? 'Calculating ETA...'
     : etaMinutes != null
-      ? `${etaMinutes} min`
+      ? formatDuration(etaMinutes)
       : 'ETA unavailable'
   const openCurrentStopMaps = () => {
     if (destinationLat == null || destinationLng == null) return
@@ -731,7 +732,7 @@ const TaskStepper: React.FC = () => {
             <HStack spacing={2}>
               {etaMinutes != null && !allDone && (
                 <Badge colorScheme="purple" fontSize="sm">
-                  ETA ~{etaMinutes} min
+                  ETA ~{formatDuration(etaMinutes)}
                 </Badge>
               )}
               <Badge colorScheme={allDone ? 'green' : 'blue'} fontSize="sm">
@@ -1003,7 +1004,7 @@ const TaskStepper: React.FC = () => {
                   {etaMinutes != null && (
                     <HStack justify="space-between">
                       <Text fontSize="xs" color="gray.600">
-                        ETA: ~{etaMinutes} min
+                        ETA: ~{routeEtaLabel}
                       </Text>
                       <Text fontSize="xs" color="gray.500">
                         {routeSteps.length} steps

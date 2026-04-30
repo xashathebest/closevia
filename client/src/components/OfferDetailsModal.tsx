@@ -75,6 +75,9 @@ const OfferDetailsModal: React.FC<OfferDetailsModalProps> = ({ trade, isOpen, on
   }, [isOpen, trade])
 
   const effectiveTrade = detailedTrade || trade
+  const isPickupFlow = effectiveTrade?.meeting_type === 'pickup'
+  const flowLabel = isPickupFlow ? 'Pickup' : 'Meetup'
+  const flowLabelLower = isPickupFlow ? 'pickup' : 'meetup'
   const needsUserAcceptance = Boolean(
     effectiveTrade?.status === 'accepted_by_one' &&
     user?.id &&
@@ -258,11 +261,11 @@ const OfferDetailsModal: React.FC<OfferDetailsModalProps> = ({ trade, isOpen, on
         proposed_time: `${effectiveTrade.meetup_date || ''}T${effectiveTrade.meetup_time || ''}:00`,
         proposed_location: effectiveTrade.meetup_location || '',
       })
-      toast({ id: 'odm-time-accepted', title: 'Meetup time accepted', description: 'Both parties agreed — trade is now ongoing!', status: 'success' })
+      toast({ id: 'odm-time-accepted', title: `${flowLabel} time accepted`, description: `Both parties agreed on the ${flowLabelLower} time — trade is now ongoing!`, status: 'success' })
       onAccepted()
       onClose()
     } catch (e: any) {
-      toast({ id: 'odm-time-accept-fail', title: "Couldn't confirm meetup time", description: e?.response?.data?.error || 'Something went wrong. Please try again.', status: 'error' })
+      toast({ id: 'odm-time-accept-fail', title: `Couldn't confirm ${flowLabelLower} time`, description: e?.response?.data?.error || 'Something went wrong. Please try again.', status: 'error' })
     } finally {
       setIsAcceptingTime(false)
     }
@@ -572,13 +575,13 @@ const OfferDetailsModal: React.FC<OfferDetailsModalProps> = ({ trade, isOpen, on
               </HStack>
             </Box>
 
-            {/* Proposed Meetup Section */}
+            {/* Proposed schedule section */}
             {(effectiveTrade?.meetup_date || effectiveTrade?.meetup_time) && (
               <Box p={3} bg="teal.50" borderRadius="lg" borderWidth="1px" borderColor="teal.200">
                 <HStack mb={2} spacing={2}>
                   <Icon as={FaCalendarAlt} color="teal.600" boxSize={3.5} />
                   <Text fontSize="10px" fontWeight="bold" color="teal.700" textTransform="uppercase" letterSpacing="wider">
-                    Proposed Meetup
+                    Proposed {flowLabel}
                   </Text>
                   <Badge colorScheme="teal" fontSize="8px">
                     {effectiveTrade.buyer_id === user?.id ? 'You proposed' : `${effectiveTrade.buyer_name || 'Buyer'} proposed`}
@@ -646,7 +649,7 @@ const OfferDetailsModal: React.FC<OfferDetailsModalProps> = ({ trade, isOpen, on
                 {/* Suggest Another Time form */}
                 {showSuggestTime && (
                   <VStack align="stretch" spacing={2} mt={2} p={2} bg="white" borderRadius="md" borderWidth="1px" borderColor="teal.200">
-                    <Text fontSize="10px" fontWeight="semibold" color="teal.700">Propose a different time:</Text>
+                    <Text fontSize="10px" fontWeight="semibold" color="teal.700">Propose a different {flowLabelLower} time:</Text>
                     <HStack spacing={2}>
                       <Input
                         type="date"
@@ -716,10 +719,10 @@ const OfferDetailsModal: React.FC<OfferDetailsModalProps> = ({ trade, isOpen, on
                   </VStack>
                 )}
 
-                {/* Proposed pickup or meetup location */}
+                {/* Proposed collection location */}
                 {requested && (
                   <VStack align="start" spacing={0.5}>
-                    <Text fontSize="9px" fontWeight="bold" color="gray.500" textTransform="uppercase">Pickup / Meetup</Text>
+                    <Text fontSize="9px" fontWeight="bold" color="gray.500" textTransform="uppercase">{flowLabel}</Text>
                     <Text fontSize="11px" color="gray.800" fontWeight="semibold" noOfLines={1}>
                       {effectiveTrade?.meetup_location || requested.location || 'Not specified'}
                     </Text>
@@ -889,7 +892,7 @@ const OfferDetailsModal: React.FC<OfferDetailsModalProps> = ({ trade, isOpen, on
                   <Icon as={effectiveTrade.trade_option === 'meetup' ? FaMapMarkerAlt : effectiveTrade.trade_option === 'delivery' ? FaTruck : FaHandshake} boxSize={3.5} color="brand.600" flexShrink={0} />
                   <VStack align="start" spacing={0} flex={1}>
                     <Text fontWeight="semibold" fontSize="12px" color="brand.900">
-                      {effectiveTrade.trade_option === 'meetup' ? 'Meetup' : effectiveTrade.trade_option === 'delivery' ? 'Delivery' : 'Buyout'}
+                      {effectiveTrade.trade_option === 'meetup' ? flowLabel : effectiveTrade.trade_option === 'delivery' ? 'Delivery' : 'Buyout'}
                     </Text>
                     {effectiveTrade.trade_option === 'delivery' && effectiveTrade.delivery_address && (
                       <Text fontSize="10px" color="gray.700">{effectiveTrade.delivery_address}</Text>
@@ -906,7 +909,7 @@ const OfferDetailsModal: React.FC<OfferDetailsModalProps> = ({ trade, isOpen, on
                 {hasPendingOptionChange && effectiveTrade.option_change_requested && (
                   <Box mt={2} pt={2} borderTopWidth="1px" borderColor="brand.200">
                     <Text fontSize="xs" fontWeight="bold" color="brand.700" mb={1}>
-                      ⏳ Pending: {effectiveTrade.option_change_requested === 'meetup' ? 'Meetup' : 'Delivery'}
+                      Pending: {effectiveTrade.option_change_requested === 'meetup' ? flowLabel : 'Delivery'}
                     </Text>
                     {isUserSeller ? (
                       <HStack spacing={2} mt={2}>

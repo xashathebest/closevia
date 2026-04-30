@@ -96,6 +96,7 @@ export interface ProductFormData {
     }
     meetup: {
       locations: string[]
+      location_points?: Array<{ name: string; address: string; lat: number; lng: number }>
       days: string[]
       time_start: string
       time_end: string
@@ -199,6 +200,9 @@ const validateCollectionSetup = (setup: ProductFormData['collection_setup']): st
 
   for (const method of setup.methods) {
     const config = setup[method]
+    if (method === 'meetup' && !(setup.meetup.location_points?.length || setup.meetup.locations?.filter(Boolean).length)) {
+      return 'Add at least one map-based meetup location'
+    }
     if (!config.days?.length) return `Choose available days for ${method}`
     if (!config.time_start || !config.time_end) return `Choose a time window for ${method}`
     if (config.time_start >= config.time_end) return `Set a valid start and end time for ${method}`
@@ -404,9 +408,15 @@ const AddProduct: React.FC = () => {
     collection_setup: {
       methods: ['pickup'],
       pickup: { days: ['weekdays'], time_start: '09:00', time_end: '17:00', notes: '' },
-      meetup: { locations: [''], days: ['weekends'], time_start: '09:00', time_end: '17:00', distance_km: '', notes: '' },
+      meetup: { locations: [], location_points: [], days: [], time_start: '', time_end: '', distance_km: '', notes: '' },
     },
   })
+  const [editingCollectionSection, setEditingCollectionSection] = useState<'pickup' | 'meetup' | null>('pickup')
+  const [useSameCollectionSchedule, setUseSameCollectionSchedule] = useState(false)
+  const [meetupSearchQuery, setMeetupSearchQuery] = useState('')
+  const [meetupSearchResults, setMeetupSearchResults] = useState<Array<{ name: string; address: string; lat: number; lng: number }>>([])
+  const [isSearchingMeetupLocation, setIsSearchingMeetupLocation] = useState(false)
+  const [showMeetupSearchDropdown, setShowMeetupSearchDropdown] = useState(false)
 
   const dayOptions = [
     { value: 'weekdays', label: 'Weekdays' },
@@ -425,22 +435,59 @@ const AddProduct: React.FC = () => {
     const next = current.includes(method)
       ? current.filter(m => m !== method)
       : [...current, method]
-    handleField('collection_setup', {
+    const nextSetup = {
       ...formData.collection_setup,
       methods: next.length > 0 ? next : [method],
+    }
+    if (!current.includes(method) && method === 'pickup') {
+      nextSetup.pickup = {
+        ...nextSetup.pickup,
+        days: nextSetup.pickup.days.length ? nextSetup.pickup.days : ['weekdays'],
+        time_start: nextSetup.pickup.time_start || '09:00',
+        time_end: nextSetup.pickup.time_end || '17:00',
+      }
+    }
+    handleField('collection_setup', {
+      ...nextSetup,
     })
+    setEditingCollectionSection(method)
   }
 
   const toggleCollectionDay = (section: 'pickup' | 'meetup', day: string) => {
     const current = formData.collection_setup[section].days || []
     const next = current.includes(day) ? current.filter(d => d !== day) : [...current, day]
-    handleField('collection_setup', {
+    updateCollectionSchedule(section, { days: next })
+  }
+
+  const collectionTimeLabel = (start: string, end: string) => {
+    if (!start || !end) return 'No time set'
+    return `${start} - ${end}`
+  }
+
+  const collectionSummary = (section: 'pickup' | 'meetup') => {
+    const config = formData.collection_setup[section]
+    const days = config.days.length ? config.days.map(day => dayOptions.find(option => option.value === day)?.label || day).join(', ') : 'No days set'
+    return `${days} • ${collectionTimeLabel(config.time_start, config.time_end)}`
+  }
+
+  const updateCollectionSchedule = (section: 'pickup' | 'meetup', patch: Partial<ProductFormData['collection_setup']['pickup']>) => {
+    const nextSetup = {
       ...formData.collection_setup,
       [section]: {
         ...formData.collection_setup[section],
-        days: next,
+        ...patch,
       },
-    })
+    }
+    if (useSameCollectionSchedule && formData.collection_setup.methods.includes('pickup') && formData.collection_setup.methods.includes('meetup')) {
+      const syncPatch = {
+        days: patch.days ?? nextSetup[section].days,
+        time_start: patch.time_start ?? nextSetup[section].time_start,
+        time_end: patch.time_end ?? nextSetup[section].time_end,
+      }
+      nextSetup.pickup = { ...nextSetup.pickup, ...syncPatch }
+      nextSetup.meetup = { ...nextSetup.meetup, ...syncPatch }
+    }
+    handleField('collection_setup', nextSetup)
   }
 
   const [uploadedImages, setUploadedImages] = useState<File[]>([])
@@ -681,6 +728,59 @@ const AddProduct: React.FC = () => {
     setPickupSearchResults([])
     setShowPickupSearchDropdown(false)
   }, [toast])
+
+  const searchMeetupLocations = useCallback(async (query: string) => {
+    if (query.trim().length < 2) {
+      setMeetupSearchResults([])
+      setShowMeetupSearchDropdown(false)
+      return
+    }
+    setIsSearchingMeetupLocation(true)
+    try {
+      const response = await fetch(buildPhilippinesSearchUrl(query, 5))
+      const results = await response.json()
+      const formatted = (Array.isArray(results) ? results : [])
+        .map((r: any) => ({
+          name: r.name || String(r.display_name || '').split(',')[0],
+          address: r.display_name,
+          lat: parseFloat(r.lat),
+          lng: parseFloat(r.lon),
+          countryCode: String(r.address?.country_code || '').toLowerCase(),
+        }))
+        .filter((r: any) => r.address && r.countryCode === 'ph' && isInPhilippines(r.lat, r.lng))
+        .map(({ name, address, lat, lng }: any) => ({ name, address, lat, lng }))
+      setMeetupSearchResults(formatted)
+      setShowMeetupSearchDropdown(true)
+    } catch {
+      setMeetupSearchResults([])
+    } finally {
+      setIsSearchingMeetupLocation(false)
+    }
+  }, [])
+
+  const addMeetupLocationPoint = useCallback((point: { name: string; address: string; lat: number; lng: number }) => {
+    if (!isInPhilippines(point.lat, point.lng)) {
+      toast({ title: 'PH locations only', description: 'Please select a meetup location within the Philippines.', status: 'warning', duration: 3000 })
+      return
+    }
+    const current = formData.collection_setup.meetup.location_points || []
+    if (current.length >= 3) {
+      toast({ title: 'Meetup location limit', description: 'You can add up to 3 meetup locations.', status: 'warning', duration: 3000 })
+      return
+    }
+    const next = [...current, point]
+    handleField('collection_setup', {
+      ...formData.collection_setup,
+      meetup: {
+        ...formData.collection_setup.meetup,
+        location_points: next,
+        locations: next.map(location => `${location.name} - ${location.address}`),
+      },
+    })
+    setMeetupSearchQuery('')
+    setMeetupSearchResults([])
+    setShowMeetupSearchDropdown(false)
+  }, [formData.collection_setup, toast])
 
   useEffect(() => {
     if (hasSavedHomeLocation) {
@@ -2380,74 +2480,199 @@ const AddProduct: React.FC = () => {
               Set the logistics buyers choose from when they send an offer.
             </Text>
 
-            <HStack spacing={2} mb={3}>
-              {(['pickup', 'meetup'] as const).map(method => (
-                <Button
-                  key={method}
-                  size="sm"
-                  flex={1}
-                  fontSize="11px"
-                  colorScheme={formData.collection_setup.methods.includes(method) ? (method === 'pickup' ? 'orange' : 'teal') : 'gray'}
-                  variant={formData.collection_setup.methods.includes(method) ? 'solid' : 'outline'}
-                  onClick={() => toggleCollectionMethod(method)}
-                >
-                  {method === 'pickup' ? 'Pickup' : 'Meetup'}
-                </Button>
-              ))}
-            </HStack>
+            <Text fontSize="10px" color="gray.600" fontWeight="700" mb={2}>
+              Choose how buyers can get your item. You can select one or both.
+            </Text>
+
+            <SimpleGrid columns={{ base: 1, sm: 2 }} spacing={2} mb={3}>
+              {(['pickup', 'meetup'] as const).map(method => {
+                const enabled = formData.collection_setup.methods.includes(method)
+                const isPickup = method === 'pickup'
+                const scheme = isPickup ? 'orange' : 'teal'
+                return (
+                  <Box
+                    key={method}
+                    role="button"
+                    tabIndex={0}
+                    p={3}
+                    borderRadius="lg"
+                    borderWidth="1.5px"
+                    borderColor={enabled ? `${scheme}.300` : 'gray.200'}
+                    bg={enabled ? `${scheme}.50` : 'white'}
+                    cursor="pointer"
+                    onClick={() => toggleCollectionMethod(method)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') toggleCollectionMethod(method)
+                    }}
+                  >
+                    <HStack align="start" spacing={2}>
+                      <Checkbox isChecked={enabled} colorScheme={scheme} pointerEvents="none" mt={0.5} />
+                      <VStack align="start" spacing={0.5} flex={1}>
+                        <Text fontSize="12px" fontWeight="800" color={enabled ? `${scheme}.800` : 'gray.800'}>
+                          {isPickup ? 'Pickup' : 'Meetup'}
+                        </Text>
+                        <Text fontSize="10px" color={enabled ? `${scheme}.700` : 'gray.600'}>
+                          {isPickup ? 'Buyer goes to your location' : 'You meet at a shared location'}
+                        </Text>
+                      </VStack>
+                      {enabled && <Badge colorScheme={scheme} fontSize="8px">On</Badge>}
+                    </HStack>
+                  </Box>
+                )
+              })}
+            </SimpleGrid>
+
+            {formData.collection_setup.methods.includes('pickup') && formData.collection_setup.methods.includes('meetup') && (
+              <Checkbox
+                size="sm"
+                colorScheme="green"
+                isChecked={useSameCollectionSchedule}
+                onChange={(e) => {
+                  const checked = e.target.checked
+                  setUseSameCollectionSchedule(checked)
+                  if (checked) {
+                    handleField('collection_setup', {
+                      ...formData.collection_setup,
+                      meetup: {
+                        ...formData.collection_setup.meetup,
+                        days: formData.collection_setup.pickup.days,
+                        time_start: formData.collection_setup.pickup.time_start,
+                        time_end: formData.collection_setup.pickup.time_end,
+                      },
+                    })
+                  }
+                }}
+                mb={3}
+              >
+                <Text fontSize="10px" color="gray.700">Use same schedule for Pickup and Meetup</Text>
+              </Checkbox>
+            )}
 
             {formData.collection_setup.methods.includes('pickup') && (
-              <VStack align="stretch" spacing={2} p={2} bg="orange.50" borderRadius="md" borderWidth="1px" borderColor="orange.100" mb={3}>
-                <Text fontSize="11px" fontWeight="700" color="orange.800">Pickup</Text>
-                <Text fontSize="10px" color="orange.700">Uses this product's saved location. Do not enter a private/home label.</Text>
-                <Wrap spacing={1}>
-                  {dayOptions.map(day => (
-                    <WrapItem key={`pickup-${day.value}`}>
-                      <Button size="xs" fontSize="9px" h="22px" variant={formData.collection_setup.pickup.days.includes(day.value) ? 'solid' : 'outline'} colorScheme="orange" onClick={() => toggleCollectionDay('pickup', day.value)}>
-                        {day.label}
-                      </Button>
-                    </WrapItem>
-                  ))}
-                </Wrap>
-                <HStack>
-                  <Input type="time" size="sm" bg="white" value={formData.collection_setup.pickup.time_start} onChange={(e) => handleField('collection_setup', { ...formData.collection_setup, pickup: { ...formData.collection_setup.pickup, time_start: e.target.value } })} />
-                  <Text fontSize="10px" color="gray.500">to</Text>
-                  <Input type="time" size="sm" bg="white" value={formData.collection_setup.pickup.time_end} onChange={(e) => handleField('collection_setup', { ...formData.collection_setup, pickup: { ...formData.collection_setup.pickup, time_end: e.target.value } })} />
+              <VStack align="stretch" spacing={2} p={3} bg="orange.50" borderRadius="lg" borderWidth="1px" borderColor="orange.100" mb={3}>
+                <HStack justify="space-between" align="start">
+                  <Box>
+                    <Text fontSize="12px" fontWeight="800" color="orange.800">Pickup enabled</Text>
+                    <Text fontSize="10px" color="orange.700">Set when buyers can come to your location.</Text>
+                    <Text fontSize="10px" color="gray.600" mt={1}>{collectionSummary('pickup')}</Text>
+                  </Box>
+                  <Button size="xs" colorScheme="orange" variant={editingCollectionSection === 'pickup' ? 'solid' : 'outline'} onClick={() => setEditingCollectionSection(editingCollectionSection === 'pickup' ? null : 'pickup')}>
+                    {editingCollectionSection === 'pickup' ? 'Done' : 'Edit'}
+                  </Button>
                 </HStack>
-                <Textarea size="sm" bg="white" fontSize="11px" placeholder="Pickup notes (optional)" value={formData.collection_setup.pickup.notes} onChange={(e) => handleField('collection_setup', { ...formData.collection_setup, pickup: { ...formData.collection_setup.pickup, notes: e.target.value } })} />
+                {editingCollectionSection === 'pickup' && (
+                  <VStack align="stretch" spacing={2} pt={1}>
+                    <Wrap spacing={1}>
+                      {dayOptions.map(day => (
+                        <WrapItem key={`pickup-${day.value}`}>
+                          <Button size="xs" fontSize="9px" h="24px" variant={formData.collection_setup.pickup.days.includes(day.value) ? 'solid' : 'outline'} colorScheme="orange" onClick={() => toggleCollectionDay('pickup', day.value)}>
+                            {day.label}
+                          </Button>
+                        </WrapItem>
+                      ))}
+                    </Wrap>
+                    <HStack>
+                      <Input type="time" size="sm" bg="white" value={formData.collection_setup.pickup.time_start} onChange={(e) => updateCollectionSchedule('pickup', { time_start: e.target.value })} />
+                      <Text fontSize="10px" color="gray.500">to</Text>
+                      <Input type="time" size="sm" bg="white" value={formData.collection_setup.pickup.time_end} onChange={(e) => updateCollectionSchedule('pickup', { time_end: e.target.value })} />
+                    </HStack>
+                    <Textarea size="sm" bg="white" fontSize="11px" placeholder="Pickup notes (optional)" value={formData.collection_setup.pickup.notes} onChange={(e) => handleField('collection_setup', { ...formData.collection_setup, pickup: { ...formData.collection_setup.pickup, notes: e.target.value } })} />
+                  </VStack>
+                )}
               </VStack>
             )}
 
             {formData.collection_setup.methods.includes('meetup') && (
-              <VStack align="stretch" spacing={2} p={2} bg="teal.50" borderRadius="md" borderWidth="1px" borderColor="teal.100">
-                <Text fontSize="11px" fontWeight="700" color="teal.800">Meetup</Text>
-                {(formData.collection_setup.meetup.locations || ['']).map((location, index) => (
-                  <HStack key={`meetup-location-${index}`}>
-                    <Input size="sm" bg="white" fontSize="11px" placeholder="Preferred meetup location" value={location} onChange={(e) => {
-                      const locations = [...formData.collection_setup.meetup.locations]
-                      locations[index] = e.target.value
-                      handleField('collection_setup', { ...formData.collection_setup, meetup: { ...formData.collection_setup.meetup, locations } })
-                    }} />
-                    <IconButton aria-label="Remove meetup location" icon={<CloseIcon boxSize={2} />} size="xs" isDisabled={formData.collection_setup.meetup.locations.length <= 1} onClick={() => handleField('collection_setup', { ...formData.collection_setup, meetup: { ...formData.collection_setup.meetup, locations: formData.collection_setup.meetup.locations.filter((_, i) => i !== index) } })} />
-                  </HStack>
-                ))}
-                <Button size="xs" alignSelf="start" leftIcon={<AddIcon boxSize={2} />} onClick={() => handleField('collection_setup', { ...formData.collection_setup, meetup: { ...formData.collection_setup.meetup, locations: [...formData.collection_setup.meetup.locations, ''] } })}>Add location</Button>
-                <Wrap spacing={1}>
-                  {dayOptions.map(day => (
-                    <WrapItem key={`meetup-${day.value}`}>
-                      <Button size="xs" fontSize="9px" h="22px" variant={formData.collection_setup.meetup.days.includes(day.value) ? 'solid' : 'outline'} colorScheme="teal" onClick={() => toggleCollectionDay('meetup', day.value)}>
-                        {day.label}
-                      </Button>
-                    </WrapItem>
-                  ))}
-                </Wrap>
-                <HStack>
-                  <Input type="time" size="sm" bg="white" value={formData.collection_setup.meetup.time_start} onChange={(e) => handleField('collection_setup', { ...formData.collection_setup, meetup: { ...formData.collection_setup.meetup, time_start: e.target.value } })} />
-                  <Text fontSize="10px" color="gray.500">to</Text>
-                  <Input type="time" size="sm" bg="white" value={formData.collection_setup.meetup.time_end} onChange={(e) => handleField('collection_setup', { ...formData.collection_setup, meetup: { ...formData.collection_setup.meetup, time_end: e.target.value } })} />
+              <VStack align="stretch" spacing={2} p={3} bg="teal.50" borderRadius="lg" borderWidth="1px" borderColor="teal.100">
+                <HStack justify="space-between" align="start">
+                  <Box>
+                    <Text fontSize="12px" fontWeight="800" color="teal.800">Meetup enabled</Text>
+                    <Text fontSize="10px" color="teal.700">Set when you are available to meet.</Text>
+                    <Text fontSize="10px" color="gray.600" mt={1}>{collectionSummary('meetup')}</Text>
+                  </Box>
+                  <Button size="xs" colorScheme="teal" variant={editingCollectionSection === 'meetup' ? 'solid' : 'outline'} onClick={() => setEditingCollectionSection(editingCollectionSection === 'meetup' ? null : 'meetup')}>
+                    {editingCollectionSection === 'meetup' ? 'Done' : 'Edit'}
+                  </Button>
                 </HStack>
-                <Input size="sm" bg="white" fontSize="11px" placeholder="Distance preference, e.g. within 2km (optional)" value={formData.collection_setup.meetup.distance_km} onChange={(e) => handleField('collection_setup', { ...formData.collection_setup, meetup: { ...formData.collection_setup.meetup, distance_km: e.target.value } })} />
-                <Textarea size="sm" bg="white" fontSize="11px" placeholder="Meetup notes (optional)" value={formData.collection_setup.meetup.notes} onChange={(e) => handleField('collection_setup', { ...formData.collection_setup, meetup: { ...formData.collection_setup.meetup, notes: e.target.value } })} />
+                {editingCollectionSection === 'meetup' && (
+                  <VStack align="stretch" spacing={2} pt={1}>
+                    <Text fontSize="10px" color="teal.700" fontWeight="700">
+                      Add 1-3 map-pinned meetup locations buyers can choose from.
+                    </Text>
+                    <VStack align="stretch" spacing={1.5}>
+                      {(formData.collection_setup.meetup.location_points || []).map((point, index) => (
+                        <Box key={`meetup-point-${index}`} p={2} bg="white" borderWidth="1px" borderColor="teal.200" borderRadius="md">
+                          <HStack align="start" spacing={2}>
+                            <Box flex={1} minW={0}>
+                              <Text fontSize="10px" fontWeight="800" color="teal.800" noOfLines={1}>{point.name}</Text>
+                              <Text fontSize="9px" color="gray.500" noOfLines={2}>{point.address}</Text>
+                            </Box>
+                            <IconButton aria-label="Remove meetup location" icon={<CloseIcon boxSize={2} />} size="xs" onClick={() => {
+                              const next = (formData.collection_setup.meetup.location_points || []).filter((_, i) => i !== index)
+                              handleField('collection_setup', {
+                                ...formData.collection_setup,
+                                meetup: {
+                                  ...formData.collection_setup.meetup,
+                                  location_points: next,
+                                  locations: next.map(location => `${location.name} - ${location.address}`),
+                                },
+                              })
+                            }} />
+                          </HStack>
+                          <Box h="86px" mt={2} borderRadius="md" overflow="hidden" borderWidth="1px" borderColor="gray.200">
+                            <MapContainer center={[point.lat, point.lng]} zoom={15} style={{ height: '100%', width: '100%' }} scrollWheelZoom={false}>
+                              <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution='&copy; OpenStreetMap contributors' />
+                              <Marker position={[point.lat, point.lng]} />
+                              <MapUpdater lat={point.lat} lng={point.lng} />
+                            </MapContainer>
+                          </Box>
+                        </Box>
+                      ))}
+                    </VStack>
+                    {(formData.collection_setup.meetup.location_points || []).length < 3 && (
+                      <Box position="relative">
+                        <Input
+                          size="sm"
+                          bg="white"
+                          fontSize="11px"
+                          placeholder="Search a public meetup place"
+                          value={meetupSearchQuery}
+                          onChange={(e) => {
+                            setMeetupSearchQuery(e.target.value)
+                            searchMeetupLocations(e.target.value)
+                          }}
+                          onFocus={() => meetupSearchQuery && setShowMeetupSearchDropdown(true)}
+                        />
+                        {isSearchingMeetupLocation && <Spinner size="xs" position="absolute" right={3} top="10px" color="teal.500" />}
+                        {showMeetupSearchDropdown && meetupSearchResults.length > 0 && (
+                          <Box position="absolute" top="100%" left={0} right={0} bg="white" border="1px" borderColor="gray.200" borderRadius="md" shadow="lg" zIndex={20} maxH="180px" overflowY="auto" mt={1}>
+                            {meetupSearchResults.map((result, idx) => (
+                              <Box key={`${result.lat}-${result.lng}-${idx}`} p={2} cursor="pointer" _hover={{ bg: 'teal.50' }} borderBottom={idx < meetupSearchResults.length - 1 ? '1px' : 'none'} borderColor="gray.100" onClick={() => addMeetupLocationPoint(result)}>
+                                <Text fontSize="11px" fontWeight="700" color="gray.800" noOfLines={1}>{result.name}</Text>
+                                <Text fontSize="9px" color="gray.500" noOfLines={1}>{result.address}</Text>
+                              </Box>
+                            ))}
+                          </Box>
+                        )}
+                      </Box>
+                    )}                    <Wrap spacing={1}>
+                      {dayOptions.map(day => (
+                        <WrapItem key={`meetup-${day.value}`}>
+                          <Button size="xs" fontSize="9px" h="24px" variant={formData.collection_setup.meetup.days.includes(day.value) ? 'solid' : 'outline'} colorScheme="teal" onClick={() => toggleCollectionDay('meetup', day.value)}>
+                            {day.label}
+                          </Button>
+                        </WrapItem>
+                      ))}
+                    </Wrap>
+                    <HStack>
+                      <Input type="time" size="sm" bg="white" value={formData.collection_setup.meetup.time_start} onChange={(e) => updateCollectionSchedule('meetup', { time_start: e.target.value })} />
+                      <Text fontSize="10px" color="gray.500">to</Text>
+                      <Input type="time" size="sm" bg="white" value={formData.collection_setup.meetup.time_end} onChange={(e) => updateCollectionSchedule('meetup', { time_end: e.target.value })} />
+                    </HStack>
+                    <Input size="sm" bg="white" fontSize="11px" placeholder="Distance preference, e.g. within 2km (optional)" value={formData.collection_setup.meetup.distance_km} onChange={(e) => handleField('collection_setup', { ...formData.collection_setup, meetup: { ...formData.collection_setup.meetup, distance_km: e.target.value } })} />
+                    <Textarea size="sm" bg="white" fontSize="11px" placeholder="Meetup notes (optional)" value={formData.collection_setup.meetup.notes} onChange={(e) => handleField('collection_setup', { ...formData.collection_setup, meetup: { ...formData.collection_setup.meetup, notes: e.target.value } })} />
+                  </VStack>
+                )}
               </VStack>
             )}
           </Box>

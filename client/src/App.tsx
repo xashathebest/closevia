@@ -85,7 +85,6 @@ const AddProduct = lazyWithFallback(() => import('./pages/AddProduct'), 'Add Pro
 const EditProduct = lazyWithFallback(() => import('./pages/EditProduct'), 'Edit Product')
 const Notifications = lazyWithFallback(() => import('./pages/Notifications'), 'Notifications')
 const Settings = lazyWithFallback(() => import('./pages/Settings'), 'Settings')
-const Trades = lazyWithFallback(() => import('./pages/Trades'), 'Trades')
 const Offers = lazyWithFallback(() => import('./pages/Offers'), 'Offers')
 const Profile = lazyWithFallback(() => import('./pages/Profile'), 'Profile')
 const UserProfile = lazyWithFallback(() => import('./pages/UserProfile'), 'User Profile')
@@ -323,9 +322,7 @@ const AppContent: React.FC = () => {
                   </PageTransition>
                 } />
                 <Route path="/trades" element={
-                  <PageTransition>
-                    <ProtectedRoute><Suspense fallback={<RouteFallback />}><Trades /></Suspense></ProtectedRoute>
-                  </PageTransition>
+                  <Navigate to="/offers?tab=inbox" replace />
                 } />
                 <Route path="/offers" element={
                   <PageTransition>

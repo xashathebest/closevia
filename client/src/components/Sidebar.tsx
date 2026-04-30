@@ -80,26 +80,33 @@ const Sidebar: React.FC = () => {
     }
   }, [user])
 
-  // Handle swipe to open menu
+  // Track touch start Y position to distinguish horizontal from vertical swipes
+  const touchStartY = useRef<number | null>(null)
+
+  // Handle swipe to open menu — only from left edge, only horizontal swipes
   const handleTouchStart = useCallback((e: TouchEvent) => {
-    // Only detect swipe from left edge (first 50px)
-    if (e.touches[0].clientX < 50) {
+    // Only detect swipe from left edge (first 30px)
+    if (e.touches[0].clientX < 30) {
       setTouchStart(e.touches[0].clientX)
+      touchStartY.current = e.touches[0].clientY
     }
   }, [])
 
   const handleTouchEnd = useCallback((e: TouchEvent) => {
-    if (touchStart === null) return
+    if (touchStart === null || touchStartY.current === null) return
 
-    const touchEnd = e.changedTouches[0].clientX
-    const diff = touchEnd - touchStart
+    const touchEndX = e.changedTouches[0].clientX
+    const touchEndY = e.changedTouches[0].clientY
+    const dx = touchEndX - touchStart
+    const dy = Math.abs(touchEndY - touchStartY.current)
 
-    // If swiped right more than 80px, open menu
-    if (diff > 80) {
+    // Only trigger if: moved right >80px AND horizontal dominates (dx > 2×dy)
+    if (dx > 80 && dx > dy * 2) {
       onOpen()
     }
 
     setTouchStart(null)
+    touchStartY.current = null
   }, [touchStart, onOpen])
 
   useEffect(() => {

@@ -42,6 +42,7 @@ import {
 import { api } from '../services/api'
 import { Delivery, DeliveryStatus } from '../types'
 import { formatPHP } from '../utils/currency'
+import { formatDuration } from '../utils/timeUtils'
 
 interface DeliveryTrackingProps {
   isOpen: boolean
@@ -171,10 +172,7 @@ const DeliveryTracking: React.FC<DeliveryTrackingProps> = ({ isOpen, onClose, de
     const diffMins = Math.floor(diffMs / 60000)
 
     if (diffMins < 0) return 'Arriving soon'
-    if (diffMins < 60) return `${diffMins} minutes`
-    const hours = Math.floor(diffMins / 60)
-    const mins = diffMins % 60
-    return `${hours}h ${mins}m`
+    return formatDuration(diffMins)
   }
 
   useEffect(() => {
@@ -251,12 +249,12 @@ const DeliveryTracking: React.FC<DeliveryTrackingProps> = ({ isOpen, onClose, de
   const distanceLabel = routeLoading
     ? 'Calculating distance...'
     : routeMetrics
-      ? routeMetrics.distanceM < 1000 ? `${Math.round(routeMetrics.distanceM)} m` : `${(routeMetrics.distanceM / 1000).toFixed(1)} km`
+      ? routeMetrics.distanceM < 1000 ? `${Math.round(routeMetrics.distanceM)}m` : `${(routeMetrics.distanceM / 1000).toFixed(1)} km`
       : 'Distance unavailable'
   const etaLabel = routeLoading
     ? 'Calculating ETA...'
     : routeMetrics
-      ? `${Math.max(1, Math.round(routeMetrics.durationS / 60))} min`
+      ? formatDuration(Math.max(1, Math.round(routeMetrics.durationS / 60)))
       : delivery.estimated_eta
         ? formatETA(delivery.estimated_eta)
         : 'ETA unavailable'

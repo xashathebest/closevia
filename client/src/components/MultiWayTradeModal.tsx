@@ -81,6 +81,7 @@ import { api } from '../services/api'
 import { useAuth } from '../contexts/AuthContext'
 import TradeCompletionModal from './TradeCompletionModal'
 import TransactionTrackingLayout from './TransactionTrackingLayout'
+import { formatDuration, formatDurationRange } from '../utils/timeUtils'
 import {
   acceptMultiWayTrade,
   declineMultiWayTrade,
@@ -179,17 +180,17 @@ const getDistanceStatusMessage = (distanceM: number, pointLabel: string) => {
 
 const formatTrackingDistance = (meters: number | null) => {
   if (meters === null) return 'Calculating distance...'
-  if (meters < 1000) return `${Math.round(meters)} m`
+  if (meters < 1000) return `${Math.round(meters)}m`
   return `${(meters / 1000).toFixed(1)} km`
 }
 
 const estimateTravelWindow = (meters: number | null, durationSeconds?: number | null) => {
   if (durationSeconds && durationSeconds > 0) {
-    return `${Math.max(1, Math.round(durationSeconds / 60))} min`
+    return formatDuration(Math.max(1, Math.round(durationSeconds / 60)))
   }
   if (meters === null) return 'Calculating ETA...'
   const minutes = Math.max(2, Math.round(meters / 67))
-  return `${Math.max(1, minutes - 4)}-${minutes + 6} mins`
+  return formatDurationRange(Math.max(1, minutes - 4), minutes + 6)
 }
 
 const parseLatLngFromText = (value?: string | null): { lat: number; lng: number } | null => {

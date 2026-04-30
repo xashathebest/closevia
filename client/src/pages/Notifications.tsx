@@ -370,11 +370,9 @@ const Notifications: React.FC = () => {
     if (notification.type === 'trade_offer' || notification.type === 'trade_update') {
       const tradeId = asPositiveNumber(data.trade_id ?? data.target_id)
       if (tradeId) {
-        return notification.type === 'trade_update'
-          ? `/dashboard?tab=ongoing&trade_id=${tradeId}`
-          : `/offers?trade_id=${tradeId}`
+        return `/offers?tab=inbox&trade_id=${tradeId}`
       }
-      return notification.type === 'trade_update' ? '/dashboard?tab=ongoing' : '/offers'
+      return '/offers?tab=inbox'
     }
 
     if (typeof data.target_url === 'string' && data.target_url.trim()) {
@@ -440,7 +438,7 @@ const Notifications: React.FC = () => {
               duration: 4500,
               isClosable: true,
             })
-            navigate(isRejectedOffer ? '/offers' : '/dashboard?tab=history')
+            navigate(isRejectedOffer ? '/offers?tab=inbox' : '/offers?tab=history')
             return
           }
         }
@@ -448,7 +446,7 @@ const Notifications: React.FC = () => {
     } catch {
       if (notification.type === 'trade_offer') {
         toast({ id: `notif-offer-stale-${notification.id}`, title: 'Offer no longer available', description: 'This offer may have been declined, canceled, or removed.', status: 'info', duration: 4500, isClosable: true })
-        navigate('/offers')
+        navigate('/offers?tab=inbox')
         return
       }
     }
