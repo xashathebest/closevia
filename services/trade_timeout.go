@@ -2,9 +2,65 @@ package services
 
 import (
 	"database/sql"
+	"fmt"
 	"log"
+	"strings"
 	"time"
 )
+
+func recordNoShowPenalty(db *sql.DB, userID int, tradeType, tradeRef, roleLabel string, tradeID *int) {
+	if userID <= 0 {
+		return
+	}
+	if _, err := db.Exec("UPDATE users SET strikes = COALESCE(strikes, 0) + 1 WHERE id = ?", userID); err != nil {
+		log.Printf("recordNoShowPenalty: failed to increment strikes for user %d (%s): %v", userID, tradeRef, err)
+		return
+	}
+	reason := fmt.Sprintf("No-show for %s", tradeRef)
+	if roleLabel != "" {
+		reason = fmt.Sprintf("%s (%s)", reason, roleLabel)
+	}
+	if err := RecordTrustStrike(db, TrustStrikeInput{
+		UserID:    userID,
+		Type:      "no_show",
+		Severity:  "major",
+		TradeType: tradeType,
+		TradeID:   tradeID,
+		TradeRef:  tradeRef,
+		Reason:    reason,
+		Points:    PointsForTrustStrike("no_show", "major"),
+	}); err != nil {
+		log.Printf("recordNoShowPenalty: failed to record no-show strike for user %d (%s): %v", userID, tradeRef, err)
+		return
+	}
+	_, _ = db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'account', ?, FALSE)", userID, "Major trust score penalty: you were marked as a no-show for an expired trade.")
+	log.Printf("Applied no-show trust penalty to user %d for %s", userID, tradeRef)
+}
+
+func tableHasColumn(db *sql.DB, tableName, columnName string) bool {
+	var count int
+	err := db.QueryRow(`
+		SELECT COUNT(*)
+		FROM information_schema.COLUMNS
+		WHERE TABLE_SCHEMA = DATABASE()
+		  AND TABLE_NAME = ?
+		  AND COLUMN_NAME = ?
+	`, tableName, columnName).Scan(&count)
+	return err == nil && count > 0
+}
+
+func uniquePositiveInts(values ...int) []int {
+	seen := map[int]bool{}
+	out := make([]int, 0, len(values))
+	for _, value := range values {
+		if value <= 0 || seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	return out
+}
 
 // StartTradeTimeoutScheduler runs periodic checks to progress trades through two-stage timeout
 func StartTradeTimeoutScheduler(db *sql.DB) {
@@ -205,10 +261,12 @@ func autoExpireTrade(db *sql.DB, tradeID int) error {
 	// Lock trade and fetch participants and current status
 	var targetProductID, buyerID, sellerID int
 	var currentStatus string
+	var buyerMet, sellerMet bool
 	err = tx.QueryRow(`
-		SELECT target_product_id, buyer_id, seller_id, status
+		SELECT target_product_id, buyer_id, seller_id, status,
+		       COALESCE(buyer_met, FALSE), COALESCE(seller_met, FALSE)
 		FROM trades WHERE id = ? FOR UPDATE
-	`, tradeID).Scan(&targetProductID, &buyerID, &sellerID, &currentStatus)
+	`, tradeID).Scan(&targetProductID, &buyerID, &sellerID, &currentStatus, &buyerMet, &sellerMet)
 	if err != nil {
 		return err
 	}
@@ -261,6 +319,16 @@ func autoExpireTrade(db *sql.DB, tradeID int) error {
 		buyerID, "A trade has expired due to 3 days of inactivity.")
 	_, _ = db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)",
 		sellerID, "A trade has expired due to 3 days of inactivity.")
+	if currentStatus == "active" {
+		if !buyerMet {
+			tradeIDForStrike := tradeID
+			recordNoShowPenalty(db, buyerID, "normal", fmt.Sprintf("trade #%d", tradeID), "buyer", &tradeIDForStrike)
+		}
+		if !sellerMet {
+			tradeIDForStrike := tradeID
+			recordNoShowPenalty(db, sellerID, "normal", fmt.Sprintf("trade #%d", tradeID), "seller", &tradeIDForStrike)
+		}
+	}
 
 	// Record trade event (system action, no actor)
 	_, _ = db.Exec("INSERT INTO trade_events (trade_id, from_status, to_status, note) VALUES (?, ?, 'expired', 'Auto-expired after 3 days of inactivity')",
@@ -422,28 +490,48 @@ func expireOngoingMultiwayChains(db *sql.DB) error {
 		return nil
 	}
 
-	rows, err := db.Query(`
-		SELECT id, chain_id, original_trade_id, user1_id, user2_id, COALESCE(user3_id, 0)
+	selectColumns := []string{"id", "chain_id", "original_trade_id", "user1_id", "user2_id", "COALESCE(user3_id, 0)"}
+	hasUser4 := tableHasColumn(db, "multiway_trades", "user4_id")
+	hasUser5 := tableHasColumn(db, "multiway_trades", "user5_id")
+	if hasUser4 {
+		selectColumns = append(selectColumns, "COALESCE(user4_id, 0)")
+	}
+	if hasUser5 {
+		selectColumns = append(selectColumns, "COALESCE(user5_id, 0)")
+	}
+
+	rows, err := db.Query(fmt.Sprintf(`
+		SELECT %s
 		FROM multiway_trades
 		WHERE ongoing_deadline IS NOT NULL
 		  AND ongoing_deadline <= NOW()
 		  AND status IN ('user3_accepted', 'active')
-	`)
+	`, strings.Join(selectColumns, ", ")))
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 
 	type expired struct {
-		id, tradeID, u1, u2, u3 int
-		chainID                 string
+		id, tradeID int
+		userIDs     []int
+		chainID     string
 	}
 	var chains []expired
 	for rows.Next() {
 		var c expired
-		if err := rows.Scan(&c.id, &c.chainID, &c.tradeID, &c.u1, &c.u2, &c.u3); err != nil {
+		var u1, u2, u3, u4, u5 int
+		scanTargets := []interface{}{&c.id, &c.chainID, &c.tradeID, &u1, &u2, &u3}
+		if hasUser4 {
+			scanTargets = append(scanTargets, &u4)
+		}
+		if hasUser5 {
+			scanTargets = append(scanTargets, &u5)
+		}
+		if err := rows.Scan(scanTargets...); err != nil {
 			continue
 		}
+		c.userIDs = uniquePositiveInts(u1, u2, u3, u4, u5)
 		chains = append(chains, c)
 	}
 
@@ -459,9 +547,25 @@ func expireOngoingMultiwayChains(db *sql.DB) error {
 
 		// Notify all parties
 		msg := "A multi-way trade has expired because not all legs were completed within 7 days. Your items are available again."
-		for _, uid := range []int{c.u1, c.u2, c.u3} {
+		for _, uid := range c.userIDs {
 			if uid > 0 {
 				_, _ = db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)", uid, msg)
+			}
+		}
+
+		for _, uid := range c.userIDs {
+			var metConfirmed bool
+			err := db.QueryRow(`
+				SELECT COALESCE(met_confirmed, FALSE)
+				FROM trade_loop_meetup_selections
+				WHERE loop_id = ? AND user_id = ?
+			`, c.chainID, uid).Scan(&metConfirmed)
+			if err != nil && err != sql.ErrNoRows {
+				log.Printf("expireOngoingMultiwayChains: failed to check met_confirmed for chain %s user %d: %v", c.chainID, uid, err)
+				continue
+			}
+			if !metConfirmed {
+				recordNoShowPenalty(db, uid, "multiway", fmt.Sprintf("trade loop %s", c.chainID), "participant", nil)
 			}
 		}
 

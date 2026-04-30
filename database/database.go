@@ -887,6 +887,8 @@ func CreateTables() error {
 			loop_id VARCHAR(255) NOT NULL,
 			user_id INT NOT NULL,
 			meetup_location VARCHAR(500) NULL,
+			agreed_latitude DECIMAL(10,8) NULL,
+			agreed_longitude DECIMAL(11,8) NULL,
 			meetup_date VARCHAR(20) NULL,
 			meetup_time VARCHAR(20) NULL,
 			meetup_confirmed BOOLEAN NOT NULL DEFAULT FALSE,
@@ -1086,14 +1088,25 @@ func CreateTables() error {
 		`CREATE TABLE IF NOT EXISTS user_strikes (
 			id INT AUTO_INCREMENT PRIMARY KEY,
 			user_id INT NOT NULL,
-			admin_id INT NOT NULL,
+			admin_id INT NULL,
 			dispute_id INT NULL,
 			reason TEXT NOT NULL,
+			strike_type VARCHAR(50) NULL,
+			severity VARCHAR(50) NULL,
+			trade_type VARCHAR(50) NULL,
+			trade_id INT NULL,
+			trade_ref VARCHAR(255) NULL,
+			points INT NOT NULL DEFAULT 0,
+			chain_id VARCHAR(255) NULL,
+			strike_number INT NULL,
+			restricted_until TIMESTAMP NULL,
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
 			FOREIGN KEY (admin_id) REFERENCES users(id) ON DELETE CASCADE,
 			FOREIGN KEY (dispute_id) REFERENCES trade_disputes(id) ON DELETE SET NULL,
-			INDEX idx_strikes_user (user_id)
+			INDEX idx_strikes_user (user_id),
+			INDEX idx_strikes_type (strike_type),
+			INDEX idx_strikes_trade_ref (trade_type, trade_ref)
 		)`,
 		`CREATE TABLE IF NOT EXISTS trade_grades (
 			id INT AUTO_INCREMENT PRIMARY KEY,
@@ -1311,6 +1324,7 @@ func CreateTables() error {
 	ensureUserColumns()
 	ensureProductColumns()
 	ensureTradeColumns()
+	ensureUserStrikeColumns()
 	ensureDisputeColumns()
 	ensureMultiwayColumns()
 	ensureRiderColumns()
@@ -1637,16 +1651,17 @@ func ensureProductColumns() {
 		{"boosted_at", "TIMESTAMP NULL"},
 		{"max_items_per_offer", "INT DEFAULT 0"},
 		{"view_count", "INT DEFAULT 0"},
+		{"traded_by_trade_id", "INT NULL COMMENT 'Trade ID that last marked this product as traded'"},
 	}
 
 	for _, col := range columns {
 		// Check if column exists
 		var count int
 		err := DB.QueryRow(`
-			SELECT COUNT(*) 
-			FROM information_schema.COLUMNS 
-			WHERE TABLE_SCHEMA = DATABASE() 
-			AND TABLE_NAME = 'products' 
+			SELECT COUNT(*)
+			FROM information_schema.COLUMNS
+			WHERE TABLE_SCHEMA = DATABASE()
+			AND TABLE_NAME = 'products'
 			AND COLUMN_NAME = ?
 		`, col.name).Scan(&count)
 
@@ -1984,6 +1999,75 @@ func ensureTradeColumns() {
 	}
 }
 
+func ensureUserStrikeColumns() {
+	if _, err := DB.Exec("ALTER TABLE user_strikes MODIFY COLUMN admin_id INT NULL"); err != nil {
+		log.Printf("Warning: failed to make user_strikes.admin_id nullable: %v", err)
+	}
+
+	columns := []struct {
+		name       string
+		definition string
+	}{
+		{"strike_type", "VARCHAR(50) NULL"},
+		{"severity", "VARCHAR(50) NULL"},
+		{"trade_type", "VARCHAR(50) NULL"},
+		{"trade_id", "INT NULL"},
+		{"trade_ref", "VARCHAR(255) NULL"},
+		{"points", "INT NOT NULL DEFAULT 0"},
+		{"chain_id", "VARCHAR(255) NULL"},
+		{"strike_number", "INT NULL"},
+		{"restricted_until", "TIMESTAMP NULL"},
+	}
+
+	for _, col := range columns {
+		var count int
+		err := DB.QueryRow(`
+			SELECT COUNT(*)
+			FROM information_schema.COLUMNS
+			WHERE TABLE_SCHEMA = DATABASE()
+			  AND TABLE_NAME = 'user_strikes'
+			  AND COLUMN_NAME = ?
+		`, col.name).Scan(&count)
+		if err != nil {
+			log.Printf("Warning: failed to check user_strikes.%s column: %v", col.name, err)
+			continue
+		}
+		if count > 0 {
+			continue
+		}
+		if _, err := DB.Exec(fmt.Sprintf("ALTER TABLE user_strikes ADD COLUMN %s %s", col.name, col.definition)); err != nil {
+			log.Printf("Warning: failed to add user_strikes.%s column: %v", col.name, err)
+			continue
+		}
+		log.Printf("Added missing user_strikes column: %s", col.name)
+	}
+
+	indexes := []struct {
+		name string
+		stmt string
+	}{
+		{"idx_strikes_type", "ALTER TABLE user_strikes ADD INDEX idx_strikes_type (strike_type)"},
+		{"idx_strikes_trade_ref", "ALTER TABLE user_strikes ADD INDEX idx_strikes_trade_ref (trade_type, trade_ref)"},
+		{"uniq_strike_per_trade", "ALTER TABLE user_strikes ADD UNIQUE INDEX uniq_strike_per_trade (user_id, strike_type, trade_id)"},
+	}
+	for _, idx := range indexes {
+		var count int
+		err := DB.QueryRow(`
+			SELECT COUNT(*)
+			FROM information_schema.STATISTICS
+			WHERE TABLE_SCHEMA = DATABASE()
+			  AND TABLE_NAME = 'user_strikes'
+			  AND INDEX_NAME = ?
+		`, idx.name).Scan(&count)
+		if err != nil || count > 0 {
+			continue
+		}
+		if _, err := DB.Exec(idx.stmt); err != nil {
+			log.Printf("Warning: failed to add %s: %v", idx.name, err)
+		}
+	}
+}
+
 // ensureMultiwayColumns adds missing tables/columns for Phase 2/3 multi-way trading
 func ensureMultiwayColumns() {
 	// 1. Ensure multiway_trade_legs table exists
@@ -2043,6 +2127,25 @@ func ensureMultiwayColumns() {
 	if hasOngoingDeadline == 0 {
 		_, _ = DB.Exec("ALTER TABLE multiway_trades ADD COLUMN ongoing_deadline TIMESTAMP NULL COMMENT '7-day deadline after chain becomes active'")
 		log.Println("Added ongoing_deadline column to multiway_trades")
+	}
+
+	loopMeetupColumns := []struct {
+		name       string
+		definition string
+	}{
+		{"agreed_latitude", "DECIMAL(10,8) NULL"},
+		{"agreed_longitude", "DECIMAL(11,8) NULL"},
+	}
+	for _, col := range loopMeetupColumns {
+		var exists int
+		_ = DB.QueryRow("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'trade_loop_meetup_selections' AND COLUMN_NAME = ?", col.name).Scan(&exists)
+		if exists == 0 {
+			if _, err := DB.Exec(fmt.Sprintf("ALTER TABLE trade_loop_meetup_selections ADD COLUMN %s %s", col.name, col.definition)); err != nil {
+				log.Printf("Warning: could not add trade_loop_meetup_selections.%s: %v", col.name, err)
+			} else {
+				log.Printf("Added trade_loop_meetup_selections.%s", col.name)
+			}
+		}
 	}
 
 	// 4. Ensure multiway_trade_legs status ENUM includes 'in_progress' and 'disputed'
@@ -2112,6 +2215,27 @@ func ensureMultiwayColumns() {
 			log.Printf("Warning: could not add is_looking_for to organization_posts: %v", err)
 		} else {
 			log.Println("Added is_looking_for to organization_posts")
+		}
+	}
+
+	// declined_by columns: track which participant declined, not always user3.
+	var declinedByUserExists int
+	_ = DB.QueryRow("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'multiway_trades' AND COLUMN_NAME = 'declined_by_user_id'").Scan(&declinedByUserExists)
+	if declinedByUserExists == 0 {
+		if _, err := DB.Exec("ALTER TABLE multiway_trades ADD COLUMN declined_by_user_id INT NULL COMMENT 'User ID of the participant who declined'"); err != nil {
+			log.Printf("Warning: could not add declined_by_user_id to multiway_trades: %v", err)
+		} else {
+			log.Println("Added declined_by_user_id to multiway_trades")
+		}
+	}
+
+	var declinedByRoleExists int
+	_ = DB.QueryRow("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'multiway_trades' AND COLUMN_NAME = 'declined_by_role'").Scan(&declinedByRoleExists)
+	if declinedByRoleExists == 0 {
+		if _, err := DB.Exec("ALTER TABLE multiway_trades ADD COLUMN declined_by_role VARCHAR(10) NULL COMMENT 'user1, user2, or user3'"); err != nil {
+			log.Printf("Warning: could not add declined_by_role to multiway_trades: %v", err)
+		} else {
+			log.Println("Added declined_by_role to multiway_trades")
 		}
 	}
 }

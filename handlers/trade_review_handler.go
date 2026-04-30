@@ -265,18 +265,38 @@ func (h *TradeHandler) SubmitTradeReview(c *fiber.Ctx) error {
 		sendPushToUser(otherUserID, "Review updated", msg, tradeDeepLink(tradeID), "trade_update")
 	}
 
-	// Only auto-complete if both submitted initial reviews (not followups)
+	// Auto-complete when both parties have submitted initial reviews.
+	autoCompleted := false
 	if buyerReviewCount > 0 && sellerReviewCount > 0 && !payload.IsFollowup {
-		err = h.completeTradeTransaction(tradeID)
-		if err != nil {
-			log.Printf("Error auto-completing trade: %v", err)
-			// Don't error out - review was submitted successfully
-		} else {
-			publishToUser(buyerID, sseEvent{Type: "trade_completed", Data: fiber.Map{"trade_id": tradeID}})
-			publishToUser(sellerID, sseEvent{Type: "trade_completed", Data: fiber.Map{"trade_id": tradeID}})
+		// 8a: Guard — don't finalize an already-terminal trade.
+		var currentStatus string
+		_ = h.db.QueryRow("SELECT status FROM trades WHERE id=?", tradeID).Scan(&currentStatus)
+		if currentStatus == "cancelled" || currentStatus == "completed" || currentStatus == "auto_completed" {
+			goto skipAutoComplete
 		}
+
+		// 8b: For meetup/pickup trades the caller must have confirmed GPS arrival first.
+		if tradeOption == "meetup" || tradeOption == "pickup" {
+			if err := validateArrivalConfirmed(h.db, tradeID, userID); err != nil {
+				log.Printf("[SubmitTradeReview] Skipping auto-complete for trade %d: arrival not confirmed for user %d (%v)", tradeID, userID, err)
+				goto skipAutoComplete
+			}
+		}
+
+		// 8c: Propagate finalization failures — do not silently swallow them.
+		if err = h.completeTradeTransaction(tradeID); err != nil {
+			log.Printf("Error auto-completing trade %d: %v", tradeID, err)
+			return c.Status(500).JSON(models.APIResponse{
+				Success: false,
+				Error:   "Review submitted but trade finalization failed: " + err.Error(),
+			})
+		}
+		autoCompleted = true
+		publishToUser(buyerID, sseEvent{Type: "trade_completed", Data: fiber.Map{"trade_id": tradeID}})
+		publishToUser(sellerID, sseEvent{Type: "trade_completed", Data: fiber.Map{"trade_id": tradeID}})
 	}
 
+skipAutoComplete:
 	return c.JSON(models.APIResponse{
 		Success: true,
 		Message: "Review submitted successfully",
@@ -284,7 +304,7 @@ func (h *TradeHandler) SubmitTradeReview(c *fiber.Ctx) error {
 			"review_id":      reviewID,
 			"trade_id":       tradeID,
 			"is_followup":    payload.IsFollowup,
-			"auto_completed": buyerReviewCount > 0 && sellerReviewCount > 0,
+			"auto_completed": autoCompleted, // 8d: only true when finalization succeeded
 		},
 	})
 }

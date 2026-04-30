@@ -141,9 +141,9 @@ export const useSentOffers = (options: DashboardQueryOptions = {}) => {
     },
     enabled: options.enabled ?? true,
     staleTime: 1000 * 15,
-    refetchOnMount: false,
-    refetchOnWindowFocus: false,
-    refetchInterval: options.refetchInterval ?? false,
+    refetchOnMount: true,
+    refetchOnWindowFocus: true,
+    refetchInterval: options.refetchInterval ?? OFFER_REFETCH_INTERVAL_MS,
     placeholderData: keepPreviousData,
   })
 }
@@ -181,9 +181,9 @@ export const useReceivedOffers = (options: DashboardQueryOptions = {}) => {
     },
     enabled: options.enabled ?? true,
     staleTime: 1000 * 15,
-    refetchOnMount: false,
-    refetchOnWindowFocus: false,
-    refetchInterval: options.refetchInterval ?? false,
+    refetchOnMount: true,
+    refetchOnWindowFocus: true,
+    refetchInterval: options.refetchInterval ?? OFFER_REFETCH_INTERVAL_MS,
     placeholderData: keepPreviousData,
   })
 }
@@ -221,9 +221,9 @@ export const useOngoingTrades = (options: DashboardQueryOptions = {}) => {
     },
     enabled: options.enabled ?? true,
     staleTime: 1000 * 15,
-    refetchOnMount: false,
-    refetchOnWindowFocus: false,
-    refetchInterval: options.refetchInterval ?? false,
+    refetchOnMount: true,
+    refetchOnWindowFocus: true,
+    refetchInterval: options.refetchInterval ?? OFFER_REFETCH_INTERVAL_MS,
     placeholderData: keepPreviousData,
   })
 }
@@ -244,9 +244,9 @@ export const useMultiWayLoops = (userId: number | undefined, options: DashboardQ
     },
     enabled: (!!userId) && (options.enabled ?? true),
     staleTime: 1000 * 30,
-    refetchOnMount: false,
-    refetchOnWindowFocus: false,
-    refetchInterval: options.refetchInterval ?? false,
+    refetchOnMount: true,
+    refetchOnWindowFocus: true,
+    refetchInterval: options.refetchInterval ?? OFFER_REFETCH_INTERVAL_MS,
     placeholderData: keepPreviousData,
   })
 }

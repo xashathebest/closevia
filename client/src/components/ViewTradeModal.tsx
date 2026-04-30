@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react'
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Modal,
@@ -124,6 +124,7 @@ const FitBounds: React.FC<{ points: Array<[number, number]> }> = ({ points }) =>
 const MEETUP_CONFIRM_RADIUS_M = 10
 const MAX_GPS_ACCURACY_M = 10
 const MEETUP_GRACE_PERIOD_MINUTES = 10
+const ARRIVAL_CONFIRM_EARLY_WINDOW_MINUTES = 60
 
 const calculateDistanceMeters = (lat1: number, lng1: number, lat2: number, lng2: number) => {
   const toRad = (value: number) => value * Math.PI / 180
@@ -192,6 +193,60 @@ const formatArrivalCountdown = (deadline: Date | null, nowMs: number, mode: 'Pic
   const lateMinutes = Math.abs(diffMinutes)
   if (lateMinutes === 0) return `${mode} time is now`
   return `Late by ${formatDuration(lateMinutes)}`
+}
+
+const getArrivalWindowState = (deadline: Date | null, nowMs: number, gracePeriodMinutes = MEETUP_GRACE_PERIOD_MINUTES) => {
+  if (!deadline) {
+    return {
+      startsAt: null as Date | null,
+      endsAt: null as Date | null,
+      isOpen: false,
+      isTooEarly: false,
+      isExpired: false,
+      message: 'Scheduled time is missing.',
+    }
+  }
+
+  const startsAt = new Date(deadline.getTime() - ARRIVAL_CONFIRM_EARLY_WINDOW_MINUTES * 60000)
+  const endsAt = new Date(deadline.getTime() + Math.max(1, gracePeriodMinutes) * 60000)
+  if (nowMs < startsAt.getTime()) {
+    return {
+      startsAt,
+      endsAt,
+      isOpen: false,
+      isTooEarly: true,
+      isExpired: false,
+      message: 'You can confirm starting 1 hour before the scheduled time.',
+    }
+  }
+  if (nowMs > endsAt.getTime() + 60 * 60000) {
+    return {
+      startsAt,
+      endsAt,
+      isOpen: true,
+      isTooEarly: false,
+      isExpired: false,
+      message: 'No-show has a much bigger trust score impact.',
+    }
+  }
+  if (nowMs > endsAt.getTime()) {
+    return {
+      startsAt,
+      endsAt,
+      isOpen: true,
+      isTooEarly: false,
+      isExpired: false,
+      message: 'If you are late, you can still confirm, but your trust score may be slightly affected.',
+    }
+  }
+  return {
+    startsAt,
+    endsAt,
+    isOpen: true,
+    isTooEarly: false,
+    isExpired: false,
+    message: 'You can now confirm your arrival.',
+  }
 }
 
 import { Trade, Product, TradeOption, Delivery } from '../types'
@@ -1355,6 +1410,21 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
 
   const meetupLocationVerified = !!userGeoPoint && !!meetupPoint && userGeoPoint.accuracy <= MAX_GPS_ACCURACY_M && meetupDistanceM !== null && meetupDistanceM <= MEETUP_CONFIRM_RADIUS_M
   const meetupDisplayLabel = (trade as any)?.meetup_label || trade?.meetup_location || buyerMeetupLocation || sellerMeetupLocation || 'Agreed meetup point'
+  const refreshCurrentTrade = useCallback(async () => {
+    if (!trade?.id) return
+
+    try {
+      const response = await api.get(`/api/trades/${trade.id}`)
+      const freshTrade = response.data?.data || response.data
+      if (freshTrade && onTradeUpdate) {
+        onTradeUpdate(freshTrade)
+      }
+      onStatusUpdate()
+    } catch (error) {
+      console.error('Failed to refresh open trade:', error)
+    }
+  }, [onStatusUpdate, onTradeUpdate, trade?.id])
+
   const resolveMeetupPointFromLabel = async () => {
     if (meetupPoint) return meetupPoint
     if (trade?.meeting_type === 'pickup') {
@@ -1492,6 +1562,10 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
   const arrivalGraceDeadlineMs = agreedArrivalDeadline
     ? agreedArrivalDeadline.getTime() + gracePeriodMinutes * 60000
     : null
+  const arrivalWindowState = useMemo(
+    () => getArrivalWindowState(agreedArrivalDeadline, arrivalClockNow, gracePeriodMinutes),
+    [agreedArrivalDeadline, arrivalClockNow, gracePeriodMinutes],
+  )
   const userIsPastGrace = arrivalGraceDeadlineMs !== null && arrivalClockNow > arrivalGraceDeadlineMs
   const userWasLate = isUserBuyer ? !!(trade as any)?.buyer_was_late : !!(trade as any)?.seller_was_late
   const userArrivedAt = isUserBuyer ? (trade as any)?.buyer_arrived_at : (trade as any)?.seller_arrived_at
@@ -1889,9 +1963,9 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
   const showTrackingActionBar = meetupAgreed && meetupSelectionMatches && !bothMetConfirmed
   const pickupConfirmDisabled = isPickupTrade
     ? (isPickupTraveler
-      ? buyerMetConfirmed || pickupMapMissing || geoPermissionDenied || !meetupLocationVerified
-      : sellerMetConfirmed || !buyerMetConfirmed)
-    : userMetConfirmed || !meetupLocationVerified
+      ? buyerMetConfirmed || pickupMapMissing || geoPermissionDenied || !meetupLocationVerified || arrivalWindowState.isTooEarly
+      : sellerMetConfirmed || !buyerMetConfirmed || pickupMapMissing || geoPermissionDenied || !meetupLocationVerified || arrivalWindowState.isTooEarly)
+    : userMetConfirmed || !meetupLocationVerified || arrivalWindowState.isTooEarly
   const trackingConfirmLabel = isPickupTrade
     ? (isUserBuyer
       ? (buyerMetConfirmed ? 'Arrival Confirmed' : 'Confirm Pickup')
@@ -2139,11 +2213,11 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
     if (!isOpen || !trade?.id) return
 
     const pollInterval = setInterval(() => {
-      onStatusUpdate()
+      void refreshCurrentTrade()
     }, 6000) // Poll every 6 seconds
 
     return () => clearInterval(pollInterval)
-  }, [isOpen, trade?.id, onStatusUpdate])
+  }, [isOpen, trade?.id, refreshCurrentTrade])
 
   // Load delivery state from trade data when trade changes
   useEffect(() => {
@@ -2951,19 +3025,25 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
 
   const confirmMeetupDone = async () => {
     if (!trade || confirmingMeetupDone) return
+    if (arrivalWindowState.isTooEarly) {
+      toast({
+        id: 'viewtrademodal-arrival-window-closed',
+        title: 'Arrival not available',
+        description: arrivalWindowState.message,
+        status: 'warning',
+      })
+      return
+    }
 
     try {
       setConfirmingMeetupDone(true)
-      const isPickupOwnerConfirming = isPickupTrade && isUserSeller
       let point: { lat: number; lng: number; accuracy: number } | null = null
 
-      if (!isPickupOwnerConfirming) {
-        point = await checkMeetupLocation()
-        if (!point) return
-        const distance = meetupPoint ? calculateDistanceMeters(point.lat, point.lng, meetupPoint.lat, meetupPoint.lng) : Number.POSITIVE_INFINITY
-        if (!meetupPoint || point.accuracy > MAX_GPS_ACCURACY_M || distance > MEETUP_CONFIRM_RADIUS_M) {
-          return
-        }
+      point = await checkMeetupLocation()
+      if (!point) return
+      const distance = meetupPoint ? calculateDistanceMeters(point.lat, point.lng, meetupPoint.lat, meetupPoint.lng) : Number.POSITIVE_INFINITY
+      if (!meetupPoint || point.accuracy > MAX_GPS_ACCURACY_M || distance > MEETUP_CONFIRM_RADIUS_M) {
+        return
       }
       await api.put(`/api/trades/${trade.id}`, {
         action: 'confirm_meetup_done',
@@ -5056,6 +5136,8 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
                                   const showPoorGpsAccuracy = Boolean(userGeoPoint && userGeoPoint.accuracy > MAX_GPS_ACCURACY_M)
                                   const pickupMessage = pickupMapMissing
                                     ? 'No pickup location set yet. Ask the owner to add a map pin before you can confirm arrival.'
+                                    : (arrivalWindowState.isTooEarly || userIsPastGrace)
+                                      ? arrivalWindowState.message
                                     : isPickupTraveler && (geoPermissionDenied || !userGeoPoint)
                                       ? 'Enable location to see your route and unlock arrival confirmation.'
                                     : pickupTrustWarning
@@ -5067,6 +5149,10 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
                                           : null
                                   const pickupMessageColor = pickupMapMissing || geoPermissionDenied
                                     ? 'orange'
+                                    : arrivalWindowState.isTooEarly
+                                      ? 'orange'
+                                    : userIsPastGrace
+                                      ? 'red'
                                     : pickupTrustWarning
                                       ? 'red'
                                       : 'green'
@@ -5226,6 +5312,11 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
                                             <Text fontSize="xs" color={meetupLocationVerified ? 'green.600' : 'orange.600'}>
                                               {geoMessage || (meetupPoint ? 'Check your GPS location before confirming.' : 'Meetup location has not been set yet.')}
                                             </Text>
+                                            {(arrivalWindowState.isTooEarly || userIsPastGrace) && (
+                                              <Text fontSize="xs" color={userIsPastGrace ? 'red.600' : 'orange.600'} fontWeight="700">
+                                                {arrivalWindowState.message}
+                                              </Text>
+                                            )}
                                             {meetupDistanceM !== null && (
                                               <Text fontSize="2xs" color="gray.500">
                                                 Distance: {Math.round(meetupDistanceM)}m · Accuracy: ±{Math.round(userGeoPoint?.accuracy || 0)}m
@@ -5280,7 +5371,9 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
                                               )}
                                             </HStack>
                                             <Text fontSize="xs" color={meetupLocationVerified ? 'green.700' : 'gray.700'} fontWeight="700">
-                                              {userGeoPoint?.accuracy && userGeoPoint.accuracy > MAX_GPS_ACCURACY_M
+                                              {arrivalWindowState.isTooEarly || userIsPastGrace
+                                                ? arrivalWindowState.message
+                                                : userGeoPoint?.accuracy && userGeoPoint.accuracy > MAX_GPS_ACCURACY_M
                                                 ? 'Waiting for a more accurate location...'
                                                 : meetupDistanceM !== null
                                                   ? getDistanceStatusMessage(meetupDistanceM, 'meetup point')
@@ -5408,11 +5501,14 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
                             borderColor={useColorModeValue('gray.100', 'gray.700')}
                             shadow="0 -10px 28px rgba(15, 23, 42, 0.10)"
                           >
+                            <Text fontSize="xs" color="gray.600" mb={2}>
+                              You can confirm starting 1 hour before the scheduled time. If you are late, you can still confirm, but your trust score may be slightly affected. No-show has a much bigger trust score impact.
+                            </Text>
                             <Button
                               colorScheme="green"
                               size="lg"
                               onClick={confirmMeetupDone}
-                              isLoading={confirmingMeetupDone || ((isPickupTrade ? isPickupTraveler : true) && geoChecking)}
+                              isLoading={confirmingMeetupDone || geoChecking}
                               leftIcon={<FaCheckCircle />}
                               w="full"
                               minH="52px"

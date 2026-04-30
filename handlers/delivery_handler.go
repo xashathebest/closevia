@@ -988,6 +988,19 @@ func (h *DeliveryHandler) CreateDelivery(c *fiber.Ctx) error {
 		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "Standard delivery allows maximum 5 items per batch"})
 	}
 
+	// When this delivery is tied to a trade, enforce buyout-only eligibility.
+	if req.TradeID != nil && *req.TradeID > 0 {
+		if err := validateBuyoutDeliveryEligibility(h.db, *req.TradeID); err != nil {
+			return c.Status(422).JSON(models.APIResponse{
+				Success: false,
+				Error:   "Delivery is only available for buyout orders. " + err.Error(),
+			})
+		}
+		if _, _, err := validateTradeParticipant(h.db, *req.TradeID, userID); err != nil {
+			return c.Status(403).JSON(models.APIResponse{Success: false, Error: "Not authorized for this trade"})
+		}
+	}
+
 	// Validate GPS or manual address
 	if req.PickupLatitude == nil || req.PickupLongitude == nil {
 		if req.PickupAddress == "" {
@@ -1429,12 +1442,11 @@ func (h *DeliveryHandler) UpdateDeliveryStatus(c *fiber.Ctx) error {
 			} else {
 				log.Printf("All delivery legs delivered; syncing completion to trade %d", tradeID.Int64)
 
-				// Mark both delivery confirmations and payment on the trade since rider physically delivered
+				// Rider confirms their side of the delivery — seller's agent confirming dispatch.
+				// Buyer receipt and payment confirmations remain separate authenticated actions.
 				_, syncErr := h.db.Exec(`
 					UPDATE trades
 					SET seller_confirmed_delivery = TRUE,
-						buyer_confirmed_receipt = TRUE,
-						payment_confirmed = TRUE,
 						updated_at = CURRENT_TIMESTAMP
 					WHERE id = ?`, tradeID.Int64)
 				if syncErr != nil {
@@ -1446,9 +1458,9 @@ func (h *DeliveryHandler) UpdateDeliveryStatus(c *fiber.Ctx) error {
 				_ = h.db.QueryRow("SELECT buyer_id, seller_id FROM trades WHERE id = ?", tradeID.Int64).Scan(&buyerID, &sellerID)
 
 				_, _ = h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'delivery_update', ?, FALSE)",
-					buyerID, "Your delivery has arrived! Please confirm receipt and leave a review.")
+					buyerID, "Your delivery has arrived! Please confirm receipt in the app.")
 				_, _ = h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'delivery_update', ?, FALSE)",
-					sellerID, "The rider has confirmed delivery. The trade can now be completed.")
+					sellerID, "The rider has confirmed delivery. Waiting for buyer to confirm receipt.")
 
 				log.Printf("Trade %d updated: delivery confirmed by rider", tradeID.Int64)
 			}

@@ -130,10 +130,10 @@ const Dashboard: React.FC = () => {
 
   const shouldLoadProducts = activeTab === 0
   const shouldLoadOffersTab = activeTab === 1
-  const shouldLoadSentOffers = shouldLoadOffersTab && offersSubTab === 1
-  const shouldLoadReceivedOffers = shouldLoadOffersTab && offersSubTab === 0
+  const shouldLoadSentOffers = shouldLoadOffersTab
+  const shouldLoadReceivedOffers = shouldLoadOffersTab
   const shouldLoadOngoingTrades = true
-  const shouldLoadArchivedTrades = shouldLoadOffersTab && offersSubTab === 3
+  const shouldLoadArchivedTrades = shouldLoadOffersTab
   const shouldLoadMultiWay = activeTab === 2 || activeTab === 3 || shouldLoadOngoingTrades
   const shouldLoadTradeHistory = activeTab === 4
   const activeOffersRefetchInterval = shouldLoadOffersTab ? 30000 : false
@@ -6781,8 +6781,6 @@ const Dashboard: React.FC = () => {
             onStatusUpdate={() => { 
               invalidateOffers()
               invalidateDashboard()
-              // Switch to History tab if a trade was completed
-              setActiveTab(4)
             }}
             onTradeUpdate={setSelectedTrade}
           />

@@ -143,6 +143,8 @@ export type TradeLoopMeetupStatus = {
     meetup_location: string
     meetup_date: string
     meetup_time: string
+    meetup_lat?: number
+    meetup_lng?: number
     meetup_confirmed: boolean
     met_confirmed: boolean
   }>
@@ -169,7 +171,16 @@ export const fetchTradeLoopMeetup = async (loopId: string): Promise<TradeLoopMee
 export const updateTradeLoopMeetup = async (
   loopId: string,
   action: TradeLoopMeetupAction,
-  payload?: { meetup_location?: string; meetup_date?: string; meetup_time?: string }
+  payload?: {
+    meetup_location?: string
+    meetup_date?: string
+    meetup_time?: string
+    meetup_lat?: number
+    meetup_lng?: number
+    user_lat?: number
+    user_lng?: number
+    location_accuracy_m?: number
+  }
 ): Promise<TradeLoopMeetupStatus> => {
   try {
     const response = await api.put<APIResponse<TradeLoopMeetupStatus>>(
@@ -179,6 +190,11 @@ export const updateTradeLoopMeetup = async (
         meetup_location: payload?.meetup_location,
         meetup_date: payload?.meetup_date,
         meetup_time: payload?.meetup_time,
+        meetup_lat: payload?.meetup_lat,
+        meetup_lng: payload?.meetup_lng,
+        user_lat: payload?.user_lat,
+        user_lng: payload?.user_lng,
+        location_accuracy_m: payload?.location_accuracy_m,
       }
     )
     return response.data?.data as any

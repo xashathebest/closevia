@@ -2617,6 +2617,13 @@ func (h *UserHandler) GetSellerStats(c *fiber.Ctx) error {
 	if err != nil {
 		reportCount = 0
 	}
+	var structuredPenaltyPoints int
+	_ = h.db.QueryRow(`
+		SELECT COALESCE(SUM(points), 0)
+		FROM user_strikes
+		WHERE user_id = ?
+		  AND strike_type IN ('late_arrival', 'no_show', 'cancelled_trade')
+	`, userID).Scan(&structuredPenaltyPoints)
 	reportPoints := 20
 	reportStatus := "pass"
 	cancelledAttemptCount := stats.CompletedTrades + stats.CancelledTrades
@@ -2627,6 +2634,7 @@ func (h *UserHandler) GetSellerStats(c *fiber.Ctx) error {
 	if reportCount > 0 {
 		reportPoints -= reportCount * 8
 	}
+	reportPoints -= structuredPenaltyPoints
 	if reportPoints < 0 {
 		reportPoints = 0
 	}

@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"database/sql"
+	"fmt"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -46,14 +47,11 @@ func (h *MeetupHandler) ProposeMeetupTime(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid time format"})
 	}
 
-	// Verify user is part of trade
-	var buyerID, sellerID int
-	err = database.DB.QueryRow("SELECT buyer_id, seller_id FROM trades WHERE id = ?", tradeID).Scan(&buyerID, &sellerID)
+	buyerID, sellerID, err := validateTradeParticipant(database.DB, tradeID, userID)
 	if err != nil {
-		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Trade not found"})
-	}
-
-	if userID != buyerID && userID != sellerID {
+		if err.Error() == "trade not found" {
+			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Trade not found"})
+		}
 		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Not involved in this trade"})
 	}
 	otherUserID := sellerID
@@ -89,14 +87,10 @@ func (h *MeetupHandler) MarkHeadingOut(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid trade ID"})
 	}
 
-	// Verify user is part of trade
-	var buyerID, sellerID int
-	err = database.DB.QueryRow("SELECT buyer_id, seller_id FROM trades WHERE id = ?", tradeID).Scan(&buyerID, &sellerID)
-	if err != nil {
-		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Trade not found"})
-	}
-
-	if userID != buyerID && userID != sellerID {
+	if _, _, err := validateTradeParticipant(database.DB, tradeID, userID); err != nil {
+		if err.Error() == "trade not found" {
+			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Trade not found"})
+		}
 		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Not involved in this trade"})
 	}
 
@@ -115,7 +109,8 @@ func (h *MeetupHandler) MarkHeadingOut(c *fiber.Ctx) error {
 	})
 }
 
-// MarkArrived marks user as arrived at meetup location
+// MarkArrived marks user as arrived at meetup location.
+// Enforces the same GPS, 1-hour window, and schedule-agreement checks as confirm_meetup_done.
 // POST /api/trades/:tradeID/meetup/arrived
 func (h *MeetupHandler) MarkArrived(c *fiber.Ctx) error {
 	userID, ok := middleware.GetUserIDFromContext(c)
@@ -128,15 +123,72 @@ func (h *MeetupHandler) MarkArrived(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid trade ID"})
 	}
 
-	// Verify user is part of trade
-	var buyerID, sellerID int
-	err = database.DB.QueryRow("SELECT buyer_id, seller_id FROM trades WHERE id = ?", tradeID).Scan(&buyerID, &sellerID)
-	if err != nil {
-		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Trade not found"})
+	var req struct {
+		UserLat          *float64 `json:"user_lat"`
+		UserLng          *float64 `json:"user_lng"`
+		LocationAccuracy *float64 `json:"location_accuracy_m"`
+	}
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request body"})
 	}
 
-	if userID != buyerID && userID != sellerID {
+	buyerID, sellerID, err := validateTradeParticipant(database.DB, tradeID, userID)
+	if err != nil {
+		if err.Error() == "trade not found" {
+			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Trade not found"})
+		}
 		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Not involved in this trade"})
+	}
+	_ = buyerID
+	_ = sellerID
+
+	// Load trade schedule and agreed coordinates.
+	var buyerConfirmed, sellerConfirmed bool
+	var meetupTimeStr string
+	var meetupLat, meetupLng sql.NullFloat64
+	var agreedDeadline sql.NullTime
+	err = database.DB.QueryRow(`
+		SELECT COALESCE(buyer_meetup_confirmed, FALSE),
+		       COALESCE(seller_meetup_confirmed, FALSE),
+		       COALESCE(meetup_time, ''),
+		       meetup_lat, meetup_lng,
+		       agreed_arrival_deadline
+		FROM trades WHERE id = ?`, tradeID).Scan(
+		&buyerConfirmed, &sellerConfirmed,
+		&meetupTimeStr,
+		&meetupLat, &meetupLng,
+		&agreedDeadline,
+	)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to load trade details"})
+	}
+
+	// Both parties must have confirmed the meetup schedule.
+	if !buyerConfirmed || !sellerConfirmed {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Both parties must confirm the meetup schedule before marking arrival"})
+	}
+
+	// Resolve arrival deadline.
+	if !agreedDeadline.Valid {
+		deadline, ok := parseTradeArrivalDeadline(meetupTimeStr)
+		if !ok {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "No valid meetup schedule found. Please re-confirm your meetup time."})
+		}
+		agreedDeadline = sql.NullTime{Time: deadline, Valid: true}
+	}
+
+	// 1-hour arrival window check.
+	now := time.Now()
+	if err := validateArrivalConfirmationWindow(now, agreedDeadline.Time); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
+	}
+
+	// GPS radius check.
+	if !meetupLat.Valid || !meetupLng.Valid {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Meetup coordinates are not set. Please re-confirm your meetup location."})
+	}
+	if err := validateArrivalLocation(req.UserLat, req.UserLng, req.LocationAccuracy, meetupLat.Float64, meetupLng.Float64); err != nil {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": err.Error()})
 	}
 
 	meetupService := services.NewMeetupService(database.DB)
@@ -154,7 +206,8 @@ func (h *MeetupHandler) MarkArrived(c *fiber.Ctx) error {
 	})
 }
 
-// ConfirmCompletion confirms that the trade exchange was completed
+// ConfirmCompletion confirms that the trade exchange was completed.
+// Requires prior GPS arrival confirmation (buyer_met / seller_met).
 // POST /api/trades/:tradeID/meetup/confirm-completion
 func (h *MeetupHandler) ConfirmCompletion(c *fiber.Ctx) error {
 	userID, ok := middleware.GetUserIDFromContext(c)
@@ -167,19 +220,21 @@ func (h *MeetupHandler) ConfirmCompletion(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid trade ID"})
 	}
 
-	// Verify user is part of trade
-	var buyerID, sellerID int
-	err = database.DB.QueryRow("SELECT buyer_id, seller_id FROM trades WHERE id = ?", tradeID).Scan(&buyerID, &sellerID)
+	buyerID, sellerID, err := validateTradeParticipant(database.DB, tradeID, userID)
 	if err != nil {
-		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Trade not found"})
-	}
-
-	if userID != buyerID && userID != sellerID {
+		if err.Error() == "trade not found" {
+			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Trade not found"})
+		}
 		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Not involved in this trade"})
 	}
 	otherUserID := sellerID
 	if userID == sellerID {
 		otherUserID = buyerID
+	}
+
+	// Require GPS arrival confirmation before allowing completion.
+	if err := validateArrivalConfirmed(database.DB, tradeID, userID); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "GPS arrival must be confirmed before completing the meetup"})
 	}
 
 	meetupService := services.NewMeetupService(database.DB)
@@ -198,7 +253,8 @@ func (h *MeetupHandler) ConfirmCompletion(c *fiber.Ctx) error {
 	})
 }
 
-// ReportNoShow reports that the other party didn't show up
+// ReportNoShow reports that the other party didn't show up.
+// Validates schedule timing, identifies the absent party, and records a structured trust strike.
 // POST /api/trades/:tradeID/meetup/report-no-show
 func (h *MeetupHandler) ReportNoShow(c *fiber.Ctx) error {
 	userID, ok := middleware.GetUserIDFromContext(c)
@@ -214,20 +270,61 @@ func (h *MeetupHandler) ReportNoShow(c *fiber.Ctx) error {
 	var req struct {
 		Reason string `json:"reason"`
 	}
-
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request body"})
 	}
 
-	// Verify user is part of trade
-	var buyerID, sellerID int
-	err = database.DB.QueryRow("SELECT buyer_id, seller_id FROM trades WHERE id = ?", tradeID).Scan(&buyerID, &sellerID)
+	buyerID, sellerID, err := validateTradeParticipant(database.DB, tradeID, userID)
 	if err != nil {
-		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Trade not found"})
+		if err.Error() == "trade not found" {
+			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Trade not found"})
+		}
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Not involved in this trade"})
 	}
 
-	if userID != buyerID && userID != sellerID {
-		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Not involved in this trade"})
+	// Identify the absent party (the other participant).
+	absentPartyID := sellerID
+	if userID == sellerID {
+		absentPartyID = buyerID
+	}
+
+	// Load trade timing and arrival state.
+	var meetupTimeStr string
+	var agreedDeadline sql.NullTime
+	var absentMet bool
+	var absentMetCol string
+	if userID == buyerID {
+		absentMetCol = "COALESCE(seller_met, FALSE)"
+	} else {
+		absentMetCol = "COALESCE(buyer_met, FALSE)"
+	}
+	queryStr := fmt.Sprintf(
+		"SELECT COALESCE(meetup_time,''), agreed_arrival_deadline, %s FROM trades WHERE id = ?",
+		absentMetCol,
+	)
+	err = database.DB.QueryRow(queryStr, tradeID).Scan(&meetupTimeStr, &agreedDeadline, &absentMet)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to load trade details"})
+	}
+
+	// Resolve the agreed deadline.
+	if !agreedDeadline.Valid {
+		deadline, ok := parseTradeArrivalDeadline(meetupTimeStr)
+		if !ok {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "No agreed meetup schedule found. Cannot report no-show."})
+		}
+		agreedDeadline = sql.NullTime{Time: deadline, Valid: true}
+	}
+
+	// Cannot report before the scheduled time.
+	now := time.Now()
+	if now.Before(agreedDeadline.Time) {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Cannot report no-show before the scheduled meetup time"})
+	}
+
+	// If the absent party already confirmed arrival, they did show up.
+	if absentMet {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "The other party has already confirmed their arrival"})
 	}
 
 	meetupService := services.NewMeetupService(database.DB)
@@ -235,6 +332,16 @@ func (h *MeetupHandler) ReportNoShow(c *fiber.Ctx) error {
 	if errNoShow != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": errNoShow.Error()})
 	}
+
+	// Record a structured trust strike against the absent party.
+	_ = services.RecordTrustStrike(database.DB, services.TrustStrikeInput{
+		UserID:    absentPartyID,
+		Type:      "no_show",
+		Severity:  "major",
+		TradeType: "normal",
+		TradeID:   &tradeID,
+		Reason:    fmt.Sprintf("No-show for trade #%d", tradeID),
+	})
 
 	status, _ := meetupService.GetMeetupStatus(tradeID)
 
@@ -258,14 +365,10 @@ func (h *MeetupHandler) GetMeetupStatus(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid trade ID"})
 	}
 
-	// Verify user is part of trade
-	var buyerID, sellerID int
-	err = database.DB.QueryRow("SELECT buyer_id, seller_id FROM trades WHERE id = ?", tradeID).Scan(&buyerID, &sellerID)
-	if err != nil {
-		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Trade not found"})
-	}
-
-	if userID != buyerID && userID != sellerID {
+	if _, _, err := validateTradeParticipant(database.DB, tradeID, userID); err != nil {
+		if err.Error() == "trade not found" {
+			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Trade not found"})
+		}
 		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Not involved in this trade"})
 	}
 
@@ -297,14 +400,10 @@ func (h *MeetupHandler) GetSystemMessages(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid trade ID"})
 	}
 
-	// Verify user is part of trade
-	var buyerID, sellerID int
-	err = database.DB.QueryRow("SELECT buyer_id, seller_id FROM trades WHERE id = ?", tradeID).Scan(&buyerID, &sellerID)
-	if err != nil {
-		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Trade not found"})
-	}
-
-	if userID != buyerID && userID != sellerID {
+	if _, _, err := validateTradeParticipant(database.DB, tradeID, userID); err != nil {
+		if err.Error() == "trade not found" {
+			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Trade not found"})
+		}
 		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Not involved in this trade"})
 	}
 

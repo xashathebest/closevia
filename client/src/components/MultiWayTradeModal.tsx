@@ -158,6 +158,8 @@ const buildMeetupKey = (location?: string | null, date?: string | null, time?: s
 
 const MEETUP_CONFIRM_RADIUS_M = 10
 const MAX_GPS_ACCURACY_M = 10
+const MEETUP_GRACE_PERIOD_MINUTES = 10
+const ARRIVAL_CONFIRM_EARLY_WINDOW_MINUTES = 60
 
 const calculateDistanceMeters = (lat1: number, lng1: number, lat2: number, lng2: number) => {
   const toRad = (value: number) => value * Math.PI / 180
@@ -176,6 +178,55 @@ const getDistanceStatusMessage = (distanceM: number, pointLabel: string) => {
   if (distanceM <= 15) return 'Walk a little more to confirm.'
   if (distanceM <= 50) return "You're almost there."
   return `You are ${Math.round(distanceM)}m away from the ${pointLabel}.`
+}
+
+const parseScheduledMeetupDateTime = (date?: string | null, time?: string | null): Date | null => {
+  if (!date || !time) return null
+  const parsed = new Date(`${date}T${time}`)
+  return Number.isNaN(parsed.getTime()) ? null : parsed
+}
+
+const getArrivalWindowState = (scheduled: Date | null, nowMs: number, gracePeriodMinutes = MEETUP_GRACE_PERIOD_MINUTES) => {
+  if (!scheduled) {
+    return {
+      isOpen: false,
+      isTooEarly: false,
+      isExpired: false,
+      message: 'Agreed meetup date and time are missing.',
+    }
+  }
+  const startsAt = scheduled.getTime() - ARRIVAL_CONFIRM_EARLY_WINDOW_MINUTES * 60000
+  const endsAt = scheduled.getTime() + Math.max(1, gracePeriodMinutes) * 60000
+  if (nowMs < startsAt) {
+    return {
+      isOpen: false,
+      isTooEarly: true,
+      isExpired: false,
+      message: 'You can confirm starting 1 hour before the scheduled time.',
+    }
+  }
+  if (nowMs > endsAt + 60 * 60000) {
+    return {
+      isOpen: true,
+      isTooEarly: false,
+      isExpired: true,
+      message: 'No-show has a much bigger trust score impact.',
+    }
+  }
+  if (nowMs > endsAt) {
+    return {
+      isOpen: true,
+      isTooEarly: false,
+      isExpired: true,
+      message: 'If you are late, you can still confirm, but your trust score may be slightly affected.',
+    }
+  }
+  return {
+    isOpen: true,
+    isTooEarly: false,
+    isExpired: false,
+    message: 'You can now confirm your arrival.',
+  }
 }
 
 const formatTrackingDistance = (meters: number | null) => {
@@ -374,6 +425,8 @@ const MultiWayTradeModal: React.FC<MultiWayTradeModalProps> = ({
       meetup_location: string
       meetup_date: string
       meetup_time: string
+      meetup_lat?: number
+      meetup_lng?: number
       meetup_confirmed: boolean
       met_confirmed: boolean
     }>
@@ -388,6 +441,7 @@ const MultiWayTradeModal: React.FC<MultiWayTradeModalProps> = ({
   const [geoChecking, setGeoChecking] = useState(false)
   const [geoPermissionDenied, setGeoPermissionDenied] = useState(false)
   const [geoMessage, setGeoMessage] = useState<string | null>(null)
+  const [arrivalClockNow, setArrivalClockNow] = useState(() => Date.now())
   const [routeCoords, setRouteCoords] = useState<Array<[number, number]>>([])
   const [routeMetrics, setRouteMetrics] = useState<{ distanceM: number; durationS: number } | null>(null)
   const [routeLoading, setRouteLoading] = useState(false)
@@ -512,6 +566,20 @@ const MultiWayTradeModal: React.FC<MultiWayTradeModalProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, multiWayTrade.loop_id, showCollaborationTabs])
 
+  useEffect(() => {
+    if (!isOpen) return
+    const timer = window.setInterval(() => setArrivalClockNow(Date.now()), 30000)
+    return () => window.clearInterval(timer)
+  }, [isOpen])
+
+  useEffect(() => {
+    if (!isOpen || !multiWayTrade.loop_id || !onTradeUpdated) return
+    const id = setInterval(() => {
+      onTradeUpdated()
+    }, 6000)
+    return () => clearInterval(id)
+  }, [isOpen, multiWayTrade.loop_id, onTradeUpdated])
+
   // Auto-scroll to latest message
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -534,6 +602,8 @@ const MultiWayTradeModal: React.FC<MultiWayTradeModalProps> = ({
         meetup_location: string
         meetup_date: string
         meetup_time: string
+        meetup_lat?: number
+        meetup_lng?: number
         meetup_confirmed: boolean
         met_confirmed: boolean
       }
@@ -543,6 +613,8 @@ const MultiWayTradeModal: React.FC<MultiWayTradeModalProps> = ({
         meetup_location: p.meetup_location,
         meetup_date: p.meetup_date,
         meetup_time: p.meetup_time,
+        meetup_lat: p.meetup_lat,
+        meetup_lng: p.meetup_lng,
         meetup_confirmed: !!p.meetup_confirmed,
         met_confirmed: !!p.met_confirmed,
       }
@@ -606,6 +678,14 @@ const MultiWayTradeModal: React.FC<MultiWayTradeModalProps> = ({
     if (!meetupAgreed) return null
     return (meetupStatus?.participants || []).find((p) => p.meetup_confirmed) || null
   }, [meetupAgreed, meetupStatus])
+  const agreedMeetupDateTime = useMemo(
+    () => parseScheduledMeetupDateTime(agreedMeetup?.meetup_date, agreedMeetup?.meetup_time),
+    [agreedMeetup?.meetup_date, agreedMeetup?.meetup_time],
+  )
+  const arrivalWindowState = useMemo(
+    () => getArrivalWindowState(agreedMeetupDateTime, arrivalClockNow),
+    [agreedMeetupDateTime, arrivalClockNow],
+  )
 
   const resolveAvatarSrc = (raw?: string | null): string | undefined => {
     if (!raw) return undefined
@@ -1099,10 +1179,17 @@ const MultiWayTradeModal: React.FC<MultiWayTradeModalProps> = ({
     try {
       setConfirmingMeetup(true)
       setValidationError(null)
+      const selectedPoint = getPointForLocationLabel(selectedLocation)
+      if (!selectedPoint) {
+        setValidationError('Please choose a mapped meetup location.')
+        return
+      }
       const updated = await updateTradeLoopMeetup(multiWayTrade.loop_id, 'confirm_meetup', {
         meetup_location: selectedLocation,
         meetup_date: selectedDate || undefined,
         meetup_time: selectedTime || undefined,
+        meetup_lat: selectedPoint.lat,
+        meetup_lng: selectedPoint.lng,
       })
       setMeetupStatus(updated as any)
 
@@ -1203,6 +1290,8 @@ const MultiWayTradeModal: React.FC<MultiWayTradeModalProps> = ({
         meetup_location: proposedMeetup.meetup_location,
         meetup_date: proposedMeetup.meetup_date,
         meetup_time: proposedMeetup.meetup_time,
+        meetup_lat: proposedMeetup.meetup_lat,
+        meetup_lng: proposedMeetup.meetup_lng,
       })
       toast({
         title: 'Schedule Accepted!',
@@ -1268,6 +1357,15 @@ const MultiWayTradeModal: React.FC<MultiWayTradeModalProps> = ({
 
   const confirmMeetupDone = async () => {
     if (!multiWayTrade.loop_id || confirmingMeetupDone) return
+    if (arrivalWindowState.isTooEarly) {
+      toast({
+        id: 'mwt-arrival-window-closed',
+        title: 'Arrival not available',
+        description: arrivalWindowState.message,
+        status: 'warning',
+      })
+      return
+    }
     const activeMeetupPoint = multiwayMeetupPoint || await resolveMultiwayMeetupPoint()
     const point = userGeoPoint || await checkMultiwayMeetupLocation()
     const distance = point && activeMeetupPoint
@@ -1279,7 +1377,11 @@ const MultiWayTradeModal: React.FC<MultiWayTradeModalProps> = ({
     }
     try {
       setConfirmingMeetupDone(true)
-      await updateTradeLoopMeetup(multiWayTrade.loop_id, 'confirm_meetup_done')
+      await updateTradeLoopMeetup(multiWayTrade.loop_id, 'confirm_meetup_done', {
+        user_lat: point.lat,
+        user_lng: point.lng,
+        location_accuracy_m: point.accuracy,
+      })
       toast({
         id: 'mwt-meetup-done',
         title: 'Confirmed',
@@ -1669,9 +1771,16 @@ const MultiWayTradeModal: React.FC<MultiWayTradeModalProps> = ({
   const renderMultiwayTrackingPanel = () => {
     if (!agreedMeetup) return null
 
-    const confirmDisabled = myMetConfirmed || !multiwayLocationVerified
+    const missingSchedule = !agreedMeetup?.meetup_location || !agreedMeetup?.meetup_date || !agreedMeetup?.meetup_time
+    const confirmDisabled = myMetConfirmed || !multiwayLocationVerified || arrivalWindowState.isTooEarly || missingSchedule
     const confirmReason = myMetConfirmed
       ? 'You already confirmed.'
+      : missingSchedule
+        ? 'Agreed meetup location and time are required before confirming arrival.'
+        : arrivalWindowState.isTooEarly || arrivalWindowState.isExpired
+          ? arrivalWindowState.message
+      : userGeoPoint && userGeoPoint.accuracy > MAX_GPS_ACCURACY_M
+        ? 'Location accuracy is too low. Please move to an open area and try again.'
       : geoPermissionDenied || !userGeoPoint
         ? 'Enable location to view ETA and route.'
         : !multiwayLocationVerified
@@ -1771,32 +1880,40 @@ const MultiWayTradeModal: React.FC<MultiWayTradeModalProps> = ({
       </VStack>
     )
     const actions = allMetConfirmed ? (
-      <Button
-        colorScheme="green"
-        size="lg"
-        onClick={() => setIsReviewModalOpen(true)}
-        isLoading={submittingReview}
-        loadingText="Completing..."
-        leftIcon={<FaCheckCircle />}
-        isDisabled={reviewSubmitted}
-        w="full"
-        borderRadius="xl"
-      >
-        {reviewSubmitted ? 'Review Submitted' : 'Leave a Review and Complete Trade'}
-      </Button>
+      <VStack spacing={2} align="stretch">
+        <Text fontSize="xs" color="gray.600">No-show has a much bigger trust score impact.</Text>
+        <Button
+          colorScheme="green"
+          size="lg"
+          onClick={() => setIsReviewModalOpen(true)}
+          isLoading={submittingReview}
+          loadingText="Completing..."
+          leftIcon={<FaCheckCircle />}
+          isDisabled={reviewSubmitted}
+          w="full"
+          borderRadius="xl"
+        >
+          {reviewSubmitted ? 'Review Submitted' : 'Leave a Review and Complete Trade'}
+        </Button>
+      </VStack>
     ) : (
-      <Button
-        colorScheme="green"
-        size="lg"
-        onClick={confirmMeetupDone}
-        isLoading={confirmingMeetupDone || geoChecking}
-        leftIcon={<FaCheckCircle />}
-        isDisabled={confirmDisabled}
-        w="full"
-        borderRadius="xl"
-      >
-        {myMetConfirmed ? 'Arrival Confirmed' : 'Confirm Arrival'}
-      </Button>
+      <VStack spacing={2} align="stretch">
+        <Text fontSize="xs" color="gray.600">
+          You can confirm starting 1 hour before the scheduled time. If you are late, you can still confirm, but your trust score may be slightly affected. No-show has a much bigger trust score impact.
+        </Text>
+        <Button
+          colorScheme="green"
+          size="lg"
+          onClick={confirmMeetupDone}
+          isLoading={confirmingMeetupDone || geoChecking}
+          leftIcon={<FaCheckCircle />}
+          isDisabled={confirmDisabled}
+          w="full"
+          borderRadius="xl"
+        >
+          {myMetConfirmed ? 'Arrival Confirmed' : 'Confirm Arrival'}
+        </Button>
+      </VStack>
     )
 
     return (

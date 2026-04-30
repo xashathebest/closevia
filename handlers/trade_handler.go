@@ -191,6 +191,7 @@ func normalizeTradeMeetupDateTime(tr *models.Trade) {
 const meetupConfirmRadiusMeters = 10.0
 const meetupMaxAccuracyMeters = 10.0
 const meetupGracePeriodMinutes = 10
+const meetupConfirmEarlyWindowMinutes = 60
 
 func validCoordinate(lat, lng float64) bool {
 	return lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180 && !(lat == 0 && lng == 0)
@@ -220,20 +221,74 @@ func parseTradeArrivalDeadline(value string) (time.Time, bool) {
 		"2006-01-02 15:04",
 		"2006-01-02 15:04:05",
 		time.RFC3339,
-		"15:04",
 	}
 	for _, layout := range layouts {
 		parsed, err := time.ParseInLocation(layout, trimmed, location)
 		if err != nil {
 			continue
 		}
-		if layout == "15:04" {
-			now := time.Now().In(location)
-			parsed = time.Date(now.Year(), now.Month(), now.Day(), parsed.Hour(), parsed.Minute(), 0, 0, location)
-		}
 		return parsed, true
 	}
 	return time.Time{}, false
+}
+
+func parseScheduledMeetupTime(dateValue, timeValue string) (time.Time, bool) {
+	dateValue = strings.TrimSpace(dateValue)
+	timeValue = strings.TrimSpace(timeValue)
+	if dateValue == "" || timeValue == "" {
+		return time.Time{}, false
+	}
+	return parseTradeArrivalDeadline(dateValue + " " + timeValue)
+}
+
+func validateArrivalConfirmationWindow(now, scheduled time.Time) error {
+	earlyWindow := scheduled.Add(-time.Duration(meetupConfirmEarlyWindowMinutes) * time.Minute)
+	if now.Before(earlyWindow) {
+		return fmt.Errorf("You can only confirm arrival within 1 hour before the scheduled time.")
+	}
+	return nil
+}
+
+func arrivalLateMinutes(now, scheduled time.Time, gracePeriodMinutes int) int {
+	if gracePeriodMinutes <= 0 {
+		gracePeriodMinutes = meetupGracePeriodMinutes
+	}
+	lateAfter := scheduled.Add(time.Duration(gracePeriodMinutes) * time.Minute)
+	if !now.After(lateAfter) {
+		return 0
+	}
+	return int(math.Ceil(now.Sub(lateAfter).Minutes()))
+}
+
+func lateArrivalSeverity(minutesLate int) (string, string) {
+	switch {
+	case minutesLate <= 0:
+		return "on_time", "On time"
+	case minutesLate <= 15:
+		return "minor", "Very small late-arrival penalty"
+	case minutesLate <= 30:
+		return "small", "Small late-arrival penalty"
+	case minutesLate <= 60:
+		return "moderate", "Moderate late-arrival penalty"
+	default:
+		return "major", "Large late-arrival penalty"
+	}
+}
+
+func validateArrivalLocation(payloadLat, payloadLng, payloadAccuracy *float64, meetupLat, meetupLng float64) error {
+	if payloadLat == nil || payloadLng == nil || payloadAccuracy == nil {
+		return fmt.Errorf("Location access is required to confirm meetup.")
+	}
+	if *payloadAccuracy > meetupMaxAccuracyMeters {
+		return fmt.Errorf("Location accuracy is too low. Please move to an open area and try again.")
+	}
+	if !validCoordinate(*payloadLat, *payloadLng) {
+		return fmt.Errorf("Invalid current location.")
+	}
+	if distance := services.CalculateDistance(*payloadLat, *payloadLng, meetupLat, meetupLng); distance.DistanceM > meetupConfirmRadiusMeters {
+		return fmt.Errorf("You are not within the meetup radius yet.")
+	}
+	return nil
 }
 
 // Keep legacy trade-match and multiway helpers compiled and available while the
@@ -253,6 +308,8 @@ func (h *TradeHandler) ensureTradeLoopMeetupSelectionsTable() error {
 			loop_id VARCHAR(255) NOT NULL,
 			user_id INT NOT NULL,
 			meetup_location VARCHAR(500) NULL,
+			agreed_latitude DECIMAL(10,8) NULL,
+			agreed_longitude DECIMAL(11,8) NULL,
 			meetup_date VARCHAR(20) NULL,
 			meetup_time VARCHAR(20) NULL,
 			meetup_confirmed BOOLEAN NOT NULL DEFAULT FALSE,
@@ -264,7 +321,29 @@ func (h *TradeHandler) ensureTradeLoopMeetupSelectionsTable() error {
 			INDEX idx_loop_meetup_user (user_id),
 			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 		)`)
-	return err
+	if err != nil {
+		return err
+	}
+	for _, col := range []struct {
+		name       string
+		definition string
+	}{
+		{"agreed_latitude", "DECIMAL(10,8) NULL"},
+		{"agreed_longitude", "DECIMAL(11,8) NULL"},
+	} {
+		var exists int
+		if scanErr := h.db.QueryRow(`
+			SELECT COUNT(*) FROM information_schema.COLUMNS
+			WHERE TABLE_SCHEMA = DATABASE()
+			  AND TABLE_NAME = 'trade_loop_meetup_selections'
+			  AND COLUMN_NAME = ?
+		`, col.name).Scan(&exists); scanErr == nil && exists == 0 {
+			if _, addErr := h.db.Exec(fmt.Sprintf("ALTER TABLE trade_loop_meetup_selections ADD COLUMN %s %s", col.name, col.definition)); addErr != nil {
+				return addErr
+			}
+		}
+	}
+	return nil
 }
 
 type likeEdge struct {
@@ -430,7 +509,7 @@ func (h *TradeHandler) ensureTradeRuntimeColumns() {
 // three strikes auto-suspends the account until an admin reviews it.
 // Trust-score impact is computed live by GetUserStats from the trades table,
 // so no separate score column is needed.
-func (h *TradeHandler) applyCancellationPenalty(userID int, wasActive bool) {
+func (h *TradeHandler) applyCancellationPenalty(userID, tradeID int, wasActive bool) {
 	if !wasActive {
 		return
 	}
@@ -460,6 +539,21 @@ func (h *TradeHandler) applyCancellationPenalty(userID int, wasActive bool) {
 		  AND cancelled_at >= DATE_SUB(CURRENT_TIMESTAMP, INTERVAL 30 DAY)
 	`, userID).Scan(&recentActiveCancels)
 
+	// Record a structured trust strike so cancellations appear in the trust history.
+	strikeSeverity := "minor"
+	if recentActiveCancels >= 2 {
+		strikeSeverity = "moderate"
+	}
+	strikeTradeID := tradeID
+	_ = services.RecordTrustStrike(h.db, services.TrustStrikeInput{
+		UserID:    userID,
+		Type:      "cancelled_trade",
+		Severity:  strikeSeverity,
+		TradeType: "normal",
+		TradeID:   &strikeTradeID,
+		Reason:    fmt.Sprintf("Cancelled an ongoing trade (trade #%d)", tradeID),
+	})
+
 	if recentActiveCancels >= 3 {
 		if _, err := h.db.Exec("UPDATE users SET is_suspended = TRUE WHERE id = ?", userID); err != nil {
 			log.Printf("applyCancellationPenalty: failed to suspend user %d: %v", userID, err)
@@ -480,25 +574,37 @@ func (h *TradeHandler) applyCancellationPenalty(userID int, wasActive bool) {
 	}
 }
 
-func (h *TradeHandler) applyMeetupLatePenalty(userID int, tradeID int, roleLabel string) {
+func (h *TradeHandler) applyMeetupLatePenalty(userID int, tradeRef string, roleLabel string, minutesLate int, tradeType string, tradeID *int) error {
 	var role string
 	_ = h.db.QueryRow("SELECT role FROM users WHERE id = ?", userID).Scan(&role)
 	if role == "admin" {
-		return
+		return nil
 	}
-	if _, err := h.db.Exec("UPDATE users SET strikes = COALESCE(strikes, 0) + 1 WHERE id = ?", userID); err != nil {
-		log.Printf("applyMeetupLatePenalty: failed to increment strikes for user %d: %v", userID, err)
-		return
+	severity, label := lateArrivalSeverity(minutesLate)
+	reason := fmt.Sprintf("Late arrival for %s (%s, %d minutes late, severity=%s)", tradeRef, roleLabel, minutesLate, severity)
+	if severity == "major" {
+		if _, err := h.db.Exec("UPDATE users SET strikes = COALESCE(strikes, 0) + 1 WHERE id = ?", userID); err != nil {
+			log.Printf("applyMeetupLatePenalty: failed to increment strikes for user %d: %v", userID, err)
+			return err
+		}
 	}
-	_, _ = h.db.Exec(`
-		INSERT INTO user_strikes (user_id, admin_id, dispute_id, reason)
-		VALUES (?, 1, NULL, ?)
-	`, userID, fmt.Sprintf("Late arrival for trade #%d (%s)", tradeID, roleLabel))
+	if err := services.RecordTrustStrike(h.db, services.TrustStrikeInput{
+		UserID:    userID,
+		Type:      "late_arrival",
+		Severity:  severity,
+		TradeType: tradeType,
+		TradeID:   tradeID,
+		TradeRef:  tradeRef,
+		Reason:    reason,
+	}); err != nil {
+		return err
+	}
 	_, _ = h.db.Exec(
 		"INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'account', ?, FALSE)",
 		userID,
-		"Your trust score has been reduced because you confirmed arrival after the agreed meetup grace period.",
+		fmt.Sprintf("%s: you confirmed arrival after the agreed grace period. Confirm sooner next time to protect your trust score.", label),
 	)
+	return nil
 }
 
 func (h *TradeHandler) AddTradeLike(c *fiber.Ctx) error {
@@ -3350,7 +3456,7 @@ func (h *TradeHandler) UpdateTrade(c *fiber.Ctx) error {
 		log.Printf("[Cancel Trade] Success - Trade %d cancelled by user %d", tradeID, userID)
 
 		// Apply automated penalty: score minus + suspend after repeated cancels
-		go h.applyCancellationPenalty(userID, wasActive)
+		go h.applyCancellationPenalty(userID, tradeID, wasActive)
 
 		publishToUser(buyerID, sseEvent{Type: "trade_updated", Data: fiber.Map{"trade_id": tradeID, "status": "cancelled"}})
 		publishToUser(sellerID, sseEvent{Type: "trade_updated", Data: fiber.Map{"trade_id": tradeID, "status": "cancelled"}})
@@ -3389,11 +3495,11 @@ func (h *TradeHandler) UpdateTrade(c *fiber.Ctx) error {
 		if payload.MeetupTime == "" {
 			return c.Status(400).JSON(models.APIResponse{Success: false, Error: "Meetup time is required"})
 		}
-
-		meetupTimeValue := payload.MeetupTime
-		if payload.MeetupDate != "" {
-			meetupTimeValue = payload.MeetupDate + " " + payload.MeetupTime
+		if strings.TrimSpace(payload.MeetupDate) == "" {
+			return c.Status(400).JSON(models.APIResponse{Success: false, Error: "Meetup date is required"})
 		}
+
+		meetupTimeValue := payload.MeetupDate + " " + payload.MeetupTime
 		var meetupLat, meetupLng sql.NullFloat64
 		var coordErr error
 		if meetingType == "pickup" {
@@ -3548,6 +3654,16 @@ func (h *TradeHandler) UpdateTrade(c *fiber.Ctx) error {
 	case "reset_meetup_selection":
 		log.Printf("User %d resetting meetup selection for trade %d", userID, tradeID)
 
+		// Block reset once either party has confirmed GPS arrival.
+		var buyerMetReset, sellerMetReset bool
+		_ = h.db.QueryRow("SELECT COALESCE(buyer_met,FALSE), COALESCE(seller_met,FALSE) FROM trades WHERE id=?", tradeID).Scan(&buyerMetReset, &sellerMetReset)
+		if buyerMetReset || sellerMetReset {
+			return c.Status(400).JSON(models.APIResponse{
+				Success: false,
+				Error:   "Cannot reset meetup after arrival confirmation has started",
+			})
+		}
+
 		// Allow user to reset their own meetup confirmation so they can change their selection
 		var updateQuery string
 		switch userID {
@@ -3590,7 +3706,6 @@ func (h *TradeHandler) UpdateTrade(c *fiber.Ctx) error {
 		var meetupLat, meetupLng, pickupLat, pickupLng sql.NullFloat64
 		var agreedDeadline sql.NullTime
 		var buyerConfirmed, sellerConfirmed bool
-		var buyerLatePenaltyApplied, sellerLatePenaltyApplied bool
 		var buyerLocation, buyerTime, sellerLocation, sellerTime sql.NullString
 		err = h.db.QueryRow(`
 			SELECT COALESCE(trade_option, 'meetup'),
@@ -3612,7 +3727,7 @@ func (h *TradeHandler) UpdateTrade(c *fiber.Ctx) error {
 			&meetupLat, &meetupLng,
 			&pickupLat, &pickupLng,
 			&agreedDeadline,
-			&buyerLatePenaltyApplied, &sellerLatePenaltyApplied,
+			new(bool), new(bool), // buyer/seller_late_penalty_applied read by atomic CAS below
 			&buyerConfirmed, &sellerConfirmed,
 			&buyerLocation, &buyerTime,
 			&sellerLocation, &sellerTime,
@@ -3649,6 +3764,13 @@ func (h *TradeHandler) UpdateTrade(c *fiber.Ctx) error {
 				_, _ = h.db.Exec("UPDATE trades SET agreed_arrival_deadline=?, grace_period_minutes=COALESCE(grace_period_minutes, ?) WHERE id=?", parsedDeadline, meetupGracePeriodMinutes, tradeID)
 			}
 		}
+		if !agreedDeadline.Valid {
+			return c.Status(400).JSON(models.APIResponse{Success: false, Error: "Meetup schedule is incomplete. Please reschedule or re-confirm the date and time."})
+		}
+		now := time.Now()
+		if err := validateArrivalConfirmationWindow(now, agreedDeadline.Time); err != nil {
+			return c.Status(400).JSON(models.APIResponse{Success: false, Error: err.Error()})
+		}
 		if meetingType == "pickup" {
 			if !pickupLat.Valid || !pickupLng.Valid || !validCoordinate(pickupLat.Float64, pickupLng.Float64) {
 				return c.Status(400).JSON(models.APIResponse{Success: false, Error: "This pickup location has no map pin yet. Ask the product owner to update the location before confirmation."})
@@ -3671,16 +3793,16 @@ func (h *TradeHandler) UpdateTrade(c *fiber.Ctx) error {
 			if !buyerMet {
 				return c.Status(400).JSON(models.APIResponse{Success: false, Error: "The traveling user must confirm arrival before the product owner can confirm."})
 			}
-		} else if meetingType == "pickup" && userID != buyerID {
+		}
+		if meetingType == "pickup" && userID != buyerID && userID != sellerID {
 			return c.Status(403).JSON(models.APIResponse{Success: false, Error: "Not authorized for this pickup confirmation"})
-		} else if payload.UserLat == nil || payload.UserLng == nil {
-			return c.Status(400).JSON(models.APIResponse{Success: false, Error: "Location access is required to confirm meetup."})
-		} else if payload.LocationAccuracyM == nil || *payload.LocationAccuracyM > meetupMaxAccuracyMeters {
-			return c.Status(400).JSON(models.APIResponse{Success: false, Error: "We could not verify your location accurately. Please try again."})
-		} else if !validCoordinate(*payload.UserLat, *payload.UserLng) {
-			return c.Status(400).JSON(models.APIResponse{Success: false, Error: "Invalid current location."})
-		} else if distance := services.CalculateDistance(*payload.UserLat, *payload.UserLng, meetupLat.Float64, meetupLng.Float64); distance.DistanceM > meetupConfirmRadiusMeters {
-			return c.Status(403).JSON(models.APIResponse{Success: false, Error: "You must be near the meetup point to confirm that you met."})
+		}
+		if err := validateArrivalLocation(payload.UserLat, payload.UserLng, payload.LocationAccuracyM, meetupLat.Float64, meetupLng.Float64); err != nil {
+			status := 400
+			if err.Error() == "You are not within the meetup radius yet." {
+				status = 403
+			}
+			return c.Status(status).JSON(models.APIResponse{Success: false, Error: err.Error()})
 		}
 
 		// Ensure final meetup fields exist; if not, backfill them from the agreed selections.
@@ -3695,18 +3817,15 @@ func (h *TradeHandler) UpdateTrade(c *fiber.Ctx) error {
 			publishToUser(sellerID, sseEvent{Type: "trade_updated", Data: fiber.Map{"trade_id": tradeID, "status": "active", "meetup_agreed": true}})
 		}
 
-		now := time.Now()
+		minutesLate := 0
 		wasLate := false
 		if agreedDeadline.Valid {
-			wasLate = now.After(agreedDeadline.Time.Add(time.Duration(meetupGracePeriodMinutes) * time.Minute))
-		}
-		if meetingType == "pickup" && userID == sellerID {
-			wasLate = false
+			minutesLate = arrivalLateMinutes(now, agreedDeadline.Time, meetupGracePeriodMinutes)
+			wasLate = minutesLate > 0
 		}
 		arrivedColumn := "buyer_arrived_at"
 		lateColumn := "buyer_was_late"
 		penaltyColumn := "buyer_late_penalty_applied"
-		penaltyAlreadyApplied := buyerLatePenaltyApplied
 		shouldApplyPenalty := wasLate
 		column := "buyer_met"
 		if userID == sellerID {
@@ -3714,21 +3833,30 @@ func (h *TradeHandler) UpdateTrade(c *fiber.Ctx) error {
 			arrivedColumn = "seller_arrived_at"
 			lateColumn = "seller_was_late"
 			penaltyColumn = "seller_late_penalty_applied"
-			penaltyAlreadyApplied = sellerLatePenaltyApplied
-			shouldApplyPenalty = wasLate && meetingType != "pickup"
+			shouldApplyPenalty = wasLate
 		}
 		if _, err := h.db.Exec("UPDATE trades SET "+column+"=TRUE, "+arrivedColumn+"=COALESCE("+arrivedColumn+", ?), "+lateColumn+"=?, updated_at=CURRENT_TIMESTAMP WHERE id = ?", now, wasLate, tradeID); err != nil {
 			log.Printf("Failed to confirm meetup done for trade %d: %v", tradeID, err)
 			return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to confirm meetup completion"})
 		}
-		if shouldApplyPenalty && !penaltyAlreadyApplied {
-			h.applyMeetupLatePenalty(userID, tradeID, func() string {
-				if userID == buyerID {
-					return "buyer"
+		if shouldApplyPenalty {
+			// Atomic CAS: only one concurrent request will flip the flag from FALSE to TRUE.
+			res, _ := h.db.Exec(
+				"UPDATE trades SET "+penaltyColumn+"=TRUE, late_penalty_applied=TRUE, updated_at=CURRENT_TIMESTAMP WHERE id=? AND "+penaltyColumn+"=FALSE",
+				tradeID)
+			if ra, _ := res.RowsAffected(); ra > 0 {
+				// We won the race — now record the penalty.
+				tradeIDForStrike := tradeID
+				if err := h.applyMeetupLatePenalty(userID, fmt.Sprintf("trade #%d", tradeID), func() string {
+					if userID == buyerID {
+						return "buyer"
+					}
+					return "seller"
+				}(), minutesLate, "normal", &tradeIDForStrike); err != nil {
+					return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to record late arrival penalty"})
 				}
-				return "seller"
-			}())
-			_, _ = h.db.Exec("UPDATE trades SET "+penaltyColumn+"=TRUE, late_penalty_applied=TRUE, updated_at=CURRENT_TIMESTAMP WHERE id = ?", tradeID)
+			}
+			// If ra==0, another concurrent request already applied the penalty — skip.
 		}
 
 		// Notify the other party
@@ -3915,6 +4043,11 @@ func (h *TradeHandler) UpdateTrade(c *fiber.Ctx) error {
 		if requestedOption != "meetup" && requestedOption != "delivery" {
 			return c.Status(400).JSON(models.APIResponse{Success: false, Error: "Invalid option. Must be 'meetup' or 'delivery'"})
 		}
+		if requestedOption == "delivery" {
+			if err := validateBuyoutDeliveryEligibility(h.db, tradeID); err != nil {
+				return c.Status(422).JSON(models.APIResponse{Success: false, Error: "Delivery is only available for buyout orders."})
+			}
+		}
 		_, err = h.db.Exec("UPDATE trades SET option_change_requested=?, updated_at=CURRENT_TIMESTAMP WHERE id=?", requestedOption, tradeID)
 		if err != nil {
 			return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to request option change"})
@@ -3935,6 +4068,11 @@ func (h *TradeHandler) UpdateTrade(c *fiber.Ctx) error {
 		h.db.QueryRow("SELECT option_change_requested FROM trades WHERE id=?", tradeID).Scan(&requestedOption)
 		if !requestedOption.Valid || requestedOption.String == "" {
 			return c.Status(400).JSON(models.APIResponse{Success: false, Error: "No pending option change"})
+		}
+		if requestedOption.String == "delivery" {
+			if err := validateBuyoutDeliveryEligibility(h.db, tradeID); err != nil {
+				return c.Status(422).JSON(models.APIResponse{Success: false, Error: "Delivery is only available for buyout orders."})
+			}
 		}
 		_, err = h.db.Exec("UPDATE trades SET trade_option=?, option_change_requested=NULL, updated_at=CURRENT_TIMESTAMP WHERE id=?", requestedOption.String, tradeID)
 		if err != nil {
@@ -4048,7 +4186,7 @@ func (h *TradeHandler) completeTradeTransaction(tradeID int) error {
 	log.Printf("Trade %d: Target product: %d, Offered products: %v", tradeID, targetProductID, offeredProductIDs)
 
 	// Mark target product as traded with locking
-	err = h.markProductUnavailable(tx, targetProductID)
+	err = h.markProductUnavailable(tx, targetProductID, tradeID)
 	if err != nil {
 		log.Printf("Failed to mark target product %d as traded: %v", targetProductID, err)
 		return fmt.Errorf("failed to mark target product as traded: %w", err)
@@ -4056,7 +4194,7 @@ func (h *TradeHandler) completeTradeTransaction(tradeID int) error {
 
 	// Mark all offered products as traded
 	for _, productID := range offeredProductIDs {
-		err = h.markProductUnavailable(tx, productID)
+		err = h.markProductUnavailable(tx, productID, tradeID)
 		if err != nil {
 			log.Printf("Failed to mark offered product %d as traded: %v", productID, err)
 			return fmt.Errorf("failed to mark offered product %d as traded: %w", productID, err)
@@ -4104,18 +4242,22 @@ func (h *TradeHandler) completeTradeTransaction(tradeID int) error {
 	return tx.Commit()
 }
 
-// markProductUnavailable marks a product as traded with row locking
-func (h *TradeHandler) markProductUnavailable(tx *sql.Tx, productID int) error {
-	log.Printf("Attempting to mark product %d as traded", productID)
+// markProductUnavailable marks a product as traded with row locking.
+// tradeID is used to detect cross-trade conflicts: if the product was already
+// traded by a *different* trade the call returns a hard error; if it was already
+// traded by the same trade it is treated as idempotent and returns nil.
+func (h *TradeHandler) markProductUnavailable(tx *sql.Tx, productID, tradeID int) error {
+	log.Printf("Attempting to mark product %d as traded (trade %d)", productID, tradeID)
 
 	// Lock and verify product
 	var currentStatus string
+	var tradedByTradeID sql.NullInt64
 
 	err := tx.QueryRow(`
-		SELECT status 
-		FROM products 
-		WHERE id = ? 
-		FOR UPDATE`, productID).Scan(&currentStatus)
+		SELECT status, traded_by_trade_id
+		FROM products
+		WHERE id = ?
+		FOR UPDATE`, productID).Scan(&currentStatus, &tradedByTradeID)
 
 	if err != nil {
 		log.Printf("Product %d not found: %v", productID, err)
@@ -4124,19 +4266,27 @@ func (h *TradeHandler) markProductUnavailable(tx *sql.Tx, productID int) error {
 
 	log.Printf("Product %d current status: %s", productID, currentStatus)
 
-	// Allow both 'available' and 'locked' status.
-	// Products are locked when a trade is accepted/active.
-	if currentStatus != "available" && currentStatus != "locked" {
-		log.Printf("Warning: Product %d is already in an un-tradable state (status: %s), skipping", productID, currentStatus)
-		return nil // Don't fail the entire trade if one product is already finalized/unavailable
+	if currentStatus == "traded" {
+		// Idempotent: same trade already marked it — skip.
+		if tradedByTradeID.Valid && int(tradedByTradeID.Int64) == tradeID {
+			log.Printf("Product %d already traded by this trade (%d) — skipping (idempotent)", productID, tradeID)
+			return nil
+		}
+		// Hard failure: a different trade already claimed this product.
+		return fmt.Errorf("product %d was already traded by a different transaction (trade %d)", productID, tradedByTradeID.Int64)
 	}
 
-	// Update product status to traded
+	// Allow both 'available' and 'locked' status.
+	if currentStatus != "available" && currentStatus != "locked" {
+		return fmt.Errorf("product %d is in an unexpected state: %s", productID, currentStatus)
+	}
+
+	// Update product status to traded, recording which trade claimed it.
 	result, err := tx.Exec(`
-		UPDATE products 
-		SET status = 'traded', updated_at = CURRENT_TIMESTAMP 
+		UPDATE products
+		SET status = 'traded', traded_by_trade_id = ?, updated_at = CURRENT_TIMESTAMP
 		WHERE id = ? AND (status = 'available' OR status = 'locked')`,
-		productID)
+		tradeID, productID)
 
 	if err != nil {
 		log.Printf("Failed to update product %d status: %v", productID, err)
@@ -4150,11 +4300,11 @@ func (h *TradeHandler) markProductUnavailable(tx *sql.Tx, productID int) error {
 	}
 
 	if rowsAffected == 0 {
-		log.Printf("Product %d was not updated - may have been modified by another transaction", productID)
+		log.Printf("Product %d was not updated — may have been modified by another transaction", productID)
 		return fmt.Errorf("product %d was modified by another transaction", productID)
 	}
 
-	log.Printf("Successfully marked product %d as traded", productID)
+	log.Printf("Successfully marked product %d as traded (trade %d)", productID, tradeID)
 	return nil
 }
 
@@ -5126,6 +5276,9 @@ func (h *TradeHandler) GetTradeLoopMeetup(c *fiber.Ctx) error {
 	if !containsInt(participantIDs, userID) {
 		return c.Status(403).JSON(models.APIResponse{Success: false, Error: "You are not a participant in this trade loop"})
 	}
+	if err := h.ensureTradeLoopMeetupSelectionsTable(); err != nil {
+		log.Printf("GetTradeLoopMeetup: ensure table failed: %v", err)
+	}
 
 	// Fetch existing selections.
 	placeholders := make([]string, len(participantIDs))
@@ -5140,6 +5293,8 @@ func (h *TradeHandler) GetTradeLoopMeetup(c *fiber.Ctx) error {
 		       COALESCE(meetup_location, '') as meetup_location,
 		       COALESCE(meetup_date, '') as meetup_date,
 		       COALESCE(meetup_time, '') as meetup_time,
+		       agreed_latitude,
+		       agreed_longitude,
 		       COALESCE(meetup_confirmed, FALSE) as meetup_confirmed,
 		       COALESCE(met_confirmed, FALSE) as met_confirmed
 		FROM trade_loop_meetup_selections
@@ -5161,18 +5316,29 @@ func (h *TradeHandler) GetTradeLoopMeetup(c *fiber.Ctx) error {
 	defer rows.Close()
 
 	type selection struct {
-		UserID          int    `json:"user_id"`
-		MeetupLocation  string `json:"meetup_location"`
-		MeetupDate      string `json:"meetup_date"`
-		MeetupTime      string `json:"meetup_time"`
-		MeetupConfirmed bool   `json:"meetup_confirmed"`
-		MetConfirmed    bool   `json:"met_confirmed"`
+		UserID          int      `json:"user_id"`
+		MeetupLocation  string   `json:"meetup_location"`
+		MeetupDate      string   `json:"meetup_date"`
+		MeetupTime      string   `json:"meetup_time"`
+		MeetupLat       *float64 `json:"meetup_lat,omitempty"`
+		MeetupLng       *float64 `json:"meetup_lng,omitempty"`
+		MeetupConfirmed bool     `json:"meetup_confirmed"`
+		MetConfirmed    bool     `json:"met_confirmed"`
 	}
 
 	byUser := map[int]selection{}
 	for rows.Next() {
 		var s selection
-		if scanErr := rows.Scan(&s.UserID, &s.MeetupLocation, &s.MeetupDate, &s.MeetupTime, &s.MeetupConfirmed, &s.MetConfirmed); scanErr == nil {
+		var meetupLat, meetupLng sql.NullFloat64
+		if scanErr := rows.Scan(&s.UserID, &s.MeetupLocation, &s.MeetupDate, &s.MeetupTime, &meetupLat, &meetupLng, &s.MeetupConfirmed, &s.MetConfirmed); scanErr == nil {
+			if meetupLat.Valid {
+				lat := meetupLat.Float64
+				s.MeetupLat = &lat
+			}
+			if meetupLng.Valid {
+				lng := meetupLng.Float64
+				s.MeetupLng = &lng
+			}
 			byUser[s.UserID] = s
 		} else {
 			log.Printf("GetTradeLoopMeetup: scan failed (loop_id=%s): %v", loopID, scanErr)
@@ -5215,12 +5381,20 @@ func (h *TradeHandler) UpdateTradeLoopMeetup(c *fiber.Ctx) error {
 	if !containsInt(participantIDs, userID) {
 		return c.Status(403).JSON(models.APIResponse{Success: false, Error: "You are not a participant in this trade loop"})
 	}
+	if err := h.ensureTradeLoopMeetupSelectionsTable(); err != nil {
+		log.Printf("UpdateTradeLoopMeetup: ensure table failed: %v", err)
+	}
 
 	var payload struct {
-		Action         string `json:"action"`
-		MeetupLocation string `json:"meetup_location"`
-		MeetupDate     string `json:"meetup_date"`
-		MeetupTime     string `json:"meetup_time"`
+		Action            string   `json:"action"`
+		MeetupLocation    string   `json:"meetup_location"`
+		MeetupDate        string   `json:"meetup_date"`
+		MeetupTime        string   `json:"meetup_time"`
+		MeetupLat         *float64 `json:"meetup_lat"`
+		MeetupLng         *float64 `json:"meetup_lng"`
+		UserLat           *float64 `json:"user_lat"`
+		UserLng           *float64 `json:"user_lng"`
+		LocationAccuracyM *float64 `json:"location_accuracy_m"`
 	}
 	if err := c.BodyParser(&payload); err != nil {
 		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "Invalid payload"})
@@ -5231,18 +5405,23 @@ func (h *TradeHandler) UpdateTradeLoopMeetup(c *fiber.Ctx) error {
 		if strings.TrimSpace(payload.MeetupLocation) == "" || strings.TrimSpace(payload.MeetupDate) == "" || strings.TrimSpace(payload.MeetupTime) == "" {
 			return c.Status(400).JSON(models.APIResponse{Success: false, Error: "Missing meetup selection"})
 		}
+		if payload.MeetupLat == nil || payload.MeetupLng == nil || !validCoordinate(*payload.MeetupLat, *payload.MeetupLng) {
+			return c.Status(400).JSON(models.APIResponse{Success: false, Error: "Meetup location is incomplete. Please agree on the meetup location again."})
+		}
 		execMeetupConfirm := func() error {
 			_, err := h.db.Exec(`
-			INSERT INTO trade_loop_meetup_selections (loop_id, user_id, meetup_location, meetup_date, meetup_time, meetup_confirmed, met_confirmed)
-			VALUES (?, ?, ?, ?, ?, TRUE, FALSE)
+			INSERT INTO trade_loop_meetup_selections (loop_id, user_id, meetup_location, agreed_latitude, agreed_longitude, meetup_date, meetup_time, meetup_confirmed, met_confirmed)
+			VALUES (?, ?, ?, ?, ?, ?, ?, TRUE, FALSE)
 			ON DUPLICATE KEY UPDATE
 				meetup_location = VALUES(meetup_location),
+				agreed_latitude = VALUES(agreed_latitude),
+				agreed_longitude = VALUES(agreed_longitude),
 				meetup_date = VALUES(meetup_date),
 				meetup_time = VALUES(meetup_time),
 				meetup_confirmed = TRUE,
 				met_confirmed = FALSE,
 				updated_at = CURRENT_TIMESTAMP
-			`, loopID, userID, payload.MeetupLocation, payload.MeetupDate, payload.MeetupTime)
+			`, loopID, userID, payload.MeetupLocation, *payload.MeetupLat, *payload.MeetupLng, payload.MeetupDate, payload.MeetupTime)
 			return err
 		}
 		err := execMeetupConfirm()
@@ -5257,12 +5436,28 @@ func (h *TradeHandler) UpdateTradeLoopMeetup(c *fiber.Ctx) error {
 			return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to save meetup selection"})
 		}
 	case "reset_meetup_selection":
+		// Block reset once any participant has confirmed GPS arrival — rescheduling
+		// after arrival has begun requires a cancellation/reschedule flow instead.
+		var confirmedCount int
+		_ = h.db.QueryRow(
+			"SELECT COUNT(*) FROM trade_loop_meetup_selections WHERE loop_id=? AND met_confirmed=TRUE",
+			loopID,
+		).Scan(&confirmedCount)
+		if confirmedCount > 0 {
+			return c.Status(400).JSON(models.APIResponse{
+				Success: false,
+				Error:   "Cannot reset meetup after arrival confirmation has started",
+			})
+		}
+
 		execMeetupReset := func() error {
 			_, err := h.db.Exec(`
-			INSERT INTO trade_loop_meetup_selections (loop_id, user_id, meetup_location, meetup_date, meetup_time, meetup_confirmed, met_confirmed)
-			VALUES (?, ?, NULL, NULL, NULL, FALSE, FALSE)
+			INSERT INTO trade_loop_meetup_selections (loop_id, user_id, meetup_location, agreed_latitude, agreed_longitude, meetup_date, meetup_time, meetup_confirmed, met_confirmed)
+			VALUES (?, ?, NULL, NULL, NULL, NULL, NULL, FALSE, FALSE)
 			ON DUPLICATE KEY UPDATE
 				meetup_location = NULL,
+				agreed_latitude = NULL,
+				agreed_longitude = NULL,
 				meetup_date = NULL,
 				meetup_time = NULL,
 				meetup_confirmed = FALSE,
@@ -5283,11 +5478,106 @@ func (h *TradeHandler) UpdateTradeLoopMeetup(c *fiber.Ctx) error {
 			return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to reset meetup selection"})
 		}
 	case "confirm_meetup_done":
+		type loopSelection struct {
+			UserID         int
+			MeetupLocation sql.NullString
+			MeetupLat      sql.NullFloat64
+			MeetupLng      sql.NullFloat64
+			MeetupDate     sql.NullString
+			MeetupTime     sql.NullString
+			Confirmed      bool
+			MetConfirmed   bool
+		}
+		rows, err := h.db.Query(`
+			SELECT user_id, meetup_location, agreed_latitude, agreed_longitude, meetup_date, meetup_time, COALESCE(meetup_confirmed, FALSE), COALESCE(met_confirmed, FALSE)
+			FROM trade_loop_meetup_selections
+			WHERE loop_id = ?
+		`, loopID)
+		if err != nil {
+			if isMySQLTableMissing(err) {
+				if ensureErr := h.ensureTradeLoopMeetupSelectionsTable(); ensureErr == nil {
+					rows, err = h.db.Query(`
+						SELECT user_id, meetup_location, agreed_latitude, agreed_longitude, meetup_date, meetup_time, COALESCE(meetup_confirmed, FALSE), COALESCE(met_confirmed, FALSE)
+						FROM trade_loop_meetup_selections
+						WHERE loop_id = ?
+					`, loopID)
+				}
+			}
+		}
+		if err != nil {
+			return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to load meetup selection"})
+		}
+
+		selections := make(map[int]loopSelection)
+		for rows.Next() {
+			var sel loopSelection
+			if scanErr := rows.Scan(&sel.UserID, &sel.MeetupLocation, &sel.MeetupLat, &sel.MeetupLng, &sel.MeetupDate, &sel.MeetupTime, &sel.Confirmed, &sel.MetConfirmed); scanErr == nil {
+				selections[sel.UserID] = sel
+			}
+		}
+		rows.Close()
+
+		var agreedLocation, agreedDate, agreedTime string
+		var agreedLat, agreedLng float64
+		hasAgreedCoords := false
+		for _, participantID := range participantIDs {
+			sel, exists := selections[participantID]
+			if !exists || !sel.Confirmed {
+				return c.Status(400).JSON(models.APIResponse{Success: false, Error: "Meetup is not confirmed yet"})
+			}
+			location := strings.TrimSpace(sel.MeetupLocation.String)
+			dateValue := strings.TrimSpace(sel.MeetupDate.String)
+			timeValue := strings.TrimSpace(sel.MeetupTime.String)
+			if location == "" || dateValue == "" || timeValue == "" {
+				return c.Status(400).JSON(models.APIResponse{Success: false, Error: "Agreed meetup location and time are required before confirming arrival."})
+			}
+			if !sel.MeetupLat.Valid || !sel.MeetupLng.Valid || !validCoordinate(sel.MeetupLat.Float64, sel.MeetupLng.Float64) {
+				return c.Status(400).JSON(models.APIResponse{Success: false, Error: "Meetup location is incomplete. Please agree on the meetup location again."})
+			}
+			if agreedLocation == "" {
+				agreedLocation = location
+				agreedDate = dateValue
+				agreedTime = timeValue
+				agreedLat = sel.MeetupLat.Float64
+				agreedLng = sel.MeetupLng.Float64
+				hasAgreedCoords = true
+				continue
+			}
+			if strings.ToLower(agreedLocation) != strings.ToLower(location) || agreedDate != dateValue || agreedTime != timeValue {
+				return c.Status(400).JSON(models.APIResponse{Success: false, Error: "Meetup selections must match before confirming arrival."})
+			}
+			if !hasAgreedCoords || services.CalculateDistance(agreedLat, agreedLng, sel.MeetupLat.Float64, sel.MeetupLng.Float64).DistanceM > meetupConfirmRadiusMeters {
+				return c.Status(400).JSON(models.APIResponse{Success: false, Error: "Meetup location is incomplete. Please agree on the meetup location again."})
+			}
+		}
+
+		scheduled, ok := parseScheduledMeetupTime(agreedDate, agreedTime)
+		if !ok {
+			return c.Status(400).JSON(models.APIResponse{Success: false, Error: "Meetup schedule is incomplete. Please reschedule or re-confirm the date and time."})
+		}
+		now := time.Now()
+		if err := validateArrivalConfirmationWindow(now, scheduled); err != nil {
+			return c.Status(400).JSON(models.APIResponse{Success: false, Error: err.Error()})
+		}
+
+		if !hasAgreedCoords || !validCoordinate(agreedLat, agreedLng) {
+			return c.Status(400).JSON(models.APIResponse{Success: false, Error: "Meetup location is incomplete. Please agree on the meetup location again."})
+		}
+		if err := validateArrivalLocation(payload.UserLat, payload.UserLng, payload.LocationAccuracyM, agreedLat, agreedLng); err != nil {
+			status := 400
+			if err.Error() == "You are not within the meetup radius yet." {
+				status = 403
+			}
+			return c.Status(status).JSON(models.APIResponse{Success: false, Error: err.Error()})
+		}
+		minutesLate := arrivalLateMinutes(now, scheduled, meetupGracePeriodMinutes)
+		alreadyMet := selections[userID].MetConfirmed
+
 		execMeetupDone := func() (sql.Result, error) {
 			return h.db.Exec(`
 			UPDATE trade_loop_meetup_selections
 			SET met_confirmed = TRUE, updated_at = CURRENT_TIMESTAMP
-			WHERE loop_id = ? AND user_id = ? AND meetup_confirmed = TRUE
+			WHERE loop_id = ? AND user_id = ? AND meetup_confirmed = TRUE AND met_confirmed = FALSE
 			`, loopID, userID)
 		}
 		res, err := execMeetupDone()
@@ -5302,8 +5592,13 @@ func (h *TradeHandler) UpdateTradeLoopMeetup(c *fiber.Ctx) error {
 			return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to confirm meetup completion"})
 		}
 		ra, _ := res.RowsAffected()
-		if ra == 0 {
+		if ra == 0 && !alreadyMet {
 			return c.Status(400).JSON(models.APIResponse{Success: false, Error: "Meetup is not confirmed yet"})
+		}
+		if minutesLate > 0 && !alreadyMet {
+			if err := h.applyMeetupLatePenalty(userID, fmt.Sprintf("trade loop %s", loopID), "participant", minutesLate, "multiway", nil); err != nil {
+				return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to record late arrival penalty"})
+			}
 		}
 
 		// Finalize the loop once every participant has confirmed the meet-up is done.
@@ -5453,9 +5748,18 @@ func (h *TradeHandler) CompleteTrade(c *fiber.Ctx) error {
 	}
 
 	// === INSTANT COMPLETE MODE ===
-	// Skips rating/feedback/proof, marks both users as completed, finalizes trade immediately
+	// Skips rating/feedback/proof, marks both users as completed, finalizes trade immediately.
+	// Restricted to admins — normal users must go through the review-based completion flow.
 	if payload.InstantComplete {
-		log.Printf("[INSTANT COMPLETE] User %d completing trade %d instantly for both parties", userID, tradeID)
+		var callerRole string
+		_ = h.db.QueryRow("SELECT COALESCE(role,'user') FROM users WHERE id=?", userID).Scan(&callerRole)
+		if callerRole != "admin" {
+			return c.Status(403).JSON(models.APIResponse{
+				Success: false,
+				Error:   "instant_complete is only available to administrators",
+			})
+		}
+		log.Printf("[INSTANT COMPLETE] Admin %d completing trade %d instantly for both parties", userID, tradeID)
 
 		tx, err := h.db.Begin()
 		if err != nil {
@@ -7881,25 +8185,37 @@ func (h *TradeHandler) CancelTradeLoop(c *fiber.Ctx) error {
 
 	loopID := c.Params("id") // format: chain_tradeID_buyerID_sellerID_user3ID
 
-	// Get multiway_trades record and participants
-	var user2ID, user3ID sql.NullInt64
-	var canceller string
-	if err := h.db.QueryRow(`
-		SELECT user2_id, COALESCE(user3_id, 0)
-		FROM multiway_trades
-		WHERE chain_id = ?
-	`, loopID).Scan(&user2ID, &user3ID); err != nil {
+	// Load all participants so we can verify the caller and notify everyone.
+	allParticipants, err := getAllMultiwayParticipants(h.db, loopID)
+	if err != nil {
 		return c.Status(404).JSON(models.APIResponse{Success: false, Error: "Loop not found"})
 	}
 
+	// Verify the caller is a participant (or admin).
+	isParticipant := false
+	for _, pid := range allParticipants {
+		if pid == userID {
+			isParticipant = true
+			break
+		}
+	}
+	if !isParticipant {
+		var callerRole string
+		_ = h.db.QueryRow("SELECT COALESCE(role,'user') FROM users WHERE id=?", userID).Scan(&callerRole)
+		if callerRole != "admin" {
+			return c.Status(403).JSON(models.APIResponse{Success: false, Error: "Not a participant in this loop"})
+		}
+	}
+
 	// Get canceller name for notification
+	var canceller string
 	_ = h.db.QueryRow("SELECT name FROM users WHERE id = ?", userID).Scan(&canceller)
 	if canceller == "" {
-		canceller = "The loop initiator"
+		canceller = "A participant"
 	}
 
 	// Update multiway_trades with cancellation info
-	_, err := h.db.Exec(`
+	_, err = h.db.Exec(`
 		UPDATE multiway_trades
 		SET status = 'cancelled', cancelled_at = CURRENT_TIMESTAMP, cancelled_by = ?
 		WHERE chain_id = ?
@@ -7908,18 +8224,11 @@ func (h *TradeHandler) CancelTradeLoop(c *fiber.Ctx) error {
 		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to cancel loop"})
 	}
 
-	// Notify participants
+	// Notify ALL participants (including user1 — the initiator).
 	cancelMsg := fmt.Sprintf("%s cancelled the loop", canceller)
-	participantIDs := []int{}
-	if user2ID.Valid {
-		participantIDs = append(participantIDs, int(user2ID.Int64))
-		h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_loop', ?, FALSE)", user2ID.Int64, cancelMsg)
-		publishNotification(int(user2ID.Int64), cancelMsg)
-	}
-	if user3ID.Valid && user3ID.Int64 > 0 {
-		participantIDs = append(participantIDs, int(user3ID.Int64))
-		h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_loop', ?, FALSE)", user3ID.Int64, cancelMsg)
-		publishNotification(int(user3ID.Int64), cancelMsg)
+	for _, pid := range allParticipants {
+		h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_loop', ?, FALSE)", pid, cancelMsg)
+		publishNotification(pid, cancelMsg)
 	}
 
 	// Add to cancellations table for tracking
@@ -7930,7 +8239,7 @@ func (h *TradeHandler) CancelTradeLoop(c *fiber.Ctx) error {
 	`, loopID, userID)
 
 	// Rebuild cache for all participants
-	go h.rebuildTradeLoopCacheForUsers(participantIDs)
+	go h.rebuildTradeLoopCacheForUsers(allParticipants)
 
 	return c.JSON(models.APIResponse{Success: true, Message: "Loop cancelled and participants notified"})
 }
@@ -8055,6 +8364,20 @@ func (h *TradeHandler) ExecuteTradeLoop(c *fiber.Ctx) error {
 	var participantID int
 	if err := h.db.QueryRow("SELECT id FROM trade_like_loop_participants WHERE loop_id = ? AND user_id = ?", loopNumericID, userID).Scan(&participantID); err != nil {
 		return c.Status(403).JSON(models.APIResponse{Success: false, Error: "You are not a participant in this trade loop"})
+	}
+
+	// Require GPS arrival confirmation before a participant can mark their loop as done.
+	var metConfirmed bool
+	_ = h.db.QueryRow(`
+		SELECT COALESCE(met_confirmed, FALSE)
+		FROM trade_loop_meetup_selections
+		WHERE loop_id = ? AND user_id = ?
+	`, loopNumericID, userID).Scan(&metConfirmed)
+	if !metConfirmed {
+		return c.Status(400).JSON(models.APIResponse{
+			Success: false,
+			Error:   "GPS arrival must be confirmed before completing this trade loop",
+		})
 	}
 
 	// Update participant with review info
@@ -8988,22 +9311,47 @@ func (h *TradeHandler) DeclineMultiwayChain(c *fiber.Ctx) error {
 		return c.Status(404).JSON(models.APIResponse{Success: false, Error: "Chain not found or you are not a participant"})
 	}
 
-	// Fetch user3's product before marking declined so we can unlock it
-	var decliningU3PID int
-	_ = h.db.QueryRow("SELECT user3_product_id FROM multiway_trades WHERE chain_id = ?", chainID).Scan(&decliningU3PID)
+	// Load participant IDs and user3's product so we know who is declining.
+	var u1ID, u2ID, u3ID, decliningU3PID int
+	_ = h.db.QueryRow(
+		"SELECT COALESCE(user1_id,0), COALESCE(user2_id,0), COALESCE(user3_id,0), COALESCE(user3_product_id,0) FROM multiway_trades WHERE chain_id = ?",
+		chainID,
+	).Scan(&u1ID, &u2ID, &u3ID, &decliningU3PID)
+	_ = u3ID // used for role check only
+
+	// Determine which role is declining for accurate record-keeping.
+	declinedByRole := "user3"
+	if userID == u1ID {
+		declinedByRole = "user1"
+	} else if userID == u2ID {
+		declinedByRole = "user2"
+	}
 
 	// Update chain status Ã¢â‚¬â€ any participant can decline
+	// Keep 'user3_declined' as the generic status signal so frontend checks are not broken,
+	// but record the actual decliner in the new declined_by columns.
 	_, err = h.db.Exec(`
-		UPDATE multiway_trades SET status = 'user3_declined', cancelled_by = ?
+		UPDATE multiway_trades
+		SET status = 'user3_declined', cancelled_by = ?,
+		    declined_by_user_id = ?, declined_by_role = ?
 		WHERE chain_id = ? AND (user1_id = ? OR user2_id = ? OR user3_id = ?)
-	`, userID, chainID, userID, userID, userID)
+	`, userID, userID, declinedByRole, chainID, userID, userID, userID)
 	if err != nil {
 		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to decline"})
 	}
 
-	// Unlock user3's product now that the chain is declined
+	// Unlock the declining participant's contributed product.
 	if decliningU3PID > 0 {
 		_, _ = h.db.Exec("UPDATE products SET status='available' WHERE id=? AND status='locked'", decliningU3PID)
+	}
+	// If user1 or user2 is declining, also unlock the original trade's target product.
+	if userID == u1ID || userID == u2ID {
+		_, _ = h.db.Exec(`
+			UPDATE products SET status='available'
+			WHERE id = (SELECT target_product_id FROM trades
+			            WHERE id = (SELECT original_trade_id FROM multiway_trades WHERE chain_id = ?))
+			  AND status = 'locked'
+		`, chainID)
 	}
 
 	// Notify the OTHER participants that the loop was broken.
@@ -9239,6 +9587,14 @@ func (h *TradeHandler) CompleteLeg(c *fiber.Ctx) error {
 		HandoffPhotoURL string `json:"handoff_photo_url"`
 	}
 	_ = c.BodyParser(&payload)
+
+	// Require proof photo — an empty CompleteLeg call must not silently finalize a leg.
+	if payload.HandoffPhotoURL == "" {
+		return c.Status(400).JSON(models.APIResponse{
+			Success: false,
+			Error:   "Handoff photo is required to complete a leg",
+		})
+	}
 
 	// Complete the leg (only the receiver confirms completion).
 	res, err := h.db.Exec(`
