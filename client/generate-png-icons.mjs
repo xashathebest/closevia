@@ -1,64 +1,36 @@
-import sharp from 'sharp';
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import sharp from 'sharp'
+import fs from 'fs'
+import path from 'path'
+import { fileURLToPath } from 'url'
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
 
-const baseDir = path.join(__dirname, 'public');
-
-// Create SVG icons first
-const createSVGIcon = (size) => {
-  return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#9F7AEA;stop-opacity:1" />
-      <stop offset="100%" style="stop-color:#6B46C1;stop-opacity:1" />
-    </linearGradient>
-  </defs>
-  <rect width="${size}" height="${size}" fill="url(#grad)"/>
-  <text x="50%" y="50%" font-size="${size * 0.5}" font-weight="bold" fill="white" text-anchor="middle" dominant-baseline="middle" font-family="Arial, sans-serif">C</text>
-</svg>`;
-};
+const baseDir = path.join(__dirname, 'public')
+const iconsDir = path.join(baseDir, 'icons')
+const sourceLogoPath = path.join(iconsDir, 'CloviaLogo.svg')
 
 async function generateIcons() {
   try {
-    // Ensure public directory exists
-    if (!fs.existsSync(baseDir)) {
-      fs.mkdirSync(baseDir, { recursive: true });
+    if (!fs.existsSync(sourceLogoPath)) {
+      throw new Error(`CloviaLogo.svg not found at ${sourceLogoPath}`)
     }
 
-    // Convert SVG to PNG for 192x192
-    await sharp(Buffer.from(createSVGIcon(192)))
+    await sharp(sourceLogoPath)
+      .resize(192, 192, { fit: 'contain', background: { r: 255, g: 255, b: 255, alpha: 1 } })
       .png()
-      .toFile(path.join(baseDir, 'icon-192.png'));
-    console.log('✓ Created icon-192.png');
+      .toFile(path.join(iconsDir, 'icon-192.png'))
+    console.log('Created icons/icon-192.png')
 
-    // Convert SVG to PNG for 512x512
-    await sharp(Buffer.from(createSVGIcon(512)))
+    await sharp(sourceLogoPath)
+      .resize(512, 512, { fit: 'contain', background: { r: 255, g: 255, b: 255, alpha: 1 } })
       .png()
-      .toFile(path.join(baseDir, 'icon-512.png'));
-    console.log('✓ Created icon-512.png');
-
-    // Also create maskable versions
-    await sharp(Buffer.from(createSVGIcon(192)))
-      .png()
-      .toFile(path.join(baseDir, 'icon-192-maskable.png'));
-    console.log('✓ Created icon-192-maskable.png');
-
-    await sharp(Buffer.from(createSVGIcon(512)))
-      .png()
-      .toFile(path.join(baseDir, 'icon-512-maskable.png'));
-    console.log('✓ Created icon-512-maskable.png');
-
-    console.log('\n✅ All PWA icons generated successfully!');
-    console.log('📁 Icons saved to: public/');
-    console.log('⚠️  These are placeholder icons. Replace them with your branded icons.');
+      .toFile(path.join(iconsDir, 'icon-512.png'))
+    console.log('Created icons/icon-512.png')
   } catch (error) {
-    console.error('Error generating icons:', error.message);
-    process.exit(1);
+    console.error('Error generating icons:', error.message)
+    process.exit(1)
   }
 }
 
-generateIcons();
+generateIcons()

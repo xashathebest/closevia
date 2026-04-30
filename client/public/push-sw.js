@@ -1,3 +1,27 @@
+self.CACHE_NAME = 'clovia-v2-logo-update'
+
+self.addEventListener('activate', (event) => {
+  const oldRuntimeCaches = new Set([
+    'pages-cache',
+    'firebase-auth-cache',
+    'firebase-api-cache',
+    'google-fonts-cache',
+    'cloudinary-cache',
+    'cdn-cache',
+    'assets-cache',
+    'images-cache',
+  ])
+
+  event.waitUntil(
+    caches.keys().then((cacheNames) => Promise.all(
+      cacheNames
+        .filter((cacheName) => !cacheName.includes(self.CACHE_NAME))
+        .filter((cacheName) => cacheName.includes('clovia') || oldRuntimeCaches.has(cacheName))
+        .map((cacheName) => caches.delete(cacheName))
+    ))
+  )
+})
+
 self.addEventListener('push', (event) => {
   let data = {
     title: 'CloviaPH',
@@ -19,8 +43,8 @@ self.addEventListener('push', (event) => {
   event.waitUntil(
     self.registration.showNotification(data.title || 'CloviaPH', {
       body: data.body || '',
-      icon: '/icons/clovia-logo-192-v2.png',
-      badge: '/icons/clovia-logo-maskable-192-v2.png',
+      icon: '/icons/CloviaLogo.svg?v=2',
+      badge: '/icons/CloviaLogo.svg?v=2',
       data: { url: targetUrl },
       tag: data.tag || targetUrl,
       renotify: false,

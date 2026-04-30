@@ -62,7 +62,7 @@ const ProductCard: React.FC<ProductCardProps> = ({
   const navigate = useNavigate()
   const toast = useToast()
   const { user } = useAuth()
-  const isMobile = useBreakpointValue({ base: true, md: false })
+  const showActionIcons = useBreakpointValue({ base: false, md: true }, { fallback: 'base' }) ?? false
   const [boostTimeRemaining, setBoostTimeRemaining] = useState<string | null>(null)
   const [isBoosted, setIsBoosted] = useState(false)
   const [isSaved, setIsSaved] = useState(Boolean(product.is_saved))
@@ -810,7 +810,7 @@ const ProductCard: React.FC<ProductCardProps> = ({
                 minH="40px"
                 bg={useColorModeValue('brand.50', 'brand.900')}
                 color={useColorModeValue('brand.600', 'brand.200')}
-                leftIcon={isMobile ? undefined : <Icon as={FaExchangeAlt} boxSize="13px" />}
+                leftIcon={showActionIcons ? <Icon as={FaExchangeAlt} boxSize="13px" /> : undefined}
                 flex={1}
                 minW={0}
                 px={{ base: '6px', md: 3 }}
@@ -833,7 +833,7 @@ const ProductCard: React.FC<ProductCardProps> = ({
               minH="40px"
               bg={useColorModeValue('orange.50', 'orange.900')}
               color={useColorModeValue('orange.600', 'orange.200')}
-              leftIcon={isMobile ? undefined : <Icon as={FaMoneyBillWave} boxSize="13px" />}
+              leftIcon={showActionIcons ? <Icon as={FaMoneyBillWave} boxSize="13px" /> : undefined}
               flex={1}
               minW={0}
               px={{ base: '6px', md: 3 }}

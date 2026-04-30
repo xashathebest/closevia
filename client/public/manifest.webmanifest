@@ -11,40 +11,15 @@
   "icons": [
     {
       "src": "/icons/CloviaLogo.svg?v=2",
-      "sizes": "any",
+      "sizes": "192x192",
       "type": "image/svg+xml",
-      "purpose": "any"
-    },
-    {
-      "src": "/icons/clovia-logo-192-v2.png",
-      "sizes": "192x192",
-      "type": "image/png",
-      "purpose": "any"
-    },
-    {
-      "src": "/icons/clovia-logo-512-v2.png",
-      "sizes": "512x512",
-      "type": "image/png",
-      "purpose": "any"
-    },
-    {
-      "src": "/icons/clovia-logo-maskable-192-v2.png",
-      "sizes": "192x192",
-      "type": "image/png",
-      "purpose": "maskable"
-    },
-    {
-      "src": "/icons/clovia-logo-maskable-512-v2.png",
-      "sizes": "512x512",
-      "type": "image/png",
       "purpose": "any maskable"
-    }
-  ],
-  "screenshots": [
+    },
     {
-      "src": "/icons/clovia-logo-192-v2.png",
-      "sizes": "192x192",
-      "type": "image/png"
+      "src": "/icons/CloviaLogo.svg?v=2",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
     }
   ],
   "categories": ["shopping", "productivity"],

@@ -1,1 +1,0 @@
-import{j as t,dF as i}from"./vendor-DY5CM_pg.js";import{u as s}from"./components-Sidebar-mJv_J55y.js";const u=({children:e})=>{const{isAuthenticated:r,loading:o}=s();return o?t.jsx("div",{children:"Loading..."}):r?t.jsx(t.Fragment,{children:e}):t.jsx(i,{to:"/login",replace:!0})};export{u as P};

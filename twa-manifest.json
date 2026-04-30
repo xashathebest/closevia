@@ -13,8 +13,8 @@
   "backgroundColor": "#FFFDF1",
   "enableNotifications": true,
   "startUrl": "/",
-  "iconUrl": "https://cloviaph.site/icon-192.png",
-  "maskableIconUrl": "https://cloviaph.site/icon-192-maskable.png",
+  "iconUrl": "https://cloviaph.site/icons/CloviaLogo.svg",
+  "maskableIconUrl": "https://cloviaph.site/icons/CloviaLogo.svg",
   "splashScreenFadeOutDuration": 300,
   "signingKey": {
     "path": "clovia.keystore",

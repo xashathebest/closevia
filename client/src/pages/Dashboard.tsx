@@ -1978,84 +1978,118 @@ const Dashboard: React.FC = () => {
     const niceCompleted = Number.isNaN(completedDate.getTime())
       ? summary.when.date
       : completedDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+    const primaryProductId = Number(summary.current?.product_id || summary.current?.productId || trade.target_product_id || 0)
+    const primaryImage = resolveParticipantImage(summary.current) || trade.product_image_url
+    const participantNames = summary.participants
+      .map((p: any) => Number(p?.user_id ?? p?.id) === Number(user?.id || 0) ? 'You' : (p?.user_name || p?.name || 'Trader'))
+      .filter(Boolean)
+    const participantLabel = participantNames.length > 0
+      ? participantNames.slice(0, compact ? 2 : 3).join(', ') + (participantNames.length > (compact ? 2 : 3) ? ` +${participantNames.length - (compact ? 2 : 3)}` : '')
+      : `${summary.loopCount} traders`
+
     return (
       <Box
-        bg={useColorModeValue('green.50', 'gray.800')}
+        bg="white"
         borderWidth="1px"
-        borderColor={useColorModeValue('green.200', 'green.700')}
+        borderColor="gray.100"
+        borderLeftWidth="4px"
+        borderLeftColor="purple.400"
         borderRadius="2xl"
-        p={{ base: 4, md: 5 }}
-        boxShadow="0 4px 14px rgba(29, 158, 117, 0.10)"
+        p={{ base: 4, md: compact ? 3 : 4 }}
+        boxShadow="0 1px 4px rgba(0,0,0,0.05)"
+        _hover={{ boxShadow: '0 3px 10px rgba(0,0,0,0.09)' }}
+        transition="box-shadow 0.15s"
       >
-        <VStack align="stretch" spacing={3}>
-          <HStack justify="space-between" align="start" spacing={3}>
-            <HStack spacing={3} minW={0}>
-              <Box p={2.5} borderRadius="xl" bg="white" color="green.600" boxShadow="sm">
-                <Icon as={FaExchangeAlt} boxSize={4} />
-              </Box>
-              <Box minW={0}>
-                <HStack spacing={2} flexWrap="wrap">
-                  <Badge colorScheme="purple" borderRadius="full" px={2}>Multiway Trade</Badge>
-                  <Badge colorScheme={statusScheme} borderRadius="full" px={2}>{summary.statusLabel}</Badge>
-                  <Badge colorScheme="green" variant="outline" borderRadius="full" px={2}>{summary.loopCount}-way trade</Badge>
-                </HStack>
-                <Text fontWeight="800" color="gray.800" fontSize={{ base: 'sm', md: 'md' }} mt={1}>
-                  You gave {summary.gave || 'an item'} and received {summary.received || 'an item'}
+        <Stack direction={{ base: 'column', md: compact ? 'column' : 'row' }} spacing={3} align={{ base: 'stretch', md: compact ? 'stretch' : 'center' }}>
+          <HStack spacing={3} align="flex-start" flex={1} minW={0}>
+            <Box w={{ base: '56px', md: compact ? '52px' : '60px' }} h={{ base: '56px', md: compact ? '52px' : '60px' }} flexShrink={0} borderRadius="lg" overflow="hidden" bg="gray.100">
+              {primaryProductId > 0 ? (
+                <ProductThumb pid={primaryProductId} src={primaryImage} alt={summary.gave || 'Multiway item'} size="100%" />
+              ) : (
+                <Center w="100%" h="100%">
+                  <Icon as={FaHandshake} color="gray.300" boxSize={5} />
+                </Center>
+              )}
+            </Box>
+
+            <Box flex={1} minW={0}>
+              <HStack justify="space-between" align="flex-start" spacing={3}>
+                <Box minW={0} flex={1}>
+                  <HStack spacing={1.5} mb={1} flexWrap="wrap">
+                    <Badge colorScheme="purple" variant="solid" fontSize="9px" px={2} py={0.5} borderRadius="md" textTransform="uppercase">
+                      Multiway
+                    </Badge>
+                    <Badge colorScheme={statusScheme} variant="subtle" fontSize="9px" px={2} py={0.5} borderRadius="md" textTransform="none">
+                      {summary.statusLabel}
+                    </Badge>
+                    <Badge colorScheme="green" variant="outline" fontSize="9px" px={2} py={0.5} borderRadius="md" textTransform="none">
+                      {summary.loopCount}-way
+                    </Badge>
+                  </HStack>
+                  <Text fontWeight="700" fontSize={{ base: 'sm', md: compact ? 'sm' : 'md' }} color="gray.800" noOfLines={1}>
+                    {summary.gave || 'Item unavailable'}
+                  </Text>
+                  <Text fontSize="xs" color="gray.500" noOfLines={1} mt={0.5}>
+                    Received:{' '}
+                    <Text as="span" color="gray.700" fontWeight="500">{summary.received || 'Item unavailable'}</Text>
+                  </Text>
+                </Box>
+                <VStack spacing={0} align="flex-end" flexShrink={0} display={{ base: 'flex', md: compact ? 'none' : 'flex' }}>
+                  <Text fontSize="10px" color="gray.400" fontWeight="500" whiteSpace="nowrap">{niceCompleted}</Text>
+                  <Text fontSize="10px" color="gray.400">{summary.when.time || '-'}</Text>
+                </VStack>
+              </HStack>
+
+              <HStack spacing={0} mt={2} flexWrap="wrap" gap={1}>
+                <Text fontSize="11px" color="gray.600" noOfLines={1}>
+                  <Text as="span" fontWeight="600" color="gray.500">Who:</Text>{' '}{participantLabel}
                 </Text>
-              </Box>
+                <Text fontSize="11px" color="gray.300" px={1.5}>·</Text>
+                <Text fontSize="11px" color="gray.600" noOfLines={1} maxW={{ base: '52%', md: compact ? '100%' : '260px' }}>
+                  <Text as="span" fontWeight="600" color="gray.500">Where:</Text>{' '}{summary.where}
+                </Text>
+              </HStack>
+            </Box>
+          </HStack>
+
+          <HStack justify="space-between" align="center" flexShrink={0} minW={{ md: compact ? 'auto' : '190px' }}>
+            <HStack spacing={-2} display={{ base: 'flex', md: compact ? 'none' : 'flex' }}>
+              {summary.participants.slice(0, 3).map((p: any, i: number) => (
+                <Avatar
+                  key={p?.user_id || p?.id || i}
+                  name={p?.user_name || `User ${i + 1}`}
+                  src={getImageUrl(p?.profile_picture || p?.avatar || '')}
+                  size="2xs"
+                  boxShadow="0 0 0 2px white"
+                />
+              ))}
             </HStack>
-            <Text fontSize="xs" color="gray.500" whiteSpace="nowrap">{niceCompleted}</Text>
-          </HStack>
-
-          <HStack spacing={2} overflowX="auto" py={1}>
-            {summary.participants.map((p: any, i: number) => {
-              const isCurrent = Number(p?.user_id ?? p?.id) === Number(user?.id || 0)
-              return (
-                <HStack key={`${p?.user_id || p?.id || i}-${i}`} spacing={2} flexShrink={0}>
-                  <VStack spacing={1}>
-                    <Avatar size="sm" name={p?.user_name || `User ${i + 1}`} src={getImageUrl(p?.profile_picture || p?.avatar || '')} borderWidth={isCurrent ? '2px' : '1px'} borderColor={isCurrent ? 'green.500' : 'gray.200'} />
-                    <Text fontSize="10px" fontWeight={isCurrent ? '800' : '600'} color={isCurrent ? 'green.700' : 'gray.600'} maxW="72px" noOfLines={1}>
-                      {isCurrent ? 'You' : (p?.user_name || `User ${i + 1}`)}
-                    </Text>
-                  </VStack>
-                  <Text color="green.500" fontWeight="800">{i === summary.participants.length - 1 ? '→ You' : '→'}</Text>
-                </HStack>
-              )
-            })}
-          </HStack>
-
-          <SimpleGrid columns={{ base: 1, md: compact ? 2 : 4 }} spacing={2}>
-            <Box bg="white" borderRadius="lg" p={2.5} borderWidth="1px" borderColor="green.100">
-              <Text fontSize="10px" color="gray.500" fontWeight="800" textTransform="uppercase">You gave</Text>
-              <Text fontSize="sm" fontWeight="700" color="gray.800" noOfLines={1}>{summary.gave || 'Item unavailable'}</Text>
-            </Box>
-            <Box bg="white" borderRadius="lg" p={2.5} borderWidth="1px" borderColor="green.100">
-              <Text fontSize="10px" color="gray.500" fontWeight="800" textTransform="uppercase">You received</Text>
-              <Text fontSize="sm" fontWeight="700" color="gray.800" noOfLines={1}>{summary.received || 'Item unavailable'}</Text>
-            </Box>
-            <Box bg="white" borderRadius="lg" p={2.5} borderWidth="1px" borderColor="green.100">
-              <Text fontSize="10px" color="gray.500" fontWeight="800" textTransform="uppercase">Where</Text>
-              <Text fontSize="sm" fontWeight="700" color="gray.800" noOfLines={1}>{summary.where}</Text>
-            </Box>
-            <Box bg="white" borderRadius="lg" p={2.5} borderWidth="1px" borderColor="green.100">
-              <Text fontSize="10px" color="gray.500" fontWeight="800" textTransform="uppercase">When</Text>
-              <Text fontSize="sm" fontWeight="700" color="gray.800" noOfLines={1}>{summary.when.date} {summary.when.time}</Text>
-            </Box>
-          </SimpleGrid>
-
-          <HStack justify="space-between" align="center">
-            <Text fontSize="xs" color="gray.600" noOfLines={1}>
-              {summary.statusLabel === 'Completed'
-                ? 'The loop closed successfully for everyone involved.'
-                : summary.statusLabel === 'Cancelled'
-                  ? 'This loop stopped before everyone completed.'
-                  : 'This loop did not finish. You can review the last known chain.'}
+            <Text fontSize="xs" color="gray.500" noOfLines={1} display={{ base: 'none', md: compact ? 'block' : 'none' }}>
+              {summary.when.date} {summary.when.time || ''}
             </Text>
-            <Button size="sm" colorScheme="green" variant="outline" onClick={() => setMultiwayDetailsTrade(trade)} flexShrink={0}>
-              View Full Details
+            <Text fontSize="xs" color="gray.500" noOfLines={2} display={{ base: 'none', lg: compact ? 'none' : 'block' }} maxW="220px">
+              {summary.statusLabel === 'Completed'
+                ? 'Loop closed for everyone.'
+                : summary.statusLabel === 'Cancelled'
+                  ? 'Loop stopped before completion.'
+                  : 'Review the last known chain.'}
+            </Text>
+            <Button
+              size={{ base: 'xs', md: 'sm' }}
+              variant={{ base: 'ghost', md: 'outline' }}
+              colorScheme={{ base: 'gray', md: 'brand' } as any}
+              color={{ base: 'gray.500', md: undefined }}
+              fontSize={{ base: '12px', md: 'sm' }}
+              fontWeight="600"
+              px={3}
+              rightIcon={<ChevronRightIcon boxSize={3} />}
+              onClick={() => setMultiwayDetailsTrade(trade)}
+              flexShrink={0}
+            >
+              View
             </Button>
           </HStack>
-        </VStack>
+        </Stack>
       </Box>
     )
   }
