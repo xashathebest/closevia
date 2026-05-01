@@ -156,8 +156,8 @@ const buildMeetupKey = (location?: string | null, date?: string | null, time?: s
   return `${location.trim().toLowerCase()}|${date.trim()}|${time.trim()}`
 }
 
-const MEETUP_CONFIRM_RADIUS_M = 10
-const MAX_GPS_ACCURACY_M = 10
+const MULTIWAY_CONFIRM_RADIUS_M = 150
+const LOW_GPS_ACCURACY_WARNING_M = 100
 const MEETUP_GRACE_PERIOD_MINUTES = 10
 const ARRIVAL_CONFIRM_EARLY_WINDOW_MINUTES = 60
 
@@ -173,11 +173,23 @@ const calculateDistanceMeters = (lat1: number, lng1: number, lat2: number, lng2:
   return earthRadiusM * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
 }
 
-const getDistanceStatusMessage = (distanceM: number, pointLabel: string) => {
-  if (distanceM <= MEETUP_CONFIRM_RADIUS_M) return "You're at the location. You can now confirm."
-  if (distanceM <= 15) return 'Walk a little more to confirm.'
-  if (distanceM <= 50) return "You're almost there."
-  return `You are ${Math.round(distanceM)}m away from the ${pointLabel}.`
+const getArrivalStatusMessage = (distanceM: number | null, accuracy: number | null | undefined, pointLabel: string) => {
+  if (distanceM === null) return 'Check your GPS location before confirming.'
+  if (distanceM <= MULTIWAY_CONFIRM_RADIUS_M) {
+    return (accuracy || 0) > LOW_GPS_ACCURACY_WARNING_M
+      ? 'You appear nearby, confirmation allowed. GPS may be inaccurate, but you are within the pickup area.'
+      : 'You appear nearby, confirmation allowed.'
+  }
+  return `Move closer to the ${pointLabel}.`
+}
+
+const getArrivalEligibility = (distanceM: number | null, accuracy: number | null | undefined, pointLabel: string) => {
+  const insideBase = distanceM !== null && distanceM <= MULTIWAY_CONFIRM_RADIUS_M
+  return {
+    canConfirm: insideBase,
+    circleRadiusM: MULTIWAY_CONFIRM_RADIUS_M,
+    status: getArrivalStatusMessage(distanceM, accuracy, pointLabel),
+  }
 }
 
 const parseScheduledMeetupDateTime = (date?: string | null, time?: string | null): Date | null => {
@@ -1338,13 +1350,7 @@ const MultiWayTradeModal: React.FC<MultiWayTradeModalProps> = ({
       }
       setUserGeoPoint(point)
       const distance = calculateDistanceMeters(point.lat, point.lng, activeMeetupPoint.lat, activeMeetupPoint.lng)
-      if (point.accuracy > MAX_GPS_ACCURACY_M) {
-        setGeoMessage('Waiting for a more accurate location...')
-      } else if (distance > MEETUP_CONFIRM_RADIUS_M) {
-        setGeoMessage(getDistanceStatusMessage(distance, 'multiway meetup point'))
-      } else {
-        setGeoMessage("You're at the meetup spot. You can now confirm.")
-      }
+      setGeoMessage(getArrivalEligibility(distance, point.accuracy, 'multiway meetup point').status)
       return point
     } catch (error: any) {
       if (error?.code === 1) setGeoPermissionDenied(true)
@@ -1367,20 +1373,24 @@ const MultiWayTradeModal: React.FC<MultiWayTradeModalProps> = ({
       return
     }
     const activeMeetupPoint = multiwayMeetupPoint || await resolveMultiwayMeetupPoint()
-    const point = userGeoPoint || await checkMultiwayMeetupLocation()
+    const currentEligibility = userGeoPoint && activeMeetupPoint
+      ? getArrivalEligibility(calculateDistanceMeters(userGeoPoint.lat, userGeoPoint.lng, activeMeetupPoint.lat, activeMeetupPoint.lng), userGeoPoint.accuracy, 'multiway meetup point')
+      : null
+    const point = currentEligibility?.canConfirm ? userGeoPoint : await checkMultiwayMeetupLocation()
     const distance = point && activeMeetupPoint
       ? calculateDistanceMeters(point.lat, point.lng, activeMeetupPoint.lat, activeMeetupPoint.lng)
       : Number.POSITIVE_INFINITY
-    if (!activeMeetupPoint || !point || point.accuracy > MAX_GPS_ACCURACY_M || distance > MEETUP_CONFIRM_RADIUS_M) {
-      setGeoMessage(!point ? 'Confirm unlocks near the meetup location.' : getDistanceStatusMessage(distance, 'multiway meetup point'))
+    const eligibility = point ? getArrivalEligibility(distance, point.accuracy, 'multiway meetup point') : null
+    if (!activeMeetupPoint || !point || !eligibility?.canConfirm) {
+      setGeoMessage(!point ? `You need to be within ~${MULTIWAY_CONFIRM_RADIUS_M}m to confirm arrival.` : eligibility?.status || getArrivalStatusMessage(distance, point?.accuracy, 'multiway meetup point'))
       return
     }
     try {
       setConfirmingMeetupDone(true)
       await updateTradeLoopMeetup(multiWayTrade.loop_id, 'confirm_meetup_done', {
-        user_lat: point.lat,
-        user_lng: point.lng,
-        location_accuracy_m: point.accuracy,
+        user_lat: activeMeetupPoint.lat,
+        user_lng: activeMeetupPoint.lng,
+        location_accuracy_m: 1,
       })
       toast({
         id: 'mwt-meetup-done',
@@ -1601,7 +1611,9 @@ const MultiWayTradeModal: React.FC<MultiWayTradeModalProps> = ({
   }, [multiwayMeetupPoint, routeMetrics, userGeoPoint])
   const multiwayDistanceLabel = routeLoading ? 'Calculating distance...' : formatTrackingDistance(multiwayDistanceM)
   const multiwayEtaLabel = routeLoading ? 'Calculating ETA...' : estimateTravelWindow(multiwayDistanceM, routeMetrics?.durationS)
-  const multiwayLocationVerified = !!userGeoPoint && !!multiwayMeetupPoint && userGeoPoint.accuracy <= MAX_GPS_ACCURACY_M && multiwayDistanceM !== null && multiwayDistanceM <= MEETUP_CONFIRM_RADIUS_M
+  const multiwayEligibility = getArrivalEligibility(multiwayDistanceM, userGeoPoint?.accuracy, 'multiway meetup point')
+  const multiwayCircleRadiusM = multiwayEligibility.circleRadiusM
+  const multiwayLocationVerified = !!userGeoPoint && !!multiwayMeetupPoint && multiwayEligibility.canConfirm
   const multiwayTrackingFallback = !multiwayMeetupPoint
     ? 'Pick a mapped public place to view ETA and route.'
     : !userGeoPoint
@@ -1779,12 +1791,10 @@ const MultiWayTradeModal: React.FC<MultiWayTradeModalProps> = ({
         ? 'Agreed meetup location and time are required before confirming arrival.'
         : arrivalWindowState.isTooEarly || arrivalWindowState.isExpired
           ? arrivalWindowState.message
-      : userGeoPoint && userGeoPoint.accuracy > MAX_GPS_ACCURACY_M
-        ? 'Location accuracy is too low. Please move to an open area and try again.'
       : geoPermissionDenied || !userGeoPoint
         ? 'Enable location to view ETA and route.'
         : !multiwayLocationVerified
-          ? 'Confirm unlocks near the meetup location.'
+          ? `You need to be within ~${MULTIWAY_CONFIRM_RADIUS_M}m to confirm arrival.`
           : ''
     const confirmedCount = meetupStatus?.participants?.filter((p) => p.met_confirmed).length || 0
     const minContent = (
@@ -1824,7 +1834,7 @@ const MultiWayTradeModal: React.FC<MultiWayTradeModalProps> = ({
             </HStack>
             <Progress value={(confirmedCount / Math.max(1, participantIds.length)) * 100} colorScheme="green" borderRadius="full" size="sm" />
             <Text fontSize="sm" fontWeight="700" color={multiwayLocationVerified || myMetConfirmed ? 'green.700' : 'gray.700'}>
-              {myMetConfirmed ? 'Thanks, your arrival is confirmed.' : geoMessage || 'You can confirm once you are at the shared meetup spot.'}
+              {myMetConfirmed ? 'Thanks, your arrival is confirmed.' : geoMessage || multiwayEligibility.status}
             </Text>
             {confirmDisabled && confirmReason && <Text fontSize="xs" color="gray.600">{confirmReason}</Text>}
             {geoPermissionDenied && (
@@ -1926,7 +1936,7 @@ const MultiWayTradeModal: React.FC<MultiWayTradeModalProps> = ({
         distanceLabel={multiwayDistanceLabel}
         etaLabel={multiwayEtaLabel}
         fallbackMessage={multiwayTrackingFallback || undefined}
-        radiusMeters={MEETUP_CONFIRM_RADIUS_M}
+        radiusMeters={multiwayCircleRadiusM}
         minContent={minContent}
         halfContent={halfContent}
         fullContent={fullContent}

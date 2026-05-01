@@ -63,7 +63,9 @@ export const ProductProvider: React.FC<ProductProviderProps> = ({ children }) =>
       // previous location and can be stale (e.g. showing 1.7km on every
       // card). Backend will refill on the next fetch.
       const parsed = JSON.parse(cached) as Product[]
-      return parsed.map((p) => ({ ...p, distance: '', distanceKm: Infinity }))
+      return parsed
+        .filter((p) => p?.status === 'available')
+        .map((p) => ({ ...p, distance: '', distanceKm: Infinity }))
     } catch {
       return []
     }
@@ -204,6 +206,20 @@ export const ProductProvider: React.FC<ProductProviderProps> = ({ children }) =>
     }
     window.addEventListener('homeAddressChanged', handleHomeAddressChanged)
     return () => window.removeEventListener('homeAddressChanged', handleHomeAddressChanged)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  useEffect(() => {
+    const handleProductsRefresh = () => {
+      try { localStorage.removeItem('clovia_home_products') } catch { /* ignore */ }
+      cacheRef.current = null
+      pendingRequestRef.current = null
+      const filters = currentFiltersRef.current || {}
+      void searchProductsWithLocation(filters, latestUserLocationRef.current)
+    }
+
+    window.addEventListener('clovia:products-refresh', handleProductsRefresh)
+    return () => window.removeEventListener('clovia:products-refresh', handleProductsRefresh)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -388,7 +404,8 @@ export const ProductProvider: React.FC<ProductProviderProps> = ({ children }) =>
   // Helper function to ensure products is always an array
   const safeSetProducts = (newProducts: Product[] | null | undefined) => {
     if (Array.isArray(newProducts)) {
-      const productsWithDistance = addDistanceToProducts(newProducts)
+      const visibleProducts = newProducts.filter((product) => product?.status === 'available')
+      const productsWithDistance = addDistanceToProducts(visibleProducts)
       setProducts(productsWithDistance)
     } else {
       setProducts([])
@@ -488,7 +505,7 @@ export const ProductProvider: React.FC<ProductProviderProps> = ({ children }) =>
           if (data && data.data && Array.isArray(data.data)) {
             safeSetProducts(data.data)
             // Cache the result
-            cacheRef.current = { filters: filterKey, products: data.data, timestamp: Date.now() }
+            cacheRef.current = { filters: filterKey, products: data.data.filter((product) => product?.status === 'available'), timestamp: Date.now() }
             // Update pagination state
             setCurrentPage(data.page || 1)
             const total = data.total || 0
@@ -503,7 +520,7 @@ export const ProductProvider: React.FC<ProductProviderProps> = ({ children }) =>
         } else if (response.data && Array.isArray(response.data)) {
           // Direct array response
           safeSetProducts(response.data)
-          cacheRef.current = { filters: filterKey, products: response.data, timestamp: Date.now() }
+          cacheRef.current = { filters: filterKey, products: response.data.filter((product: Product) => product?.status === 'available'), timestamp: Date.now() }
           setHasMore(false)
         } else {
           // Fallback to empty array
@@ -587,7 +604,7 @@ export const ProductProvider: React.FC<ProductProviderProps> = ({ children }) =>
 
       if (response.data && response.data.data) {
         const data = response.data.data as PaginatedResponse<Product>
-        const newItems = Array.isArray(data?.data) ? data.data : []
+        const newItems = Array.isArray(data?.data) ? data.data.filter((product) => product?.status === 'available') : []
         // Compute distances for new items only
         const newItemsWithDistance = addDistanceToProducts(newItems, false)
         // Functional update: use current state (not stale closure) so concurrent
@@ -605,7 +622,7 @@ export const ProductProvider: React.FC<ProductProviderProps> = ({ children }) =>
           setHasMore(newItems.length >= (currentFilters.limit || 10))
         }
       } else if (response.data && Array.isArray(response.data)) {
-        const newItems = response.data as Product[]
+        const newItems = (response.data as Product[]).filter((product) => product?.status === 'available')
         setProducts(current => {
           const allProducts = Array.isArray(current) ? [...current, ...newItems] : newItems
           return addDistanceToProducts(allProducts)

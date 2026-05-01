@@ -130,8 +130,8 @@ const Dashboard: React.FC = () => {
 
   const shouldLoadProducts = activeTab === 0
   const shouldLoadOffersTab = activeTab === 1
-  const shouldLoadSentOffers = shouldLoadOffersTab
-  const shouldLoadReceivedOffers = shouldLoadOffersTab
+  const shouldLoadSentOffers = !!user
+  const shouldLoadReceivedOffers = !!user
   const shouldLoadOngoingTrades = true
   const shouldLoadArchivedTrades = shouldLoadOffersTab
   const shouldLoadMultiWay = activeTab === 2 || activeTab === 3 || shouldLoadOngoingTrades
@@ -193,7 +193,7 @@ const Dashboard: React.FC = () => {
 
   // Derived state from cached data
   const inventoryProducts = useMemo(
-    () => actualUserProducts.filter(p => p.status !== 'traded' && p.status !== 'sold' && p.status !== 'deleted'),
+    () => actualUserProducts.filter(p => p.status === 'available'),
     [actualUserProducts]
   )
   const hasListedProducts = actualUserProducts.length > 0

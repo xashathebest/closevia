@@ -5,6 +5,7 @@ import { useNotification } from './NotificationContext'
 import { api, API_BASE_URL } from '../services/api'
 import { isAuthInvalid, markAuthInvalidIfAuthenticated } from '../utils/authEvents'
 import { isNotificationAllowed } from '../utils/notificationPreferences'
+import { DASHBOARD_QUERY_KEYS } from '../hooks/useDashboard'
 
 type RealtimeContextValue = {
   offerCount: number
@@ -90,6 +91,22 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     const host = hostname === 'localhost' ? '127.0.0.1' : hostname
     return `${protocol}//${host}:4000`
   }, [])
+
+  const refreshOfferQueriesNow = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: DASHBOARD_QUERY_KEYS.counts })
+    queryClient.invalidateQueries({ queryKey: ['dashboard', 'offers'] })
+    queryClient.refetchQueries({ queryKey: DASHBOARD_QUERY_KEYS.counts, type: 'all' })
+    queryClient.refetchQueries({ queryKey: ['dashboard', 'offers'], type: 'all' })
+    queryClient.refetchQueries({ queryKey: ['trades'], type: 'all' })
+  }, [queryClient])
+
+  const refreshProductListsNow = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: DASHBOARD_QUERY_KEYS.products })
+    window.dispatchEvent(new CustomEvent('clovia:products-refresh'))
+    if (refreshCallbacksRef.current.products) {
+      refreshCallbacksRef.current.products()
+    }
+  }, [queryClient])
 
   const refreshCounts = useCallback(async () => {
     if (!user || isAuthInvalid()) return
@@ -196,8 +213,7 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         switch (payload.type) {
           case 'trade_created':
             // Invalidate offers/trades in React Query cache so Dashboard refreshes immediately
-            queryClient.invalidateQueries({ queryKey: ['dashboard'] })
-            queryClient.invalidateQueries({ queryKey: ['trades'] })
+            refreshOfferQueriesNow()
             refreshCounts()
             // Refresh received offers and ongoing trades
             if (refreshCallbacksRef.current.receivedOffers) {
@@ -206,6 +222,7 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             if (refreshCallbacksRef.current.ongoingTrades) {
               refreshCallbacksRef.current.ongoingTrades()
             }
+            refreshProductListsNow()
             break
           case 'multiway_opportunity':
             // Multiway loop found for this user — refresh data, let Dashboard show the alert
@@ -223,11 +240,11 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
               }
             }
             // Invalidate offers/trades cache so updated trade appears immediately
-            queryClient.invalidateQueries({ queryKey: ['dashboard'] })
-            queryClient.invalidateQueries({ queryKey: ['trades'] })
+            refreshOfferQueriesNow()
             refreshCounts()
             if (refreshCallbacksRef.current.receivedOffers) refreshCallbacksRef.current.receivedOffers()
             if (refreshCallbacksRef.current.ongoingTrades) refreshCallbacksRef.current.ongoingTrades()
+            refreshProductListsNow()
             break
           case 'trade_review_submitted':
           case 'trade_completed':
@@ -246,9 +263,9 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             if (refreshCallbacksRef.current.multiway) refreshCallbacksRef.current.multiway()
             if (refreshCallbacksRef.current.multiwayAlert) refreshCallbacksRef.current.multiwayAlert()
             if (refreshCallbacksRef.current.ongoingTrades) refreshCallbacksRef.current.ongoingTrades()
+            refreshProductListsNow()
             // Invalidate queries for fresh data
-            queryClient.invalidateQueries({ queryKey: ['dashboard'] })
-            queryClient.invalidateQueries({ queryKey: ['trades'] })
+            refreshOfferQueriesNow()
             break
           case 'notification':
             refreshCounts()
@@ -260,13 +277,13 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
               if (shouldNotify({ notification_type: 'trade_offer', message })) {
                 showNotification(message || 'New notification', 'success')
               }
-              queryClient.invalidateQueries({ queryKey: ['dashboard', 'offers'] })
+              refreshOfferQueriesNow()
               if (refreshCallbacksRef.current.receivedOffers) refreshCallbacksRef.current.receivedOffers()
             } else if (data.notification_type === 'trade_update') {
               if (shouldNotify({ notification_type: 'trade_update', message })) {
                 showNotification(message || 'Trade updated', 'info')
               }
-              queryClient.invalidateQueries({ queryKey: ['dashboard', 'offers'] })
+              refreshOfferQueriesNow()
               if (refreshCallbacksRef.current.receivedOffers) refreshCallbacksRef.current.receivedOffers()
               if (refreshCallbacksRef.current.ongoingTrades) refreshCallbacksRef.current.ongoingTrades()
             } else if (data.notification_type === 'product_sold') {
@@ -274,6 +291,7 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
                 showNotification(message || 'New notification', data.alert ? 'alert' : 'success')
               }
               if (refreshCallbacksRef.current.products) refreshCallbacksRef.current.products()
+              refreshProductListsNow()
             } else {
               if (shouldNotify({ notification_type: data.notification_type, message })) {
                 showNotification(message || 'New notification', data.alert ? 'alert' : 'success')
@@ -285,12 +303,12 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             if (shouldNotify({ notification_type: 'trade_update', message: 'Trade auto-completed!' })) {
               showNotification('Trade auto-completed!', 'success')
             }
-            queryClient.invalidateQueries({ queryKey: ['dashboard'] })
-            queryClient.invalidateQueries({ queryKey: ['trades'] })
+            refreshOfferQueriesNow()
             refreshCounts()
             if (refreshCallbacksRef.current.ongoingTrades) {
               refreshCallbacksRef.current.ongoingTrades()
             }
+            refreshProductListsNow()
             break
           case 'trade_message':
             break
@@ -352,7 +370,7 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         streamAbortRef.current = null
       }
     }
-  }, [user, getSseBaseUrl, shouldNotify, showNotification, queryClient, refreshCounts])
+  }, [user, getSseBaseUrl, shouldNotify, showNotification, queryClient, refreshCounts, refreshOfferQueriesNow, refreshProductListsNow])
 
   useEffect(() => { if (user) refreshCounts() }, [user, refreshCounts])
 

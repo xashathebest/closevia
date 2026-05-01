@@ -547,40 +547,54 @@ const BuyoutModal: React.FC<BuyoutModalProps> = ({ isOpen, onClose, targetProduc
           Seller handoff
         </FormLabel>
         <VStack spacing={3} align="stretch">
+          {/* Contextual helper text based on what handoff methods the seller allows */}
+          {pickupEnabled && !meetupEnabled ? (
+            <Text fontSize="xs" color="orange.700" fontWeight="500">
+              This item is available for pickup only. You will go to the seller's selected location.
+            </Text>
+          ) : !pickupEnabled && meetupEnabled ? (
+            <Text fontSize="xs" color="teal.700" fontWeight="500">
+              This item is available for meetup only. You and the seller will agree on a meeting place.
+            </Text>
+          ) : null}
           <HStack spacing={2}>
-            <Button
-              flex={1}
-              size="sm"
-              minH="40px"
-              variant={collectionMethod === 'pickup' ? 'solid' : 'outline'}
-              bg={collectionMethod === 'pickup' ? selectedBorder : 'transparent'}
-              color={collectionMethod === 'pickup' ? 'white' : 'inherit'}
-              borderColor={collectionMethod === 'pickup' ? selectedBorder : borderColor}
-              onClick={() => setCollectionMethod('pickup')}
-              isDisabled={!pickupEnabled || !productPickupLocation}
-              fontSize="12px"
-              _hover={{ bg: collectionMethod === 'pickup' ? '#158A63' : undefined }}
-            >
-              Pickup
-            </Button>
-            <Button
-              flex={1}
-              size="sm"
-              minH="40px"
-              variant={collectionMethod === 'meetup' ? 'solid' : 'outline'}
-              bg={collectionMethod === 'meetup' ? selectedBorder : 'transparent'}
-              color={collectionMethod === 'meetup' ? 'white' : 'inherit'}
-              borderColor={collectionMethod === 'meetup' ? selectedBorder : borderColor}
-              onClick={() => {
-                setCollectionMethod('meetup')
-                if (!meetupLocation.trim()) setMeetupLocation(preferredMeetupLocations[0] || '')
-              }}
-              isDisabled={!meetupEnabled}
-              fontSize="12px"
-              _hover={{ bg: collectionMethod === 'meetup' ? '#158A63' : undefined }}
-            >
-              Meetup
-            </Button>
+            {pickupEnabled && (
+              <Button
+                flex={1}
+                size="sm"
+                minH="40px"
+                variant={collectionMethod === 'pickup' ? 'solid' : 'outline'}
+                bg={collectionMethod === 'pickup' ? selectedBorder : 'transparent'}
+                color={collectionMethod === 'pickup' ? 'white' : 'inherit'}
+                borderColor={collectionMethod === 'pickup' ? selectedBorder : borderColor}
+                onClick={() => setCollectionMethod('pickup')}
+                isDisabled={!productPickupLocation}
+                title={!productPickupLocation ? 'Pickup location not set by seller' : undefined}
+                fontSize="12px"
+                _hover={{ bg: collectionMethod === 'pickup' ? '#158A63' : undefined }}
+              >
+                Pickup
+              </Button>
+            )}
+            {meetupEnabled && (
+              <Button
+                flex={1}
+                size="sm"
+                minH="40px"
+                variant={collectionMethod === 'meetup' ? 'solid' : 'outline'}
+                bg={collectionMethod === 'meetup' ? selectedBorder : 'transparent'}
+                color={collectionMethod === 'meetup' ? 'white' : 'inherit'}
+                borderColor={collectionMethod === 'meetup' ? selectedBorder : borderColor}
+                onClick={() => {
+                  setCollectionMethod('meetup')
+                  if (!meetupLocation.trim()) setMeetupLocation(preferredMeetupLocations[0] || '')
+                }}
+                fontSize="12px"
+                _hover={{ bg: collectionMethod === 'meetup' ? '#158A63' : undefined }}
+              >
+                Meetup
+              </Button>
+            )}
           </HStack>
 
           {collectionMethod === 'pickup' && (

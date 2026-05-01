@@ -29,7 +29,7 @@ export const getProductLocationLabel = (product: Partial<Product> | null | undef
 
   const pickupAddress = cleanLocationText(product.pickup_address)
   const location = cleanLocationText(product.location)
-  const area = pickupAddress || location
+  const area = location || pickupAddress
   if (!area) return ''
 
   return `Near ${toAreaLabel(area)}`
@@ -39,7 +39,7 @@ export const getProductRawLocation = (product: Partial<Product> | null | undefin
   if (!product) return null
   const pickupAddress = cleanLocationText(product.pickup_address)
   const location = cleanLocationText(product.location)
-  return pickupAddress || location || null
+  return location || pickupAddress || null
 }
 
 export const getProductLocationKey = (product: Partial<Product> | null | undefined): string => {

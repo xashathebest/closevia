@@ -1080,72 +1080,82 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
       )}
       {isTargetLoading ? <Box p={2.5} bg="gray.50" borderWidth="1px" borderColor={borderColor} borderRadius="md" mb={3}><HStack spacing={2}><Spinner size="sm" /><Text fontSize="10px" color={mutedTextColor}>Loading trade methods...</Text></HStack></Box> : (
         <>
-          <HStack spacing={2} mb={1} align="stretch">
-            <Tooltip
-              label="The seller sets the location. You'll go there to pick up the item."
-              hasArrow
-              placement="top"
-              fontSize="xs"
-              borderRadius="md"
-              maxW="200px"
-            >
-              <Button
-                flex={1}
-                size="sm"
-                minH="44px"
-                variant={tradeOption === 'pickup' ? 'solid' : 'outline'}
-                bg={tradeOption === 'pickup' ? '#E67E22' : 'transparent'}
-                color={tradeOption === 'pickup' ? 'white' : 'inherit'}
-                borderColor={tradeOption === 'pickup' ? '#E67E22' : borderColor}
-                _hover={{ bg: tradeOption === 'pickup' ? '#D35400' : undefined }}
-                onClick={() => { setTradeOption('pickup'); dismissTradeHint() }}
-                leftIcon={<Icon as={FaMapMarkerAlt} boxSize={4} />}
-                rightIcon={<Icon as={FaInfoCircle} boxSize={3} opacity={0.55} />}
-                fontSize="sm"
-                fontWeight="700"
-                isDisabled={!pickupEnabled || !hasFixedLocation}
-                title={!pickupEnabled ? 'Pickup is not enabled for this product' : !hasFixedLocation ? 'Pickup unavailable - trader has no fixed location' : undefined}
-              >
-                Pickup
-              </Button>
-            </Tooltip>
-            <Tooltip
-              label="You and the seller will agree on a place before meeting."
-              hasArrow
-              placement="top"
-              fontSize="xs"
-              borderRadius="md"
-              maxW="200px"
-            >
-              <Button
-                flex={1}
-                size="sm"
-                minH="44px"
-                variant={tradeOption === 'meetup' ? 'solid' : 'outline'}
-                bg={tradeOption === 'meetup' ? selectedBorder : 'transparent'}
-                color={tradeOption === 'meetup' ? 'white' : 'inherit'}
-                borderColor={tradeOption === 'meetup' ? selectedBorder : borderColor}
-                _hover={{ bg: tradeOption === 'meetup' ? '#158A63' : undefined }}
-                onClick={() => { setTradeOption('meetup'); dismissTradeHint() }}
-                leftIcon={<Icon as={FaHandshake} boxSize={4} />}
-                rightIcon={<Icon as={FaInfoCircle} boxSize={3} opacity={0.55} />}
-                fontSize="sm"
-                fontWeight="700"
-                isDisabled={!meetupEnabled}
-              >
-                Meetup
-              </Button>
-            </Tooltip>
-          </HStack>
+          {/* Contextual helper text based on what methods the owner allows */}
+          <Box mb={2}>
+            {pickupEnabled && !meetupEnabled ? (
+              <Text fontSize="xs" color="orange.700" fontWeight="500" px={1}>
+                This item is available for pickup only. You will go to the seller's selected location.
+              </Text>
+            ) : !pickupEnabled && meetupEnabled ? (
+              <Text fontSize="xs" color="teal.700" fontWeight="500" px={1}>
+                This item is available for meetup only. You and the seller will agree on a meeting place.
+              </Text>
+            ) : (
+              <Text fontSize="xs" color="gray.500" px={1}>
+                Choose how you want to trade this item.
+              </Text>
+            )}
+          </Box>
 
-          {/* Helper text — always visible, shows what each method means */}
           <HStack spacing={2} mb={3} align="stretch">
-            <Text flex={1} fontSize="sm" color={tradeOption === 'pickup' ? 'orange.600' : 'gray.400'} textAlign="center" fontWeight={tradeOption === 'pickup' ? '600' : '400'} transition="color 0.15s" lineHeight="short">
-              You'll go to the seller's location
-            </Text>
-            <Text flex={1} fontSize="sm" color={tradeOption === 'meetup' ? 'brand.600' : 'gray.400'} textAlign="center" fontWeight={tradeOption === 'meetup' ? '600' : '400'} transition="color 0.15s" lineHeight="short">
-              You'll decide on a meeting place together
-            </Text>
+            {pickupEnabled && (
+              <Tooltip
+                label={!hasFixedLocation ? 'Pickup location not set by seller' : "The seller sets the location. You'll go there to pick up the item."}
+                hasArrow
+                placement="top"
+                fontSize="xs"
+                borderRadius="md"
+                maxW="200px"
+              >
+                <Button
+                  flex={1}
+                  size="sm"
+                  minH="44px"
+                  variant={tradeOption === 'pickup' ? 'solid' : 'outline'}
+                  bg={tradeOption === 'pickup' ? '#E67E22' : 'transparent'}
+                  color={tradeOption === 'pickup' ? 'white' : 'inherit'}
+                  borderColor={tradeOption === 'pickup' ? '#E67E22' : borderColor}
+                  _hover={{ bg: tradeOption === 'pickup' ? '#D35400' : undefined }}
+                  onClick={() => { setTradeOption('pickup'); dismissTradeHint() }}
+                  leftIcon={<Icon as={FaMapMarkerAlt} boxSize={4} />}
+                  rightIcon={<Icon as={FaInfoCircle} boxSize={3} opacity={0.55} />}
+                  fontSize="sm"
+                  fontWeight="700"
+                  isDisabled={!hasFixedLocation}
+                  title={!hasFixedLocation ? 'Pickup unavailable - trader has no fixed location' : undefined}
+                >
+                  Pickup
+                </Button>
+              </Tooltip>
+            )}
+            {meetupEnabled && (
+              <Tooltip
+                label="You and the seller will agree on a place before meeting."
+                hasArrow
+                placement="top"
+                fontSize="xs"
+                borderRadius="md"
+                maxW="200px"
+              >
+                <Button
+                  flex={1}
+                  size="sm"
+                  minH="44px"
+                  variant={tradeOption === 'meetup' ? 'solid' : 'outline'}
+                  bg={tradeOption === 'meetup' ? selectedBorder : 'transparent'}
+                  color={tradeOption === 'meetup' ? 'white' : 'inherit'}
+                  borderColor={tradeOption === 'meetup' ? selectedBorder : borderColor}
+                  _hover={{ bg: tradeOption === 'meetup' ? '#158A63' : undefined }}
+                  onClick={() => { setTradeOption('meetup'); dismissTradeHint() }}
+                  leftIcon={<Icon as={FaHandshake} boxSize={4} />}
+                  rightIcon={<Icon as={FaInfoCircle} boxSize={3} opacity={0.55} />}
+                  fontSize="sm"
+                  fontWeight="700"
+                >
+                  Meetup
+                </Button>
+              </Tooltip>
+            )}
           </HStack>
 
           {/* Confirmation line after selection */}
@@ -1507,7 +1517,7 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
               </Box>
             </VStack>
           )}
-          {!hasFixedLocation && <Box p={2.5} bg="yellow.50" borderWidth="1px" borderColor="yellow.200" borderRadius="md" mb={3}><Text fontSize="10px" color="yellow.800">The other trader has no fixed pickup location. Use meetup and agree on a place together.</Text></Box>}
+          {!hasFixedLocation && <Box p={2.5} bg="yellow.50" borderWidth="1px" borderColor="yellow.200" borderRadius="md" mb={3}><Text fontSize="10px" color="yellow.800">Pickup location not available. The seller needs to set a location for this item.</Text></Box>}
         </>
       )}
     </FormControl>
@@ -1597,7 +1607,7 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
               ) : (
                 <HStack spacing={2} p={2} bg="gray.50" borderRadius="md" borderLeft="3px solid" borderLeftColor="gray.300">
                   <Icon as={FaMapMarkerAlt} color="gray.400" boxSize={3} flexShrink={0} />
-                  <Text fontSize="11px" color="gray.500" fontStyle="italic">No pickup location set</Text>
+                  <Text fontSize="11px" color="gray.500" fontStyle="italic">Pickup location not available. The seller needs to set a location for this item.</Text>
                 </HStack>
               )}
 

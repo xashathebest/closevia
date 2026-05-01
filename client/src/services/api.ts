@@ -83,6 +83,13 @@ export const api = axios.create({
 })
 
 const SLOW_API_THRESHOLD_MS = 500
+const OLD_LOCATION_ACCURACY_ERROR = 'Location accuracy is too low. Please move to an open area and try again.'
+const LOCATION_DISTANCE_ERROR = 'Move closer to the pickup/meetup location.'
+
+const normalizeApiErrorMessage = (value: unknown): string | null => {
+  if (typeof value !== 'string') return null
+  return value.trim() === OLD_LOCATION_ACCURACY_ERROR ? LOCATION_DISTANCE_ERROR : value
+}
 
 // Request interceptor to add auth token and log
 api.interceptors.request.use(
@@ -187,6 +194,13 @@ api.interceptors.response.use(
       } catch { }
     }
     ;(error as any).requestId = requestId
+    const responseData = error.response?.data as any
+    if (responseData && typeof responseData === 'object') {
+      const normalizedError = normalizeApiErrorMessage(responseData.error)
+      if (normalizedError) responseData.error = normalizedError
+      const normalizedMessage = normalizeApiErrorMessage(responseData.message)
+      if (normalizedMessage) responseData.message = normalizedMessage
+    }
     if (requestId && (status ?? 0) >= 400) {
       // eslint-disable-next-line no-console
       console.warn(`[API ERROR] request_id=${requestId} status=${status ?? 'ERR'} url=${url}`)

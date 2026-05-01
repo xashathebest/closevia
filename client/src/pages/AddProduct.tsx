@@ -125,7 +125,6 @@ const MotionBox = motion(Box)
 const CONDITION_OPTIONS = ['New', 'Like New', 'Good', 'Used', 'For Parts']
 const MAX_DAILY_AI_REQUESTS = 100
 const DESCRIPTION_MIN_CHARS = 20
-const PRIVATE_HOME_LOCATION_LABEL = 'Private saved home location'
 const PH_SEARCH_VIEWBOX = '116.0,21.5,127.0,4.5'
 const PH_BOUNDS = {
   minLat: 4.4,
@@ -523,6 +522,7 @@ const AddProduct: React.FC = () => {
   const [mockLocationText, setMockLocationText] = useState('Makati City')
   const [showCustomPickupMap, setShowCustomPickupMap] = useState(false)
   const [customPickupLocationSet, setCustomPickupLocationSet] = useState(false)
+  const [homeAsPickupSelected, setHomeAsPickupSelected] = useState(false)
   const [nameFieldFocused, setNameFieldFocused] = useState(false)
   const [descriptionFieldFocused, setDescriptionFieldFocused] = useState(false)
   const [expandProductDetails, setExpandProductDetails] = useState(false)
@@ -567,12 +567,15 @@ const AddProduct: React.FC = () => {
       }
       return {
         ...prev,
-        location_type: 'no_location',
-        location: PRIVATE_HOME_LOCATION_LABEL,
+        location_type: 'pickup_location',
+        location: savedHomeAddress,
         latitude: savedHomeLatitude,
         longitude: savedHomeLongitude,
       }
     })
+    if (!customPickupLocationSet) {
+      setHomeAsPickupSelected(true)
+    }
   }, [customPickupLocationSet, hasSavedHomeLocation, savedHomeAddress, savedHomeLatitude, savedHomeLongitude])
 
   // ── Location ──────────────────────────────────────────────────────────────
@@ -616,6 +619,7 @@ const AddProduct: React.FC = () => {
 
   const useDefaultPickupSource = useCallback(() => {
     setCustomPickupLocationSet(false)
+    setHomeAsPickupSelected(false)
     setLocationText('')
     setLocationDetected(false)
     setFormData(prev => ({ ...prev, location_type: 'current_location' }))
@@ -1241,15 +1245,14 @@ const AddProduct: React.FC = () => {
       return
     }
     if (formData.collection_setup.methods.includes('pickup')) {
-      const hasPublicPickupLocation =
-        formData.location_type !== 'no_location' &&
-        formData.location?.trim() &&
-        formData.location.trim().toLowerCase() !== PRIVATE_HOME_LOCATION_LABEL.toLowerCase()
-      if (!hasPublicPickupLocation) {
+      const hasValidPickupLocation =
+        (formData.location_type === 'pickup_location' && formData.latitude && formData.longitude) ||
+        formData.location_type === 'current_location'
+      if (!hasValidPickupLocation) {
         toast({
           id: "addproduct-pickup-location-required",
-          title: 'Pickup location needed',
-          description: 'Choose a public pickup location for pickup trades, or switch this item to meetup only.',
+          title: 'Pickup location required',
+          description: 'Pickup requires a location. Please confirm your saved address or choose a pickup point.',
           status: 'warning',
           position: 'top',
           duration: 4500,
@@ -1935,7 +1938,7 @@ const AddProduct: React.FC = () => {
       <Box p={3} borderRadius="xl" borderWidth="1px" borderColor="brand.100" bg="white" shadow="sm">
         <VStack align="stretch" spacing={3}>
           <Text fontSize="xs" color="gray.600" fontWeight="bold" textTransform="uppercase" letterSpacing="wider">
-            My Home Location
+            Default Pickup Address
           </Text>
 
           {isGettingLocation && !hasSavedHomeLocation ? (
@@ -1953,12 +1956,12 @@ const AddProduct: React.FC = () => {
                   <Text fontSize="md">Home</Text>
                 </Box>
                 <VStack align="start" spacing={0} flex={1}>
-                  <Text fontSize="xs" fontWeight="700" color="brand.700">Saved Home Location</Text>
+                  <Text fontSize="xs" fontWeight="700" color="brand.700">Saved Address (Home)</Text>
                   <Text fontSize="sm" fontWeight="bold" color="brand.800" noOfLines={2} title={savedHomeAddress}>
                     {savedHomeAddress}
                   </Text>
                   <Text fontSize="10px" color="brand.600" fontWeight="500">
-                    Used privately for matching, distance calculations, and as the default product location unless you choose an override below.
+                    Used as your default pickup address. Buyers will come to this location.
                   </Text>
                 </VStack>
               </HStack>
@@ -2015,14 +2018,69 @@ const AddProduct: React.FC = () => {
       {/* ──────── LOCATION TYPE SELECTOR ──────── */}
       <Box bg="blue.50" p={2} borderRadius="md" borderWidth="1px" borderColor="blue.200">
         <FormControl>
-          <FormLabel fontSize="xs" fontWeight="bold" color="blue.800" mb={1.5}>
-            Change pickup location for this product (optional)
+          <FormLabel fontSize="xs" fontWeight="bold" color="blue.800" mb={0.5}>
+            Pickup Location
           </FormLabel>
+          <Text fontSize="10px" color="blue.600" mb={1.5}>Buyer will go to this location</Text>
           <VStack align="stretch" spacing={1.5}>
+            {/* Option 0: Saved Address (Home) */}
+            {hasSavedHomeLocation && (
+              <Box
+                p={2}
+                borderWidth="1px"
+                borderRadius="md"
+                bg={homeAsPickupSelected ? 'green.50' : 'white'}
+                borderColor={homeAsPickupSelected ? 'green.400' : 'gray.200'}
+                transition="all 0.2s"
+              >
+                <HStack align="start" spacing={2}>
+                  <Radio
+                    isChecked={homeAsPickupSelected}
+                    onChange={() => {
+                      setHomeAsPickupSelected(true)
+                      setCustomPickupLocationSet(false)
+                      setFormData(prev => ({
+                        ...prev,
+                        location_type: 'pickup_location',
+                        location: savedHomeAddress,
+                        latitude: savedHomeLatitude,
+                        longitude: savedHomeLongitude,
+                      }))
+                    }}
+                    colorScheme="green"
+                    flex="0 0 auto"
+                    mt={0.5}
+                    cursor="pointer"
+                  />
+                  <VStack align="start" spacing={0} flex={1} cursor="pointer" onClick={() => {
+                    setHomeAsPickupSelected(true)
+                    setCustomPickupLocationSet(false)
+                    setFormData(prev => ({
+                      ...prev,
+                      location_type: 'pickup_location',
+                      location: savedHomeAddress,
+                      latitude: savedHomeLatitude,
+                      longitude: savedHomeLongitude,
+                    }))
+                  }}>
+                    <Text fontWeight="600" fontSize="xs">Saved Address (Home)</Text>
+                    <Text fontSize="10px" color="gray.600" noOfLines={1}>{savedHomeAddress}</Text>
+                  </VStack>
+                </HStack>
+                {homeAsPickupSelected && (
+                  <Box pl={{ base: 4, md: 6 }} pt={1}>
+                    <Text fontSize={{ base: '8px', md: '9px' }} color="orange.600" fontWeight="500">
+                      Make sure you are comfortable sharing this location with buyers.
+                    </Text>
+                  </Box>
+                )}
+              </Box>
+            )}
+
             {/* Option 1: Use Current Location */}
-            <Box 
-              p={2} 
-              borderWidth="1px" 
+            <Box
+              p={2}
+              borderWidth="1px"
               borderRadius="md"
               bg={formData.location_type === 'current_location' ? 'blue.100' : 'white'}
               borderColor={formData.location_type === 'current_location' ? 'blue.500' : 'gray.200'}
@@ -2062,19 +2120,20 @@ const AddProduct: React.FC = () => {
               )}
             </Box>
 
-            {/* Option 2: Custom Pickup Location */}
-            <Box 
-              p={2} 
-              borderWidth="1px" 
+            {/* Option 2: Set Pickup Point (Map) */}
+            <Box
+              p={2}
+              borderWidth="1px"
               borderRadius="md"
-              bg={formData.location_type === 'pickup_location' ? 'blue.100' : 'white'}
-              borderColor={formData.location_type === 'pickup_location' ? 'blue.500' : 'gray.200'}
+              bg={formData.location_type === 'pickup_location' && !homeAsPickupSelected ? 'blue.100' : 'white'}
+              borderColor={formData.location_type === 'pickup_location' && !homeAsPickupSelected ? 'blue.500' : 'gray.200'}
               transition="all 0.2s"
             >
-              <HStack align="start" mb={formData.location_type === 'pickup_location' ? 1.5 : 0} spacing={2}>
-                <Radio 
-                  isChecked={formData.location_type === 'pickup_location'}
+              <HStack align="start" mb={formData.location_type === 'pickup_location' && !homeAsPickupSelected ? 1.5 : 0} spacing={2}>
+                <Radio
+                  isChecked={formData.location_type === 'pickup_location' && !homeAsPickupSelected}
                   onChange={() => {
+                    setHomeAsPickupSelected(false)
                     setFormData(prev => ({ ...prev, location_type: 'pickup_location' }))
                     setShowCustomPickupMap(true)
                   }}
@@ -2084,14 +2143,15 @@ const AddProduct: React.FC = () => {
                   cursor="pointer"
                 />
                 <VStack align="start" spacing={0} flex={1} cursor="pointer" onClick={() => {
+                  setHomeAsPickupSelected(false)
                   setFormData(prev => ({ ...prev, location_type: 'pickup_location' }))
                   setShowCustomPickupMap(true)
                 }}>
-                  <Text fontWeight="600" fontSize="xs">📍 Set a Custom Pickup Location</Text>
-                  <Text fontSize="10px" color="gray.600">Click on map to pinpoint your pickup location</Text>
+                  <Text fontWeight="600" fontSize="xs">📍 Set Pickup Point (Map)</Text>
+                  <Text fontSize="10px" color="gray.600">Search or click on map to set a custom pickup spot</Text>
                 </VStack>
               </HStack>
-              {formData.location_type === 'pickup_location' && (
+              {formData.location_type === 'pickup_location' && !homeAsPickupSelected && (
                 <Box pl={{ base: 4, md: 6 }} pt={1}>
                   {customPickupLocationSet && formData.latitude && formData.longitude ? (
                     <VStack align="start" spacing={1} mb={1.5}>
@@ -2300,7 +2360,7 @@ const AddProduct: React.FC = () => {
 
           </VStack>
           <FormHelperText fontSize="8px" mt={1.5} color="blue.700">
-            Home Location is used by default. Choose an override only if this product needs a different pickup point.
+            Select where buyers will pick up this item.
           </FormHelperText>
         </FormControl>
       </Box>

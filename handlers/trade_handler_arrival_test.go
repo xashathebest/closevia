@@ -58,10 +58,10 @@ func TestValidateArrivalLocation(t *testing.T) {
 	meetupLng := 122.0620
 	insideLat := 6.914205
 	insideLng := 122.062005
-	outsideLat := 6.9150
-	outsideLng := 122.0630
+	outsideLat := 6.9160
+	outsideLng := 122.0640
 	accuracyGood := 5.0
-	accuracyPoor := 25.0
+	accuracyExtreme := 325.0
 
 	tests := []struct {
 		name    string
@@ -79,27 +79,33 @@ func TestValidateArrivalLocation(t *testing.T) {
 		{
 			name:    "missing coordinates",
 			acc:     &accuracyGood,
-			wantErr: "Location access is required to confirm meetup.",
+			wantErr: "Location access is required to confirm arrival.",
 		},
 		{
-			name:    "poor accuracy",
-			lat:     &insideLat,
-			lng:     &insideLng,
-			acc:     &accuracyPoor,
-			wantErr: "Location accuracy is too low. Please move to an open area and try again.",
+			name: "inside radius allows low accuracy",
+			lat:  &insideLat,
+			lng:  &insideLng,
+			acc:  &accuracyExtreme,
+		},
+		{
+			name:    "outside radius blocks regardless of accuracy",
+			lat:     &outsideLat,
+			lng:     &outsideLng,
+			acc:     &accuracyExtreme,
+			wantErr: "Move closer to the meetup point.",
 		},
 		{
 			name:    "outside radius",
 			lat:     &outsideLat,
 			lng:     &outsideLng,
 			acc:     &accuracyGood,
-			wantErr: "You are not within the meetup radius yet.",
+			wantErr: "Move closer to the meetup point.",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateArrivalLocation(tt.lat, tt.lng, tt.acc, meetupLat, meetupLng)
+			err := validateArrivalLocation(tt.lat, tt.lng, tt.acc, meetupLat, meetupLng, meetupConfirmRadiusMeters, "meetup point")
 			if tt.wantErr == "" {
 				if err != nil {
 					t.Fatalf("unexpected error: %v", err)

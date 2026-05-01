@@ -679,7 +679,9 @@ const Offers: React.FC = () => {
     const finalSelection = splitMeetupDateTime(trade.meetup_time || null)
     const buyerSelection = splitMeetupDateTime(trade.buyer_meetup_time || null)
     const sellerSelection = splitMeetupDateTime(trade.seller_meetup_time || null)
-    const location = trade.meetup_location || trade.buyer_meetup_location || trade.seller_meetup_location || trade.target_product_pickup_address || ''
+    const location = trade.meeting_type === 'pickup'
+      ? trade.target_product_pickup_address || trade.meetup_location || trade.buyer_meetup_location || trade.seller_meetup_location || ''
+      : trade.meetup_location || trade.buyer_meetup_location || trade.seller_meetup_location || ''
     const date = finalSelection.date || buyerSelection.date || sellerSelection.date || trade.meetup_date || ''
     const time = finalSelection.time || buyerSelection.time || sellerSelection.time || trade.meetup_time || ''
     return {

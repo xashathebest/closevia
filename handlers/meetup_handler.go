@@ -187,7 +187,7 @@ func (h *MeetupHandler) MarkArrived(c *fiber.Ctx) error {
 	if !meetupLat.Valid || !meetupLng.Valid {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Meetup coordinates are not set. Please re-confirm your meetup location."})
 	}
-	if err := validateArrivalLocation(req.UserLat, req.UserLng, req.LocationAccuracy, meetupLat.Float64, meetupLng.Float64); err != nil {
+	if err := validateArrivalLocation(req.UserLat, req.UserLng, req.LocationAccuracy, meetupLat.Float64, meetupLng.Float64, meetupConfirmRadiusMeters, "meetup point"); err != nil {
 		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": err.Error()})
 	}
 
