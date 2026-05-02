@@ -335,7 +335,7 @@ type Trade struct {
 	BuyerID         int         `json:"buyer_id"`
 	SellerID        int         `json:"seller_id"`
 	TargetProductID int         `json:"target_product_id"`
-	Status          string      `json:"status" validate:"oneof=pending accepted accepted_by_one accepted_by_both declined countered active ongoing awaiting_confirmation completed auto_completed cancelled cancelled_due_to_conflict expired broken history pending_multiway multiway_active"`
+	Status          string      `json:"status" validate:"oneof=pending accepted accepted_by_one accepted_by_both declined countered active ongoing awaiting_confirmation awaiting_other_party completed did_not_push_through under_review auto_completed cancelled cancelled_due_to_conflict expired broken history pending_multiway multiway_active"`
 	Message         string      `json:"message,omitempty"`
 	OfferedCash     *float64    `json:"offered_cash_amount,omitempty"`
 	CreatedAt       time.Time   `json:"created_at"`
@@ -449,11 +449,12 @@ type TradeReview struct {
 
 // TradeReviewCreate represents payload for submitting a review
 type TradeReviewCreate struct {
-	Rating        int    `json:"rating" validate:"required,min=1,max=5"`
-	Feedback      string `json:"feedback" validate:"required,min=1"`
-	ProofURL      string `json:"proof_url,omitempty"`
-	IsCameraPhoto bool   `json:"is_camera_photo"`
-	IsFollowup    bool   `json:"is_followup"` // true to submit as follow-up instead of initial
+	Rating            int    `json:"rating" validate:"required,min=1,max=5"`
+	Feedback          string `json:"feedback" validate:"required,min=1"`
+	ProofURL          string `json:"proof_url,omitempty"`
+	IsCameraPhoto     bool   `json:"is_camera_photo"`
+	IsFollowup        bool   `json:"is_followup"` // true to submit as follow-up instead of initial
+	CompletionOutcome string `json:"completion_outcome,omitempty"`
 }
 
 // TradeReviewUpdate represents updating a followup review (not initial)

@@ -12,6 +12,7 @@ import ViewTradeModal from '../components/ViewTradeModal'
 import AnimatedEmptyState from '../components/AnimatedEmptyState'
 import { motion, useReducedMotion } from 'framer-motion'
 import { motionDurations, motionEasings } from '../utils/motion'
+import { useRealtime } from '../contexts/RealtimeContext'
 
 const MotionBox = motion(Box)
 const OFFERS_TAB_TO_INDEX: Record<string, number> = {
@@ -49,6 +50,7 @@ const Offers: React.FC = () => {
   const [currentUserId, setCurrentUserId] = useState<number | undefined>()
   const [productTitles, setProductTitles] = useState<Map<number, string>>(new Map())
   const toast = useToast()
+  const { setRefreshCallback } = useRealtime()
   
   const bgColor = useColorModeValue('#FEFEFE', 'gray.900')
   const cardBg = useColorModeValue('#FDFDFD', 'gray.800')
@@ -68,8 +70,10 @@ const Offers: React.FC = () => {
       // Fetch product titles for all trades
       await fetchProductTitles([...incRes.data?.data || [], ...outRes.data?.data || []])
     } catch (e: any) {
-      toast({
-        id: "offers-error", title: 'Error', description: e?.response?.data?.error || 'Failed to load offers', status: 'error' })
+      if (!isBackground) {
+        toast({
+          id: "offers-error", title: 'Error', description: e?.response?.data?.error || 'Failed to load offers', status: 'error' })
+      }
     } finally {
       if (!isBackground) setLoading(false)
     }
@@ -149,13 +153,27 @@ const Offers: React.FC = () => {
       setCurrentUserId(parseInt(userId))
     }
 
-    // Set up real-time background polling every 5 seconds
+    // Polling fallback; realtime callbacks below handle immediate updates.
     const interval = setInterval(() => {
       fetchAll(true)
-    }, 5000)
+    }, 15000)
 
     return () => clearInterval(interval)
   }, [])
+
+  useEffect(() => {
+    const refreshOffers = () => { void fetchAll(true) }
+    setRefreshCallback('sentOffers', refreshOffers)
+    setRefreshCallback('receivedOffers', refreshOffers)
+    setRefreshCallback('ongoingTrades', refreshOffers)
+    setRefreshCallback('history', refreshOffers)
+    return () => {
+      setRefreshCallback('sentOffers', () => {})
+      setRefreshCallback('receivedOffers', () => {})
+      setRefreshCallback('ongoingTrades', () => {})
+      setRefreshCallback('history', () => {})
+    }
+  }, [setRefreshCallback])
 
   useEffect(() => {
     setActiveTab(getOffersTabIndex(searchParams.get('tab')))
@@ -341,9 +359,9 @@ const Offers: React.FC = () => {
   const incomingSorted = useMemo(() => sortList(incoming), [incoming, sort])
   const outgoingSorted = useMemo(() => sortList(outgoing), [outgoing, sort])
   // statuses that should be treated as "history"
-  const historyStatuses = ['declined', 'cancelled', 'completed', 'auto_completed', 'awaiting_other_party']
+  const historyStatuses = ['declined', 'cancelled', 'completed', 'did_not_push_through', 'auto_completed', 'awaiting_other_party']
   const archiveStatuses = ['expired']
-  const ongoingStatuses: Trade['status'][] = ['accepted', 'active', 'ongoing', 'awaiting_confirmation', 'multiway_active']
+  const ongoingStatuses: Trade['status'][] = ['accepted', 'active', 'ongoing', 'awaiting_confirmation', 'under_review', 'multiway_active']
   const isOngoingTrade = (trade: Trade) => ongoingStatuses.includes(trade.status)
 
   // visible lists for the two main tabs (exclude history and active/accepted items)

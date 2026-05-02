@@ -338,7 +338,7 @@ func CreateTables() error {
 			log.Printf("Migration: Added column %s to trade_like_loop_participants table", col)
 		}
 	}
-	_, _ = DB.Exec(`ALTER TABLE trade_like_loops MODIFY COLUMN status ENUM('pending','partially_accepted','accepted','confirmed','ongoing','completed','history','rejected','cancelled','cancelled_due_to_conflict','broken','expired') DEFAULT 'pending'`)
+	_, _ = DB.Exec(`ALTER TABLE trade_like_loops MODIFY COLUMN status ENUM('pending','partially_accepted','accepted','confirmed','ongoing','completed','did_not_push_through','history','rejected','cancelled','cancelled_due_to_conflict','broken','expired') DEFAULT 'pending'`)
 	_, _ = DB.Exec(`ALTER TABLE trade_like_loop_participants MODIFY COLUMN status ENUM('pending','confirmed','accepted','declined','rejected','cancelled','cancelled_due_to_conflict','expired') DEFAULT 'pending'`)
 
 	queries := []string{
@@ -557,11 +557,16 @@ func CreateTables() error {
 			buyer_id INT NOT NULL,
 			seller_id INT NOT NULL,
 			target_product_id INT NOT NULL,
-			status ENUM('pending','accepted','declined','countered','active','completed','cancelled') DEFAULT 'pending',
+			status ENUM('pending','accepted','declined','countered','active','awaiting_confirmation','completed','did_not_push_through','under_review','cancelled') DEFAULT 'pending',
 			message TEXT NULL,
 			offered_cash_amount DECIMAL(10,2) NULL,
 			buyer_completed BOOLEAN DEFAULT FALSE,
 			seller_completed BOOLEAN DEFAULT FALSE,
+			buyer_completion_outcome VARCHAR(32) NULL,
+			seller_completion_outcome VARCHAR(32) NULL,
+			buyer_completion_confirmed BOOLEAN DEFAULT FALSE,
+			seller_completion_confirmed BOOLEAN DEFAULT FALSE,
+			outcome_mismatch_at TIMESTAMP NULL,
 			completed_at TIMESTAMP NULL,
 			buyer_rating INT NULL,
 			seller_rating INT NULL,
@@ -769,7 +774,7 @@ func CreateTables() error {
 		`CREATE TABLE IF NOT EXISTS trade_like_loops (
 			id INT AUTO_INCREMENT PRIMARY KEY,
 			loop_key VARCHAR(255) NOT NULL,
-			status ENUM('pending', 'partially_accepted', 'accepted', 'confirmed', 'ongoing', 'completed', 'history', 'rejected', 'cancelled', 'cancelled_due_to_conflict', 'broken', 'expired') DEFAULT 'pending',
+			status ENUM('pending', 'partially_accepted', 'accepted', 'confirmed', 'ongoing', 'completed', 'did_not_push_through', 'history', 'rejected', 'cancelled', 'cancelled_due_to_conflict', 'broken', 'expired') DEFAULT 'pending',
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 			confirmed_at TIMESTAMP NULL,
@@ -1847,6 +1852,11 @@ func ensureTradeColumns() {
 		{"grace_period_minutes", "INT DEFAULT 10"},
 		{"buyer_photo_is_camera", "BOOLEAN DEFAULT FALSE"},
 		{"seller_photo_is_camera", "BOOLEAN DEFAULT FALSE"},
+		{"buyer_completion_outcome", "VARCHAR(32) NULL"},
+		{"seller_completion_outcome", "VARCHAR(32) NULL"},
+		{"buyer_completion_confirmed", "BOOLEAN DEFAULT FALSE"},
+		{"seller_completion_confirmed", "BOOLEAN DEFAULT FALSE"},
+		{"outcome_mismatch_at", "TIMESTAMP NULL"},
 		{"cancellation_reason", "VARCHAR(255) NULL"},
 		{"cancelled_by", "INT NULL"},
 		{"cancelled_at", "TIMESTAMP NULL"},
@@ -1894,7 +1904,10 @@ func ensureTradeColumns() {
 			"'accepted_by_one'",
 			"'accepted_by_both'",
 			"'ongoing'",
+			"'awaiting_other_party'",
 			"'cancelled_due_to_conflict'",
+			"'did_not_push_through'",
+			"'under_review'",
 			"'broken'",
 			"'history'",
 			"'pending_multiway'",
@@ -1908,7 +1921,7 @@ func ensureTradeColumns() {
 			}
 		}
 		if needsTradeStatusUpdate {
-			if _, err := DB.Exec(`ALTER TABLE trades MODIFY COLUMN status ENUM('pending','accepted','accepted_by_one','accepted_by_both','declined','countered','active','ongoing','awaiting_confirmation','completed','cancelled','cancelled_due_to_conflict','auto_completed','expired','broken','history','pending_multiway','multiway_active') DEFAULT 'pending'`); err != nil {
+			if _, err := DB.Exec(`ALTER TABLE trades MODIFY COLUMN status ENUM('pending','accepted','accepted_by_one','accepted_by_both','declined','countered','active','ongoing','awaiting_confirmation','awaiting_other_party','completed','did_not_push_through','under_review','cancelled','cancelled_due_to_conflict','auto_completed','expired','broken','history','pending_multiway','multiway_active') DEFAULT 'pending'`); err != nil {
 				log.Printf("Warning: failed to update trades status enum: %v", err)
 			} else {
 				log.Println("Updated trades status enum with lifecycle/conflict states")

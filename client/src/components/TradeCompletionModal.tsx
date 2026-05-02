@@ -11,21 +11,17 @@ import {
   HStack,
   Text,
   Button,
-  Avatar,
   Box,
   Textarea,
   useToast,
   Spinner,
-  Badge,
-  Divider,
   Icon,
   Flex,
-  Progress,
   Checkbox,
   useBreakpointValue
 } from '@chakra-ui/react'
 import { keyframes } from '@emotion/react'
-import { FaStar, FaHeart, FaThumbsUp, FaCheck, FaHandshake, FaImage } from 'react-icons/fa'
+import { FaStar, FaCheck, FaHandshake, FaImage } from 'react-icons/fa'
 import { Trade } from '../types'
 import { api } from '../services/api'
 
@@ -40,10 +36,17 @@ interface TradeCompletionModalProps {
 interface CompletionStatus {
   buyer_completed: boolean
   seller_completed: boolean
+  status?: 'awaiting_confirmation' | 'completed' | 'did_not_push_through' | 'under_review' | string
   buyer_rating?: number
   seller_rating?: number
   buyer_feedback?: string
   seller_feedback?: string
+  buyer_completion_outcome?: 'complete' | 'did_not_push_through' | ''
+  seller_completion_outcome?: 'complete' | 'did_not_push_through' | ''
+  buyer_completion_confirmed?: boolean
+  seller_completion_confirmed?: boolean
+  requires_outcome_confirmation?: boolean
+  outcome_mismatch?: boolean
 }
 
 const fadeInAnimation = keyframes`
@@ -64,62 +67,26 @@ const TradeCompletionModal: React.FC<TradeCompletionModalProps> = ({
   const [feedback, setFeedback] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [hasSubmitted, setHasSubmitted] = useState(false)
-  const [showCelebration, setShowCelebration] = useState(false)
   const [policyAgreed, setPolicyAgreed] = useState(false)
   const [showFinishButton, setShowFinishButton] = useState(false)
   const [showConfirmationModal, setShowConfirmationModal] = useState(false)
   const [transactionProof, setTransactionProof] = useState<string | null>(null)
   const [uploadingImage, setUploadingImage] = useState(false)
   const fileInputRef = React.useRef<HTMLInputElement>(null)
+  const hasEditedReviewRef = React.useRef(false)
   const toast = useToast()
   
   // Responsive modal sizing for mobile vs desktop
   const modalSize = useBreakpointValue({ base: 'sm', sm: 'md', md: 'lg', lg: 'xl' })
   const modalMaxH = useBreakpointValue({ base: '90vh', md: '85vh' })
-  const userProfileSpacing = useBreakpointValue({ base: 4, md: 8 })
 
   const isUserBuyer = trade && currentUserId === trade.buyer_id
   const isUserSeller = trade && currentUserId === trade.seller_id
   const isPhotoMandatory = trade?.trade_option === 'meetup' || trade?.trade_option === 'delivery'
 
-  // Determine if this is a buyout (no items, only cash) vs regular trade
-  const isBuyout = !!((!trade?.items || trade.items.length === 0) && 
-           (trade?.offered_cash_amount && trade.offered_cash_amount > 0))
-
-  // Get role labels based on transaction type
-  const buyerLabel = isBuyout ? 'Buyer' : 'Trader 1'
-  const sellerLabel = isBuyout ? 'Seller' : 'Trader 2'
-
-  const fetchCompletionStatus = async () => {
-    if (!trade) return
-
-    try {
-      setLoading(true)
-      const response = await api.get(`/api/trades/${trade.id}/completion-status`)
-      setStatus(response.data.data)
-
-      // Check if current user has already submitted
-      if (isUserBuyer && response.data.data.buyer_completed) {
-        setHasSubmitted(true)
-        setRating(response.data.data.buyer_rating || 0)
-        setFeedback(response.data.data.buyer_feedback || '')
-      } else if (isUserSeller && response.data.data.seller_completed) {
-        setHasSubmitted(true)
-        setRating(response.data.data.seller_rating || 0)
-        setFeedback(response.data.data.seller_feedback || '')
-      }
-
-      // Check if both completed for celebration
-      if (response.data.data.buyer_completed && response.data.data.seller_completed) {
-        setShowCelebration(true)
-        setShowFinishButton(true)
-      }
-    } catch (error) {
-      console.error('Failed to fetch completion status:', error)
-    } finally {
-      setLoading(false)
-    }
-  }
+  useEffect(() => {
+    hasEditedReviewRef.current = false
+  }, [trade?.id, isOpen])
 
   useEffect(() => {
     let isMounted = true
@@ -134,20 +101,23 @@ const TradeCompletionModal: React.FC<TradeCompletionModalProps> = ({
           
           setStatus(response.data.data)
 
-          // Check if current user has already submitted
-          if (isUserBuyer && response.data.data.buyer_completed) {
-            setHasSubmitted(true)
-            setRating(response.data.data.buyer_rating || 0)
-            setFeedback(response.data.data.buyer_feedback || '')
-          } else if (isUserSeller && response.data.data.seller_completed) {
-            setHasSubmitted(true)
-            setRating(response.data.data.seller_rating || 0)
-            setFeedback(response.data.data.seller_feedback || '')
+          const userAlreadySubmitted =
+            (currentUserId === trade.buyer_id && response.data.data.buyer_completed) ||
+            (currentUserId === trade.seller_id && response.data.data.seller_completed)
+
+          setHasSubmitted(userAlreadySubmitted && !response.data.data.requires_outcome_confirmation)
+
+          if (!hasEditedReviewRef.current) {
+            if (currentUserId === trade.buyer_id && response.data.data.buyer_completed) {
+              setRating(response.data.data.buyer_rating || 0)
+              setFeedback(response.data.data.buyer_feedback || '')
+            } else if (currentUserId === trade.seller_id && response.data.data.seller_completed) {
+              setRating(response.data.data.seller_rating || 0)
+              setFeedback(response.data.data.seller_feedback || '')
+            }
           }
 
-          // Check if both completed for celebration
-          if (response.data.data.buyer_completed && response.data.data.seller_completed) {
-            setShowCelebration(true)
+          if (response.data.data.status === 'completed') {
             setShowFinishButton(true)
           }
         } catch (error) {
@@ -165,9 +135,18 @@ const TradeCompletionModal: React.FC<TradeCompletionModalProps> = ({
     return () => {
       isMounted = false
     }
-  }, [trade, isOpen])
+  }, [trade?.id, currentUserId, isOpen])
 
   const handleSubmitCompletion = () => {
+    if (!rating) {
+      toast({
+        id: 'tradecompletionmodal-rating-required',
+        title: 'Please add a rating',
+        description: 'Choose a star rating before submitting your review.',
+        status: 'warning',
+      })
+      return
+    }
     if (!policyAgreed) {
       toast({
         id: 'tradecompletionmodal-policy-required',
@@ -181,9 +160,72 @@ const TradeCompletionModal: React.FC<TradeCompletionModalProps> = ({
     setShowConfirmationModal(true)
   }
 
+  const handleDidNotPushThrough = async () => {
+    if (!trade) return
+    if (!rating) {
+      toast({
+        id: 'tradecompletionmodal-backup-rating-required',
+        title: 'Please add a rating',
+        description: 'Choose a star rating before saving this outcome.',
+        status: 'warning',
+      })
+      return
+    }
+    if (!feedback.trim()) {
+      toast({
+        id: 'tradecompletionmodal-backup-feedback-required',
+        title: 'Please leave feedback',
+        description: 'Add a short note about why the trade did not push through.',
+        status: 'warning',
+      })
+      return
+    }
+
+    try {
+      setSubmitting(true)
+      const submitRes = await api.put(`/api/trades/${trade.id}/complete`, {
+        rating,
+        feedback: feedback.trim(),
+        transaction_proof_url: transactionProof || '',
+        is_camera_photo: !!transactionProof,
+        completion_outcome: 'did_not_push_through',
+      })
+
+      const updatedRes = await api.get(`/api/trades/${trade.id}/completion-status`)
+      const updatedStatus = updatedRes.data.data
+      setStatus(updatedStatus)
+      const needsConfirmation = !!updatedStatus.requires_outcome_confirmation || !!submitRes.data?.data?.requires_outcome_confirmation
+      setHasSubmitted(!needsConfirmation)
+
+      toast({
+        id: 'tradecompletionmodal-did-not-push-through',
+        title: needsConfirmation ? 'Confirm final outcome' : "Trade didn't push through",
+        description: needsConfirmation
+          ? 'Your trade partner selected a different outcome. Please confirm your final decision.'
+          : 'You met or reviewed the trade, but decided not to continue. No penalty was applied.',
+        status: needsConfirmation ? 'warning' : 'info',
+        duration: 3500,
+      })
+      if (!needsConfirmation) {
+        onCompleted()
+        onClose()
+      }
+    } catch (error: any) {
+      toast({
+        id: 'tradecompletionmodal-backup-error',
+        title: 'Error',
+        description: error?.response?.data?.error || 'Failed to save this trade outcome',
+        status: 'error',
+      })
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
+    hasEditedReviewRef.current = true
 
     // Validate file type
     if (!file.type.startsWith('image/')) {
@@ -268,23 +310,37 @@ const TradeCompletionModal: React.FC<TradeCompletionModalProps> = ({
         feedback: feedback.trim(),
         transaction_proof_url: transactionProof || '',
         is_camera_photo: !!transactionProof,
+        completion_outcome: 'complete',
       })
 
       setHasSubmitted(true)
-      toast({
-        id: "tradecompletionmodal-trade-completion-submitted",
-        title: 'Trade completion submitted!',
-        description: 'Waiting for the other party to confirm...',
-        status: 'success',
-        duration: 3000
-      })
 
       const updatedRes = await api.get(`/api/trades/${trade.id}/completion-status`)
       const updatedStatus = updatedRes.data.data
       setStatus(updatedStatus)
+      const needsConfirmation = !!updatedStatus.requires_outcome_confirmation
 
-      if (updatedStatus.buyer_completed && updatedStatus.seller_completed) {
-        setShowCelebration(true)
+      setHasSubmitted(!needsConfirmation)
+
+      if (needsConfirmation) {
+        toast({
+          id: 'tradecompletionmodal-outcome-mismatch',
+          title: 'Confirm final outcome',
+          description: 'Your trade partner selected a different outcome. Please confirm your final decision.',
+          status: 'warning',
+          duration: 4000,
+        })
+      } else {
+        toast({
+          id: "tradecompletionmodal-trade-completion-submitted",
+          title: 'Trade completion submitted!',
+          description: 'Waiting for the other party to confirm...',
+          status: 'success',
+          duration: 3000
+        })
+      }
+
+      if (updatedStatus.status === 'completed') {
         setShowFinishButton(true)
         onCompleted()
       }
@@ -313,7 +369,10 @@ const TradeCompletionModal: React.FC<TradeCompletionModalProps> = ({
           as={FaStar}
           color={star <= currentRating ? 'yellow.400' : 'gray.300'}
           cursor={onRate ? 'pointer' : 'default'}
-          onClick={() => onRate?.(star)}
+          onClick={() => {
+            hasEditedReviewRef.current = true
+            onRate?.(star)
+          }}
           _hover={onRate ? { transform: 'scale(1.1)' } : {}}
           transition="all 0.2s"
         />
@@ -321,50 +380,11 @@ const TradeCompletionModal: React.FC<TradeCompletionModalProps> = ({
     </HStack>
   )
 
-  const renderUserProfile = (
-    name: string,
-    userId: number,
-    isCurrentUser: boolean,
-    hasCompleted: boolean,
-    userRating?: number
-  ) => (
-    <VStack spacing={3} flex={1} align="center">
-      <Box position="relative">
-        <Avatar
-          size="lg"
-          name={name}
-          bg={isCurrentUser ? 'brand.500' : 'gray.500'}
-          color="white"
-        />
-        {hasCompleted && (
-          <Box
-            position="absolute"
-            bottom={0}
-            right={0}
-            bg="green.500"
-            borderRadius="full"
-            p={1}
-          >
-            <Icon as={FaCheck} color="white" boxSize={3} />
-          </Box>
-        )}
-      </Box>
-
-      <VStack spacing={1} align="center">
-        <Text fontWeight="bold" fontSize="lg">
-          {name} {isCurrentUser && '(You)'}
-        </Text>
-        {userRating && userRating > 0 && (
-          <HStack>
-            <Text fontSize="sm" color="gray.600">Rating:</Text>
-            {renderRatingStars(userRating)}
-          </HStack>
-        )}
-      </VStack>
-    </VStack>
-  )
-
-  const bothCompleted = status?.buyer_completed && status?.seller_completed
+  const requiresOutcomeConfirmation = !!status?.requires_outcome_confirmation
+  const isDidNotPushThrough = status?.status === 'did_not_push_through'
+  const isUnderReview = status?.status === 'under_review'
+  const bothCompleted = status?.status === 'completed'
+  const canSubmitOutcome = !hasSubmitted || requiresOutcomeConfirmation
 
   if (!trade) return null
 
@@ -387,55 +407,19 @@ const TradeCompletionModal: React.FC<TradeCompletionModalProps> = ({
           </ModalHeader>
           <ModalCloseButton color="gray.600" />
 
-          <ModalBody flex="1" overflowY="auto" px={{ base: 3, md: 6 }} py={{ base: 3, md: 2 }}>
+          <ModalBody
+            flex="1"
+            overflowY="auto"
+            px={{ base: 3, md: 6 }}
+            pt={{ base: 3, md: 2 }}
+            pb={{ base: 'calc(env(safe-area-inset-bottom, 0px) + 164px)', md: 4 }}
+          >
             {loading ? (
               <Flex justify="center" align="center" py={8} w="full">
                 <Spinner size="lg" color="brand.500" />
               </Flex>
             ) : (
-              <VStack spacing={6} w="full" maxW={{ base: '100%', md: '500px' }}>
-                {/* Progress Indicator */}
-                <Box w="full">
-                  <Text fontSize="sm" color="gray.600" mb={2} textAlign="center">
-                    Completion Progress
-                  </Text>
-                  <Progress
-                    value={
-                      status?.buyer_completed && status?.seller_completed ? 100 :
-                        (status?.buyer_completed || status?.seller_completed) ? 50 : 0
-                    }
-                    colorScheme="green"
-                    borderRadius="full"
-                    bg="gray.100"
-                  />
-                </Box>
-
-                {/* User Profiles - Responsive layout */}
-                <Flex flexDirection={{ base: 'column', md: 'row' }} w="full" justify="center" gap={{ base: 4, md: 8 }} align="center">
-                  {renderUserProfile(
-                    trade.buyer_name || `User #${trade.buyer_id}`,
-                    trade.buyer_id,
-                    !!isUserBuyer,
-                    !!(status?.buyer_completed),
-                    status?.buyer_rating
-                  )}
-                  <Icon
-                    as={FaHandshake}
-                    color={bothCompleted ? 'green.500' : 'gray.400'}
-                    boxSize={{ base: 6, md: 8 }}
-                  />
-                  {renderUserProfile(
-                    trade.seller_name || `User #${trade.seller_id}`,
-                    trade.seller_id,
-                    !!isUserSeller,
-                    !!(status?.seller_completed),
-                    status?.seller_rating
-                  )}
-                </Flex>
-
-                <Divider />
-
-                {/* Completion Form or Status */}
+              <VStack spacing={5} w="full" maxW={{ base: '100%', md: '500px' }}>
                 {bothCompleted ? (
                   <VStack spacing={4} w="full">
                     <Box
@@ -457,33 +441,51 @@ const TradeCompletionModal: React.FC<TradeCompletionModalProps> = ({
                       </Text>
                     </Box>
 
-                    {/* Show feedback if available */}
-                    {(status?.buyer_feedback || status?.seller_feedback) && (
-                      <VStack spacing={3} w="full">
-                        <Text fontWeight="semibold">Feedback:</Text>
-                        {status?.buyer_feedback && (
-                          <Box bg="gray.50" p={3} borderRadius="md" w="full">
-                            <Text fontSize="sm" fontWeight="medium" color="gray.700">
-                              From {trade.buyer_name || `User #${trade.buyer_id}`}:
-                            </Text>
-                            <Text fontSize="sm" color="gray.600" mt={1}>
-                              "{status.buyer_feedback}"
-                            </Text>
-                          </Box>
-                        )}
-                        {status?.seller_feedback && (
-                          <Box bg="gray.50" p={3} borderRadius="md" w="full">
-                            <Text fontSize="sm" fontWeight="medium" color="gray.700">
-                              From {trade.seller_name || `User #${trade.seller_id}`}:
-                            </Text>
-                            <Text fontSize="sm" color="gray.600" mt={1}>
-                              "{status.seller_feedback}"
-                            </Text>
-                          </Box>
-                        )}
-                      </VStack>
+                    {((isUserBuyer && status?.buyer_feedback) || (isUserSeller && status?.seller_feedback)) && (
+                      <Box bg="gray.50" p={3} borderRadius="md" w="full">
+                        <Text fontSize="sm" fontWeight="medium" color="gray.700">
+                          Your feedback
+                        </Text>
+                        <Text fontSize="sm" color="gray.600" mt={1}>
+                          "{isUserBuyer ? status?.buyer_feedback : status?.seller_feedback}"
+                        </Text>
+                      </Box>
                     )}
                   </VStack>
+                ) : isDidNotPushThrough ? (
+                  <Box
+                    bg="gray.50"
+                    border="1px solid"
+                    borderColor="gray.200"
+                    borderRadius="lg"
+                    p={4}
+                    w="full"
+                    textAlign="center"
+                  >
+                    <Text fontWeight="bold" color="gray.700">
+                      Trade didn't push through
+                    </Text>
+                    <Text color="gray.600" fontSize="sm" mt={1}>
+                      You met or reviewed the trade, but decided not to continue. No penalty was applied.
+                    </Text>
+                  </Box>
+                ) : isUnderReview ? (
+                  <Box
+                    bg="orange.50"
+                    border="1px solid"
+                    borderColor="orange.200"
+                    borderRadius="lg"
+                    p={4}
+                    w="full"
+                    textAlign="center"
+                  >
+                    <Text fontWeight="bold" color="orange.700">
+                      Under Review
+                    </Text>
+                    <Text color="orange.600" fontSize="sm" mt={1}>
+                      Your outcomes still do not match. The trade is locked for admin review.
+                    </Text>
+                  </Box>
                 ) : hasSubmitted ? (
                   <Box
                     bg="blue.50"
@@ -504,8 +506,34 @@ const TradeCompletionModal: React.FC<TradeCompletionModalProps> = ({
                   </Box>
                 ) : (
                   <VStack spacing={4} w="full">
+                    {requiresOutcomeConfirmation && (
+                      <Box
+                        bg="orange.50"
+                        border="1px solid"
+                        borderColor="orange.200"
+                        borderRadius="lg"
+                        p={3}
+                        w="full"
+                      >
+                        <Text fontSize="sm" color="orange.800" fontWeight="600">
+                          Your trade partner selected a different outcome. Please confirm your final decision.
+                        </Text>
+                      </Box>
+                    )}
+                    <Box
+                      bg="green.50"
+                      border="1px solid"
+                      borderColor="green.200"
+                      borderRadius="lg"
+                      p={3}
+                      w="full"
+                    >
+                      <Text fontSize="sm" color="green.800" fontWeight="600">
+                        Arrival confirmed. You can now check each other's items. If everything looks good, leave a review and complete the trade.
+                      </Text>
+                    </Box>
                     <Text fontWeight="semibold" textAlign="center">
-                      Please rate your experience and confirm completion
+                      Leave your review
                     </Text>
 
                     {/* Upload Transaction Photo — compact pill (never expands modal) */}
@@ -605,7 +633,10 @@ const TradeCompletionModal: React.FC<TradeCompletionModalProps> = ({
                       </Text>
                       <Textarea
                         value={feedback}
-                        onChange={(e) => setFeedback(e.target.value)}
+                        onChange={(e) => {
+                          hasEditedReviewRef.current = true
+                          setFeedback(e.target.value)
+                        }}
                         placeholder="Share your experience with this trade..."
                         resize="none"
                         rows={3}
@@ -621,8 +652,24 @@ const TradeCompletionModal: React.FC<TradeCompletionModalProps> = ({
           </ModalBody>
 
           {/* Sticky footer — always visible, contains the main action button */}
-          {!loading && !bothCompleted && !hasSubmitted && (
-            <ModalFooter borderTopWidth="1px" borderColor="gray.100" flexDirection="column" gap={{ base: 1.5, md: 2 }} pt={{ base: 2, md: 3 }} pb={{ base: 3, md: 4 }} px={{ base: 3, md: 6 }}>
+          {!loading && !bothCompleted && !isDidNotPushThrough && !isUnderReview && canSubmitOutcome && (
+            <ModalFooter
+              borderTopWidth="1px"
+              borderColor="gray.100"
+              flexDirection="column"
+              gap={{ base: 1.5, md: 2 }}
+              pt={{ base: 2, md: 3 }}
+              pb={{ base: 'calc(env(safe-area-inset-bottom, 0px) + 12px)', md: 4 }}
+              px={{ base: 3, md: 6 }}
+              bg="white"
+              position="sticky"
+              bottom={0}
+              zIndex={2}
+              shadow="0 -10px 28px rgba(15, 23, 42, 0.08)"
+            >
+              <Text fontSize="xs" color="gray.600" textAlign="left" w="full">
+                After meeting, check each other's items first. If everything looks good, complete the trade. If not, you can mark it as didn't push through and still leave feedback.
+              </Text>
               <HStack spacing={{ base: 2, md: 3 }} justify="center" align="start" w="full">
                 <Checkbox
                   isChecked={policyAgreed}
@@ -646,12 +693,34 @@ const TradeCompletionModal: React.FC<TradeCompletionModalProps> = ({
                 isDisabled={uploadingImage}
                 mt={{ base: 2, md: 4 }}
               >
-                Leave a Review and Complete Trade
+                {requiresOutcomeConfirmation ? 'Confirm Complete Trade' : 'Leave a Review and Complete Trade'}
+              </Button>
+              <Button
+                colorScheme="gray"
+                variant="outline"
+                size="md"
+                w="full"
+                onClick={handleDidNotPushThrough}
+                isLoading={submitting}
+                loadingText="Saving..."
+                isDisabled={uploadingImage}
+              >
+                {requiresOutcomeConfirmation ? "Confirm Didn't Push Through" : "Trade didn't push through"}
               </Button>
             </ModalFooter>
           )}
           {!loading && bothCompleted && showFinishButton && (
-            <ModalFooter borderTopWidth="1px" borderColor="gray.100" pt={3} pb={4}>
+            <ModalFooter
+              borderTopWidth="1px"
+              borderColor="gray.100"
+              pt={3}
+              pb={{ base: 'calc(env(safe-area-inset-bottom, 0px) + 12px)', md: 4 }}
+              bg="white"
+              position="sticky"
+              bottom={0}
+              zIndex={2}
+              shadow="0 -10px 28px rgba(15, 23, 42, 0.08)"
+            >
               <Button
                 colorScheme="blue"
                 size="lg"

@@ -203,7 +203,7 @@ export const useOngoingTrades = (options: DashboardQueryOptions = {}) => {
         return Array.isArray(response?.data?.data) ? response.data.data : (Array.isArray(response?.data) ? response.data : [])
       }
 
-      const ongoingStatuses = new Set(['accepted', 'active', 'ongoing', 'awaiting_confirmation', 'multiway_active'])
+      const ongoingStatuses = new Set(['accepted', 'active', 'ongoing', 'awaiting_confirmation', 'under_review', 'multiway_active'])
       const allTrades = extractData(response).filter((trade: Trade) => ongoingStatuses.has(trade.status))
 
       const uniqueTrades = new Map<string | number, Trade>()
@@ -291,17 +291,27 @@ export const useTradeHistory = (options: DashboardQueryOptions = {}) => {
   return useQuery({
     queryKey: DASHBOARD_QUERY_KEYS.tradeHistory,
     queryFn: async (): Promise<Trade[]> => {
-      const [tradesRes, completedLoopsRes, cancelledLoopsRes] = await Promise.all([
+      const [completedTradesRes, didNotPushThroughRes, completedLoopsRes, didNotPushThroughLoopsRes, cancelledLoopsRes] = await Promise.all([
         api.get('/api/trades', {
           params: { status: 'completed', include: 'products', limit: 100 }
         }),
+        api.get('/api/trades', {
+          params: { status: 'did_not_push_through', include: 'products', limit: 100 }
+        }).catch(() => ({ data: { data: [] } })),
         api.get('/api/trades/loops', { params: { status: 'completed' } }).catch(() => ({ data: { data: [] } })),
+        api.get('/api/trades/loops', { params: { status: 'did_not_push_through' } }).catch(() => ({ data: { data: [] } })),
         api.get('/api/trades/loops', { params: { status: 'cancelled' } }).catch(() => ({ data: { data: [] } })),
       ])
 
-      const trades: Trade[] = Array.isArray(tradesRes.data?.data)
-        ? tradesRes.data.data
-        : (Array.isArray(tradesRes.data) ? tradesRes.data : [])
+      const extractTrades = (response: any): Trade[] => (
+        Array.isArray(response?.data?.data)
+          ? response.data.data
+          : (Array.isArray(response?.data) ? response.data : [])
+      )
+      const trades: Trade[] = [
+        ...extractTrades(completedTradesRes),
+        ...extractTrades(didNotPushThroughRes),
+      ]
 
       const completedLoops: any[] = Array.isArray(completedLoopsRes.data?.data)
         ? completedLoopsRes.data.data
@@ -309,7 +319,10 @@ export const useTradeHistory = (options: DashboardQueryOptions = {}) => {
       const cancelledLoops: any[] = Array.isArray(cancelledLoopsRes.data?.data)
         ? cancelledLoopsRes.data.data
         : (Array.isArray(cancelledLoopsRes.data) ? cancelledLoopsRes.data : [])
-      const loops: any[] = [...completedLoops, ...cancelledLoops]
+      const didNotPushThroughLoops: any[] = Array.isArray(didNotPushThroughLoopsRes.data?.data)
+        ? didNotPushThroughLoopsRes.data.data
+        : (Array.isArray(didNotPushThroughLoopsRes.data) ? didNotPushThroughLoopsRes.data : [])
+      const loops: any[] = [...completedLoops, ...didNotPushThroughLoops, ...cancelledLoops]
 
       // Resolve the current user's ID so we can shape each loop from their perspective.
       let storedUserId = Number(localStorage.getItem('userId') || 0)
@@ -326,12 +339,19 @@ export const useTradeHistory = (options: DashboardQueryOptions = {}) => {
         const me = participants.find((p: any) => Number(p?.user_id ?? p?.id) === storedUserId)
         const loopStatus = String(loop?.status || '').toLowerCase()
         const isClosedIncomplete = ['rejected', 'cancelled', 'cancelled_due_to_conflict', 'broken', 'expired', 'user3_declined'].includes(loopStatus)
-        if (!me || (!me?.is_reviewed && !isClosedIncomplete)) return []
+        const isDidNotPushThrough = loopStatus === 'did_not_push_through'
+        if (!me || (!me?.is_reviewed && !isClosedIncomplete && !isDidNotPushThrough)) return []
         // Partner = who received my offered product (i.e. who wanted it).
         const partner = participants.find((p: any) => Number(p?.wanted_product_id) === Number(me?.product_id)) || participants.find((p: any) => Number(p?.user_id ?? p?.id) !== storedUserId) || {}
         const completedAt: string = loop?.completed_at || loop?.updated_at || new Date().toISOString()
+        const offeredProductId = Number(me?.product_id || me?.offered_product_id || 0)
+        const wantedProductId = Number(me?.wanted_product_id || partner?.product_id || 0)
+        const offeredTitle = String(me?.product_title || me?.offered_title || 'Item unavailable')
+        const wantedTitle = String(me?.wanted_title || partner?.product_title || 'Item unavailable')
         const syntheticStatus = isClosedIncomplete
           ? (loopStatus === 'expired' || loopStatus === 'broken' ? 'expired' : 'cancelled')
+          : isDidNotPushThrough
+          ? 'did_not_push_through'
           : 'completed'
 
         return [{
@@ -339,10 +359,9 @@ export const useTradeHistory = (options: DashboardQueryOptions = {}) => {
           id: -Number(loop?.id || 0),
           buyer_id: Number(me?.user_id || storedUserId),
           seller_id: Number(partner?.user_id || 0),
-          // "You received" = the product you wanted (and got)
-          target_product_id: Number(me?.wanted_product_id || 0),
-          product_title: String(me?.wanted_title || ''),
-          product_image_url: String(partner?.product_image_url || ''),
+          target_product_id: offeredProductId || wantedProductId,
+          product_title: offeredTitle,
+          product_image_url: String(me?.product_image_url || partner?.product_image_url || ''),
           status: syntheticStatus,
           created_at: completedAt,
           updated_at: completedAt,
@@ -359,6 +378,8 @@ export const useTradeHistory = (options: DashboardQueryOptions = {}) => {
             chain_id: loop?.chain_id,
             loop_type: loop?.loop_type,
             loop_length: loop?.loop_length,
+            received_product_id: wantedProductId,
+            received_title: wantedTitle,
             is_trade_loop: true,
             is_multiway: true,
             participants,
@@ -378,7 +399,10 @@ export const useTradeHistory = (options: DashboardQueryOptions = {}) => {
       return Array.from(unique.values())
     },
     enabled: options.enabled ?? true,
-    staleTime: 1000 * 60 * 5, // 5 minutes (completed trades don't change)
+    staleTime: 1000 * 15,
+    refetchOnMount: true,
+    refetchOnWindowFocus: true,
+    refetchInterval: options.refetchInterval ?? false,
     placeholderData: keepPreviousData,
   })
 }

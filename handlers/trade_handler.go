@@ -1145,7 +1145,7 @@ func (h *TradeHandler) createLikeLoop(participants []likeParticipant) (int, bool
 	err = tx.QueryRow("SELECT id, status FROM trade_like_loops WHERE loop_key = ? FOR UPDATE", loopKey).Scan(&existingID, &existingStatus)
 	if err == nil {
 		switch existingStatus {
-		case "rejected", "cancelled", "cancelled_due_to_conflict", "broken", "expired":
+		case "rejected", "cancelled", "cancelled_due_to_conflict", "did_not_push_through", "broken", "expired":
 			if _, err := tx.Exec(`
 				UPDATE trade_like_loops
 				SET status = 'pending',
@@ -4849,7 +4849,7 @@ func (h *TradeHandler) GetUserTradeHistory(c *fiber.Ctx) error {
 		JOIN users us ON us.id = t.seller_id
 		LEFT JOIN products p ON p.id = t.target_product_id
 		WHERE (t.buyer_id = ? OR t.seller_id = ?)
-		  AND t.status IN ('pending', 'pending_multiway', 'accepted', 'accepted_by_one', 'accepted_by_both', 'countered', 'active', 'ongoing', 'awaiting_confirmation', 'multiway_active', 'completed', 'auto_completed', 'cancelled', 'cancelled_due_to_conflict', 'declined', 'rejected', 'expired', 'broken')
+		  AND t.status IN ('pending', 'pending_multiway', 'accepted', 'accepted_by_one', 'accepted_by_both', 'countered', 'active', 'ongoing', 'awaiting_confirmation', 'under_review', 'multiway_active', 'completed', 'did_not_push_through', 'auto_completed', 'cancelled', 'cancelled_due_to_conflict', 'declined', 'rejected', 'expired', 'broken')
 		ORDER BY COALESCE(t.completed_at, t.updated_at, t.created_at) DESC
 		LIMIT 100
 	`
@@ -5765,12 +5765,13 @@ func (h *TradeHandler) CompleteTrade(c *fiber.Ctx) error {
 	}
 
 	var payload struct {
-		Rating          int    `json:"rating"`
-		Feedback        string `json:"feedback"`
-		ProofURL        string `json:"transaction_proof_url,omitempty"`
-		IsCameraPhoto   bool   `json:"is_camera_photo"`
-		InstantComplete bool   `json:"instant_complete"`
-		LoopID          string `json:"loop_id,omitempty"`
+		Rating            int    `json:"rating"`
+		Feedback          string `json:"feedback"`
+		ProofURL          string `json:"transaction_proof_url,omitempty"`
+		IsCameraPhoto     bool   `json:"is_camera_photo"`
+		InstantComplete   bool   `json:"instant_complete"`
+		LoopID            string `json:"loop_id,omitempty"`
+		CompletionOutcome string `json:"completion_outcome,omitempty"`
 	}
 	if err := c.BodyParser(&payload); err != nil {
 		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "Invalid request body"})
@@ -5778,8 +5779,8 @@ func (h *TradeHandler) CompleteTrade(c *fiber.Ctx) error {
 
 	// Fetch trade details
 	var buyerID, sellerID int
-	var tradeOption string
-	err = h.db.QueryRow("SELECT buyer_id, seller_id, COALESCE(trade_option, 'meetup') FROM trades WHERE id = ?", tradeID).Scan(&buyerID, &sellerID, &tradeOption)
+	var tradeOption, currentStatus string
+	err = h.db.QueryRow("SELECT buyer_id, seller_id, COALESCE(trade_option, 'meetup'), COALESCE(status, '') FROM trades WHERE id = ?", tradeID).Scan(&buyerID, &sellerID, &tradeOption, &currentStatus)
 	if err != nil {
 		return c.Status(404).JSON(models.APIResponse{Success: false, Error: "Trade not found"})
 	}
@@ -5892,13 +5893,24 @@ func (h *TradeHandler) CompleteTrade(c *fiber.Ctx) error {
 
 	// === STANDARD REVIEW-BASED COMPLETION ===
 
+	completionOutcome := strings.TrimSpace(payload.CompletionOutcome)
+	if completionOutcome == "" {
+		completionOutcome = "complete"
+	}
+	if completionOutcome != "complete" && completionOutcome != "did_not_push_through" {
+		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "Invalid trade completion outcome"})
+	}
+	if currentStatus == "completed" || currentStatus == "did_not_push_through" || currentStatus == "under_review" {
+		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "This trade outcome has already been resolved"})
+	}
+
 	// Validate rating
 	if payload.Rating < 1 || payload.Rating > 5 {
 		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "Rating must be between 1 and 5"})
 	}
 
 	// Enforce photo evidence rule for meetup and delivery
-	if tradeOption == "meetup" || tradeOption == "delivery" {
+	if completionOutcome != "did_not_push_through" && (tradeOption == "meetup" || tradeOption == "delivery") {
 		if payload.ProofURL == "" {
 			return c.Status(400).JSON(models.APIResponse{Success: false, Error: "Photo evidence is mandatory for " + tradeOption + " trades"})
 		}
@@ -5908,64 +5920,215 @@ func (h *TradeHandler) CompleteTrade(c *fiber.Ctx) error {
 	}
 
 	// Determine which columns to update based on user role
-	var ratingColumn, feedbackColumn, proofColumn, cameraFlagColumn, completedColumn string
+	var ratingColumn, feedbackColumn, proofColumn, cameraFlagColumn, completedColumn, outcomeColumn, confirmedColumn string
 	if userID == buyerID {
 		ratingColumn = "buyer_rating"
 		feedbackColumn = "buyer_feedback"
 		proofColumn = "buyer_proof_url"
 		cameraFlagColumn = "buyer_photo_is_camera"
 		completedColumn = "buyer_completed"
+		outcomeColumn = "buyer_completion_outcome"
+		confirmedColumn = "buyer_completion_confirmed"
 	} else {
 		ratingColumn = "seller_rating"
 		feedbackColumn = "seller_feedback"
 		proofColumn = "seller_proof_url"
 		cameraFlagColumn = "seller_photo_is_camera"
 		completedColumn = "seller_completed"
+		outcomeColumn = "seller_completion_outcome"
+		confirmedColumn = "seller_completion_confirmed"
 	}
 
-	// Update the trade with rating, feedback, proof, camera flag, and completion status
+	feedback := strings.TrimSpace(payload.Feedback)
+	if completionOutcome == "did_not_push_through" && feedback == "" {
+		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "Feedback is required when a trade did not push through"})
+	}
+
+	var buyerCompleted, sellerCompleted bool
+	var buyerRating, sellerRating sql.NullInt64
+	var buyerOutcome, sellerOutcome, lockedStatus sql.NullString
+	var buyerConfirmed, sellerConfirmed bool
+
+	tx, err := h.db.Begin()
+	if err != nil {
+		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Transaction failed"})
+	}
+	defer tx.Rollback()
+
+	err = tx.QueryRow(`
+		SELECT buyer_completed, seller_completed, buyer_rating, seller_rating,
+		       buyer_completion_outcome, seller_completion_outcome,
+		       buyer_completion_confirmed, seller_completion_confirmed,
+		       COALESCE(status, '')
+		FROM trades WHERE id = ? FOR UPDATE`, tradeID).Scan(
+		&buyerCompleted, &sellerCompleted, &buyerRating, &sellerRating,
+		&buyerOutcome, &sellerOutcome, &buyerConfirmed, &sellerConfirmed, &lockedStatus)
+	if err != nil {
+		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to lock trade completion status"})
+	}
+
+	existingBuyerOutcome := strings.TrimSpace(buyerOutcome.String)
+	existingSellerOutcome := strings.TrimSpace(sellerOutcome.String)
+	isMismatchConfirmation := buyerCompleted && sellerCompleted &&
+		existingBuyerOutcome != "" && existingSellerOutcome != "" &&
+		existingBuyerOutcome != existingSellerOutcome &&
+		lockedStatus.String == "awaiting_confirmation"
+
+	confirmValue := false
+	if isMismatchConfirmation {
+		confirmValue = true
+	}
+
 	if payload.ProofURL != "" {
-		_, err = h.db.Exec(
-			"UPDATE trades SET "+ratingColumn+"=?, "+feedbackColumn+"=?, "+proofColumn+"=?, "+cameraFlagColumn+"=?, "+completedColumn+"=TRUE, updated_at=CURRENT_TIMESTAMP WHERE id = ?",
-			payload.Rating, payload.Feedback, payload.ProofURL, payload.IsCameraPhoto, tradeID)
+		_, err = tx.Exec(
+			"UPDATE trades SET "+ratingColumn+"=?, "+feedbackColumn+"=?, "+proofColumn+"=?, "+cameraFlagColumn+"=?, "+completedColumn+"=TRUE, "+outcomeColumn+"=?, "+confirmedColumn+"=?, first_completion_at=COALESCE(first_completion_at, CURRENT_TIMESTAMP), awaiting_confirmation_since=COALESCE(awaiting_confirmation_since, CURRENT_TIMESTAMP), status=CASE WHEN status IN ('completed','did_not_push_through','under_review') THEN status ELSE 'awaiting_confirmation' END, updated_at=CURRENT_TIMESTAMP WHERE id = ?",
+			payload.Rating, feedback, payload.ProofURL, payload.IsCameraPhoto, completionOutcome, confirmValue, tradeID)
 	} else {
-		// This path is only reachable for non-meetup/delivery trades if we allow them without photo
-		_, err = h.db.Exec(
-			"UPDATE trades SET "+ratingColumn+"=?, "+feedbackColumn+"=?, "+completedColumn+"=TRUE, updated_at=CURRENT_TIMESTAMP WHERE id = ?",
-			payload.Rating, payload.Feedback, tradeID)
+		_, err = tx.Exec(
+			"UPDATE trades SET "+ratingColumn+"=?, "+feedbackColumn+"=?, "+completedColumn+"=TRUE, "+outcomeColumn+"=?, "+confirmedColumn+"=?, first_completion_at=COALESCE(first_completion_at, CURRENT_TIMESTAMP), awaiting_confirmation_since=COALESCE(awaiting_confirmation_since, CURRENT_TIMESTAMP), status=CASE WHEN status IN ('completed','did_not_push_through','under_review') THEN status ELSE 'awaiting_confirmation' END, updated_at=CURRENT_TIMESTAMP WHERE id = ?",
+			payload.Rating, feedback, completionOutcome, confirmValue, tradeID)
 	}
 	if err != nil {
 		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to update trade completion"})
 	}
 
-	// Check if both parties have completed (with ratings and feedback)
-	var buyerCompleted, sellerCompleted bool
-	var buyerRating, sellerRating sql.NullInt64
-	err = h.db.QueryRow("SELECT buyer_completed, seller_completed, buyer_rating, seller_rating FROM trades WHERE id = ?", tradeID).Scan(&buyerCompleted, &sellerCompleted, &buyerRating, &sellerRating)
+	err = tx.QueryRow(`
+		SELECT buyer_completed, seller_completed, buyer_rating, seller_rating,
+		       buyer_completion_outcome, seller_completion_outcome,
+		       buyer_completion_confirmed, seller_completion_confirmed
+		FROM trades WHERE id = ?`, tradeID).Scan(
+		&buyerCompleted, &sellerCompleted, &buyerRating, &sellerRating,
+		&buyerOutcome, &sellerOutcome, &buyerConfirmed, &sellerConfirmed)
 	if err != nil {
 		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to check completion status"})
 	}
 
-	// Both parties must complete AND provide ratings before finalizing
-	if buyerCompleted && sellerCompleted && buyerRating.Valid && sellerRating.Valid {
+	buyerOutcomeValue := strings.TrimSpace(buyerOutcome.String)
+	sellerOutcomeValue := strings.TrimSpace(sellerOutcome.String)
+	data := fiber.Map{
+		"buyer_completed":             buyerCompleted,
+		"seller_completed":            sellerCompleted,
+		"buyer_completion_outcome":    buyerOutcomeValue,
+		"seller_completion_outcome":   sellerOutcomeValue,
+		"buyer_completion_confirmed":  buyerConfirmed,
+		"seller_completion_confirmed": sellerConfirmed,
+		"completion_outcome":          completionOutcome,
+	}
+
+	if !(buyerCompleted && sellerCompleted && buyerRating.Valid && sellerRating.Valid) {
+		if err := tx.Commit(); err != nil {
+			return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to commit trade completion"})
+		}
+		publishToUser(buyerID, sseEvent{Type: "trade_updated", Data: fiber.Map{"trade_id": tradeID, "status": "awaiting_confirmation", "completion_outcome": completionOutcome}})
+		publishToUser(sellerID, sseEvent{Type: "trade_updated", Data: fiber.Map{"trade_id": tradeID, "status": "awaiting_confirmation", "completion_outcome": completionOutcome}})
+		return c.JSON(models.APIResponse{Success: true, Message: "Trade review submitted. Waiting for your trade partner.", Data: data})
+	}
+
+	if buyerOutcomeValue == sellerOutcomeValue {
+		if buyerOutcomeValue == "did_not_push_through" {
+			if err := h.setProductStatusForTrade(tx, tradeID, "available"); err != nil {
+				log.Printf("[DidNotPushThrough] Failed to unlock products for trade %d: %v", tradeID, err)
+				return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to reopen trade items"})
+			}
+			_, err = tx.Exec(`
+				UPDATE trades
+				SET status='did_not_push_through',
+				    cancellation_reason=NULL,
+				    cancelled_by=NULL,
+				    cancelled_at=NULL,
+				    cancelled_while_active=FALSE,
+				    updated_at=CURRENT_TIMESTAMP
+				WHERE id = ?`, tradeID)
+			if err != nil {
+				return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to finalize trade outcome"})
+			}
+			_, _ = tx.Exec("INSERT INTO trade_events (trade_id, actor_id, from_status, to_status, note) VALUES (?, ?, ?, 'did_not_push_through', ?)", tradeID, userID, currentStatus, "[did-not-push-through] "+feedback)
+			if err := tx.Commit(); err != nil {
+				return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to commit trade outcome"})
+			}
+			publishToUser(buyerID, sseEvent{Type: "trade_updated", Data: fiber.Map{"trade_id": tradeID, "status": "did_not_push_through", "completion_outcome": completionOutcome}})
+			publishToUser(sellerID, sseEvent{Type: "trade_updated", Data: fiber.Map{"trade_id": tradeID, "status": "did_not_push_through", "completion_outcome": completionOutcome}})
+			insertTradeNotification(h.db, buyerID, "trade_update", "Trade didn't push through. Feedback was saved and no penalty was applied.", tradeID)
+			insertTradeNotification(h.db, sellerID, "trade_update", "Trade didn't push through. Feedback was saved and no penalty was applied.", tradeID)
+			return c.JSON(models.APIResponse{Success: true, Message: "Trade didn't push through", Data: data})
+		}
+
+		if err := tx.Commit(); err != nil {
+			return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to commit trade completion"})
+		}
+
 		err = h.completeTradeTransaction(tradeID)
 		if err != nil {
 			log.Printf("Failed to complete trade transaction: %v", err)
 			return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to finalize trade"})
 		}
 
-		// Notify both parties
 		publishToUser(buyerID, sseEvent{Type: "trade_completed", Data: fiber.Map{"trade_id": tradeID}})
 		publishToUser(sellerID, sseEvent{Type: "trade_completed", Data: fiber.Map{"trade_id": tradeID}})
-
-		// Add notifications
 		insertTradeNotification(h.db, buyerID, "trade_update", "Trade completed successfully!", tradeID)
 		insertTradeNotification(h.db, sellerID, "trade_update", "Trade completed successfully!", tradeID)
 		sendPushToUser(buyerID, "Trade completed", "Trade completed successfully!", tradeDeepLink(tradeID), "trade_update")
 		sendPushToUser(sellerID, "Trade completed", "Trade completed successfully!", tradeDeepLink(tradeID), "trade_update")
+		return c.JSON(models.APIResponse{Success: true, Message: "Trade completed successfully", Data: data})
 	}
 
-	return c.JSON(models.APIResponse{Success: true, Message: "Trade completion submitted successfully"})
+	if !isMismatchConfirmation {
+		_, err = tx.Exec(`
+			UPDATE trades
+			SET buyer_completion_confirmed=FALSE,
+			    seller_completion_confirmed=FALSE,
+			    outcome_mismatch_at=CURRENT_TIMESTAMP,
+			    status='awaiting_confirmation',
+			    updated_at=CURRENT_TIMESTAMP
+			WHERE id = ?`, tradeID)
+		if err != nil {
+			return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to record trade outcome mismatch"})
+		}
+		data["requires_outcome_confirmation"] = true
+		if err := tx.Commit(); err != nil {
+			return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to commit trade outcome mismatch"})
+		}
+		publishToUser(buyerID, sseEvent{Type: "trade_updated", Data: fiber.Map{"trade_id": tradeID, "status": "awaiting_confirmation", "outcome_mismatch": true}})
+		publishToUser(sellerID, sseEvent{Type: "trade_updated", Data: fiber.Map{"trade_id": tradeID, "status": "awaiting_confirmation", "outcome_mismatch": true}})
+		return c.JSON(models.APIResponse{
+			Success: true,
+			Message: "Your trade partner selected a different outcome. Please confirm your final decision.",
+			Data:    data,
+		})
+	}
+
+	if buyerConfirmed && sellerConfirmed {
+		_, err = tx.Exec(`
+			UPDATE trades
+			SET status='under_review',
+			    updated_at=CURRENT_TIMESTAMP
+			WHERE id = ?`, tradeID)
+		if err != nil {
+			return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to send trade under review"})
+		}
+		_, _ = tx.Exec("INSERT INTO trade_events (trade_id, actor_id, from_status, to_status, note) VALUES (?, ?, ?, 'under_review', ?)", tradeID, userID, currentStatus, "Completion outcomes still mismatched after confirmation")
+		data["status"] = "under_review"
+		if err := tx.Commit(); err != nil {
+			return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to commit review status"})
+		}
+		publishToUser(buyerID, sseEvent{Type: "trade_updated", Data: fiber.Map{"trade_id": tradeID, "status": "under_review", "outcome_mismatch": true}})
+		publishToUser(sellerID, sseEvent{Type: "trade_updated", Data: fiber.Map{"trade_id": tradeID, "status": "under_review", "outcome_mismatch": true}})
+		insertTradeNotification(h.db, buyerID, "trade_update", "Trade outcome mismatch is under admin review. No no-show penalties were applied.", tradeID)
+		insertTradeNotification(h.db, sellerID, "trade_update", "Trade outcome mismatch is under admin review. No no-show penalties were applied.", tradeID)
+		return c.JSON(models.APIResponse{Success: true, Message: "Trade outcome mismatch sent under review", Data: data})
+	}
+
+	data["requires_outcome_confirmation"] = true
+	if err := tx.Commit(); err != nil {
+		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to commit trade outcome confirmation"})
+	}
+	publishToUser(buyerID, sseEvent{Type: "trade_updated", Data: fiber.Map{"trade_id": tradeID, "status": "awaiting_confirmation", "outcome_mismatch": true}})
+	publishToUser(sellerID, sseEvent{Type: "trade_updated", Data: fiber.Map{"trade_id": tradeID, "status": "awaiting_confirmation", "outcome_mismatch": true}})
+	return c.JSON(models.APIResponse{
+		Success: true,
+		Message: "Your trade partner selected a different outcome. Please confirm your final decision.",
+		Data:    data,
+	})
 }
 
 // GetTradeCompletionStatus returns the completion status of a trade
@@ -5986,15 +6149,23 @@ func (h *TradeHandler) GetTradeCompletionStatus(c *fiber.Ctx) error {
 	var buyerRating, sellerRating sql.NullInt64
 	var buyerFeedback, sellerFeedback sql.NullString
 	var buyerProofURL, sellerProofURL sql.NullString
+	var buyerOutcome, sellerOutcome, tradeStatus sql.NullString
+	var buyerConfirmed, sellerConfirmed bool
 
 	err = h.db.QueryRow(`
 		SELECT buyer_id, seller_id, buyer_completed, seller_completed,
 		       buyer_rating, seller_rating, buyer_feedback, seller_feedback,
-		       buyer_proof_url, seller_proof_url
+		       buyer_proof_url, seller_proof_url,
+		       buyer_completion_outcome, seller_completion_outcome,
+		       buyer_completion_confirmed, seller_completion_confirmed,
+		       COALESCE(status, '')
 		FROM trades WHERE id = ?`, tradeID).Scan(
 		&buyerID, &sellerID, &buyerCompleted, &sellerCompleted,
 		&buyerRating, &sellerRating, &buyerFeedback, &sellerFeedback,
-		&buyerProofURL, &sellerProofURL)
+		&buyerProofURL, &sellerProofURL,
+		&buyerOutcome, &sellerOutcome,
+		&buyerConfirmed, &sellerConfirmed,
+		&tradeStatus)
 
 	if err != nil {
 		return c.Status(404).JSON(models.APIResponse{Success: false, Error: "Trade not found"})
@@ -6006,9 +6177,34 @@ func (h *TradeHandler) GetTradeCompletionStatus(c *fiber.Ctx) error {
 	}
 
 	// Prepare response data
+	buyerOutcomeValue := strings.TrimSpace(buyerOutcome.String)
+	sellerOutcomeValue := strings.TrimSpace(sellerOutcome.String)
+	currentUserOutcome := sellerOutcomeValue
+	partnerOutcome := buyerOutcomeValue
+	currentUserConfirmed := sellerConfirmed
+	partnerConfirmed := buyerConfirmed
+	if userID == buyerID {
+		currentUserOutcome = buyerOutcomeValue
+		partnerOutcome = sellerOutcomeValue
+		currentUserConfirmed = buyerConfirmed
+		partnerConfirmed = sellerConfirmed
+	}
+	outcomeMismatch := buyerCompleted && sellerCompleted && buyerOutcomeValue != "" && sellerOutcomeValue != "" && buyerOutcomeValue != sellerOutcomeValue
+
 	status := fiber.Map{
-		"buyer_completed":  buyerCompleted,
-		"seller_completed": sellerCompleted,
+		"buyer_completed":               buyerCompleted,
+		"seller_completed":              sellerCompleted,
+		"status":                        tradeStatus.String,
+		"buyer_completion_outcome":      buyerOutcomeValue,
+		"seller_completion_outcome":     sellerOutcomeValue,
+		"buyer_completion_confirmed":    buyerConfirmed,
+		"seller_completion_confirmed":   sellerConfirmed,
+		"current_user_outcome":          currentUserOutcome,
+		"partner_outcome":               partnerOutcome,
+		"current_user_confirmed":        currentUserConfirmed,
+		"partner_confirmed":             partnerConfirmed,
+		"outcome_mismatch":              outcomeMismatch,
+		"requires_outcome_confirmation": outcomeMismatch && tradeStatus.String == "awaiting_confirmation" && !currentUserConfirmed,
 	}
 
 	if buyerRating.Valid {
@@ -7344,6 +7540,15 @@ func (h *TradeHandler) GetTradeLoops(c *fiber.Ctx) error {
 			ORDER BY l.updated_at DESC
 		`
 		args = []interface{}{userID}
+	case "did_not_push_through":
+		query = `
+			SELECT l.id, l.status, l.updated_at
+			FROM trade_like_loops l
+			JOIN trade_like_loop_participants p ON p.loop_id = l.id
+			WHERE p.user_id = ? AND l.status = 'did_not_push_through'
+			ORDER BY l.updated_at DESC
+		`
+		args = []interface{}{userID}
 	case "cancelled":
 		query = `
 			SELECT l.id, l.status, l.updated_at
@@ -7360,7 +7565,7 @@ func (h *TradeHandler) GetTradeLoops(c *fiber.Ctx) error {
 			JOIN trade_like_loop_participants p ON p.loop_id = l.id
 			WHERE p.user_id = ? AND l.status IN (
 				'pending', 'partially_accepted', 'accepted', 'confirmed', 'ongoing',
-				'completed', 'history', 'rejected', 'cancelled', 'cancelled_due_to_conflict',
+				'completed', 'did_not_push_through', 'history', 'rejected', 'cancelled', 'cancelled_due_to_conflict',
 				'broken', 'expired'
 			)
 			ORDER BY l.updated_at DESC
@@ -8386,9 +8591,14 @@ func (h *TradeHandler) ExecuteTradeLoop(c *fiber.Ctx) error {
 		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "Rating must be between 1 and 5"})
 	}
 
+	isDidNotPushThrough := payload.CompletionOutcome == "did_not_push_through"
+
 	// Enforce proof URL (mandatory for meetup completion)
-	if payload.ProofURL == "" {
+	if !isDidNotPushThrough && payload.ProofURL == "" {
 		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "Photo evidence is mandatory for multiway trade completion"})
+	}
+	if isDidNotPushThrough && strings.TrimSpace(payload.Feedback) == "" {
+		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "Feedback is required when a trade did not push through"})
 	}
 
 	// Verify loop existence and status
@@ -8417,6 +8627,87 @@ func (h *TradeHandler) ExecuteTradeLoop(c *fiber.Ctx) error {
 		return c.Status(400).JSON(models.APIResponse{
 			Success: false,
 			Error:   "GPS arrival must be confirmed before completing this trade loop",
+		})
+	}
+
+	if isDidNotPushThrough {
+		tx, err := h.db.Begin()
+		if err != nil {
+			return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Transaction failed"})
+		}
+		defer tx.Rollback()
+
+		if _, err := tx.Exec(`
+			UPDATE trade_like_loop_participants
+			SET rating = ?, feedback = ?, proof_url = ?, is_reviewed = TRUE, reviewed_at = CURRENT_TIMESTAMP
+			WHERE id = ?
+		`, payload.Rating, strings.TrimSpace(payload.Feedback), payload.ProofURL, participantID); err != nil {
+			return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to submit review"})
+		}
+
+		if _, err := tx.Exec(`
+			UPDATE products p
+			JOIN (
+				SELECT offered_product_id AS product_id FROM trade_like_loop_participants WHERE loop_id = ?
+				UNION
+				SELECT wanted_product_id AS product_id FROM trade_like_loop_participants WHERE loop_id = ?
+			) loop_products ON loop_products.product_id = p.id
+			SET p.status = 'available', p.updated_at = CURRENT_TIMESTAMP
+			WHERE p.status = 'locked'
+		`, loopNumericID, loopNumericID); err != nil {
+			return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to reopen loop items"})
+		}
+
+		if _, err := tx.Exec(`
+			UPDATE trade_like_loops
+			SET status = 'did_not_push_through',
+			    cancelled_at = NULL,
+			    cancelled_by = NULL,
+			    updated_at = CURRENT_TIMESTAMP
+			WHERE id = ?
+		`, loopNumericID); err != nil {
+			return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to mark loop outcome"})
+		}
+
+		if err := tx.Commit(); err != nil {
+			return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to save trade outcome"})
+		}
+
+		var userName string
+		_ = h.db.QueryRow("SELECT name FROM users WHERE id = ?", userID).Scan(&userName)
+		if userName == "" {
+			userName = "A participant"
+		}
+		notificationMsg := fmt.Sprintf("%s marked that the trade didn't push through and left feedback. No penalty was applied.", userName)
+		rows, err := h.db.Query("SELECT user_id FROM trade_like_loop_participants WHERE loop_id = ? AND user_id != ?", loopNumericID, userID)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var pID int
+				if scanErr := rows.Scan(&pID); scanErr == nil {
+					h.db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_loop', ?, FALSE)", pID, notificationMsg)
+					publishNotification(pID, notificationMsg)
+					publishToUser(pID, sseEvent{
+						Type: "trade_loop_did_not_push_through",
+						Data: fiber.Map{
+							"loop_id":            loopID,
+							"status":             "did_not_push_through",
+							"completion_outcome": payload.CompletionOutcome,
+							"message":            notificationMsg,
+						},
+					})
+				}
+			}
+		}
+
+		return c.JSON(models.APIResponse{
+			Success: true,
+			Message: "Trade didn't push through",
+			Data: fiber.Map{
+				"is_fully_completed": false,
+				"completion_outcome": payload.CompletionOutcome,
+				"status":             "did_not_push_through",
+			},
 		})
 	}
 

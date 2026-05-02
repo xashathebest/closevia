@@ -584,13 +584,17 @@ const AdminDashboard: React.FC = () => {
     onOpen: openDeleteDialog,
     onClose: closeDeleteDialog,
   } = useDisclosure();
+  const [activeSection, setActiveSection] = useState<SectionId>('overview');
+  const { isOpen: isSidebarOpen, onOpen: openSidebar, onClose: closeSidebar } = useDisclosure();
+  const [moderationTarget, setModerationTarget] = useState<{ report: any; action: string } | null>(null);
+  const [moderationLoading, setModerationLoading] = useState(false);
   const cancelDeleteRef = useRef<HTMLButtonElement | null>(null);
+  const cancelModerationRef = useRef<HTMLButtonElement | null>(null);
   const usersSearchInputRef = useRef<string>('');
   const productsSearchInputRef = useRef<string>('');
   const riderSearchInputRef = useRef<string>('');
 
   const toast = useToast();
-  const bgColor = useColorModeValue('white', 'gray.800');
   const borderColor = useColorModeValue('gray.200', 'gray.700');
   const cardBg = useColorModeValue('white', 'gray.700');
   const textColor = useColorModeValue('gray.800', 'gray.100');
@@ -600,7 +604,9 @@ const AdminDashboard: React.FC = () => {
   const headerBg = useColorModeValue('brand.50', 'brand.900');
   const sidebarBg = useColorModeValue('white', 'gray.800');
   const topBarBg = useColorModeValue('white', 'gray.800');
-  const mainBg = useColorModeValue('#FFFDF1', 'gray.900');
+  const mainBg = useColorModeValue('gray.50', 'gray.900');
+  const selectedPanelBg = useColorModeValue('blue.50', 'blue.900');
+  const selectedPanelText = useColorModeValue('blue.900', 'blue.100');
   const isMobile = useBreakpointValue({ base: true, lg: false });
 
   const sidebarNav: { id: SectionId; label: string; icon: any; description: string; badge?: number | string }[] = [
@@ -1858,21 +1864,12 @@ const AdminDashboard: React.FC = () => {
 
   // â"€â"€ Sidebar / SPA state â"€â"€
 
-  const [activeSection, setActiveSection] = useState<SectionId>('overview');
-  const { isOpen: isSidebarOpen, onOpen: openSidebar, onClose: closeSidebar } = useDisclosure();
-
-  // â"€â"€ Report action moderation state â"€â"€
-  const [moderationTarget, setModerationTarget] = useState<{ report: any; action: string } | null>(null);
-  const [moderationLoading, setModerationLoading] = useState(false);
-  const cancelModerationRef = useRef<HTMLButtonElement | null>(null);
-
   const handleModerationAction = useCallback(async () => {
     if (!moderationTarget) return;
     const { report, action } = moderationTarget;
     const statusMap: Record<string, string> = {
-      'Warn User': 'reviewed',
-      'Delete Listing': 'resolved',
-      'Suspend Account': 'resolved',
+      'Mark Reviewed': 'reviewed',
+      'Escalate Report': 'reviewed',
       'Mark Resolved': 'resolved',
       'Dismiss': 'dismissed',
     };
@@ -1931,7 +1928,7 @@ const AdminDashboard: React.FC = () => {
       <Box minH="100vh" bg={mainBg} display="flex">
         {/* Sidebar Skeleton */}
         {!isMobile && (
-          <Box w="330px" minH="100vh" bg={sidebarBg} borderRight="1px solid" borderColor={borderColor} position="fixed" top={0} left={0} ml={20} overflowY="auto" zIndex={20} boxShadow="sm" p={4}>
+          <Box w="330px" minH="100vh" bg={sidebarBg} borderRight="1px solid" borderColor={borderColor} position="fixed" top={0} left={0} overflowY="auto" zIndex={20} boxShadow="sm" p={4}>
             <Skeleton height="60px" mb={6} borderRadius="lg" />
             <VStack spacing={3} align="stretch">
               {[1, 2, 3, 4].map(i => (
@@ -1941,7 +1938,7 @@ const AdminDashboard: React.FC = () => {
           </Box>
         )}
         {/* Main Content Skeleton */}
-        <Box flex={1} ml={isMobile ? 0 : '350px'} p={6}>
+        <Box flex={1} ml={isMobile ? 0 : '330px'} p={6}>
           <SimpleGrid columns={{ base: 1, md: 2, lg: 4 }} spacing={4} mb={8}>
             {[1, 2, 3, 4].map(i => (
               <Box key={i} p={4} bg={cardBg} borderRadius="xl" border="1px solid" borderColor={borderColor}>
@@ -2195,8 +2192,8 @@ const AdminDashboard: React.FC = () => {
           <Text fontWeight="700" color={textColor} fontSize="sm" textTransform="uppercase" letterSpacing="wide">Users</Text>
         </HStack>
         <SimpleGrid columns={{ base: 1, md: 2, xl: 4 }} spacing={4}>
-          <MetricCard icon={FiUsers} color="indigo" label="Total Users" value={stats!.total_users} />
-          <MetricCard icon={FiStar} color="violet" label="Premium Users" value={stats!.premium_users} />
+          <MetricCard icon={FiUsers} color="blue" label="Total Users" value={stats!.total_users} />
+          <MetricCard icon={FiStar} color="purple" label="Premium Users" value={stats!.premium_users} />
           <MetricCard icon={FiUsers} color="orange" label="New Today" value={stats!.new_users_today} />
           <MetricCard icon={FiBarChart2} color="brand" label="Activity" value={stats!.recent_activity?.length ?? 0} />
         </SimpleGrid>
@@ -2209,8 +2206,8 @@ const AdminDashboard: React.FC = () => {
           <Text fontWeight="700" color={textColor} fontSize="sm" textTransform="uppercase" letterSpacing="wide">Marketplace</Text>
         </HStack>
         <SimpleGrid columns={{ base: 1, md: 3 }} spacing={4}>
-          <MetricCard icon={FiShoppingBag} color="emerald" label="Active Listings" value={stats!.active_listings} />
-          <MetricCard icon={FiShoppingCart} color="cyan" label="Total Trades" value={stats!.total_trades} />
+          <MetricCard icon={FiShoppingBag} color="green" label="Active Listings" value={stats!.active_listings} />
+          <MetricCard icon={FiShoppingCart} color="teal" label="Total Trades" value={stats!.total_trades} />
           <MetricCard icon={FiPackage} color="pink" label="New Listings Today" value={stats!.new_listings_today} />
         </SimpleGrid>
       </Box>
@@ -2284,7 +2281,7 @@ const AdminDashboard: React.FC = () => {
         <Card bg={cardBg} border="1px solid" borderColor={borderColor} borderRadius="xl">
           <CardHeader pb={2}>
             <HStack>
-              <Icon as={FiUsers} color="indigo.500" />
+              <Icon as={FiUsers} color="blue.500" />
               <Heading size="sm" color={textColor}>User Metrics</Heading>
             </HStack>
           </CardHeader>
@@ -2292,9 +2289,9 @@ const AdminDashboard: React.FC = () => {
             {loading ? <ChartSkeleton /> : (
               <Box>
                 <Flex justify="center" mb={4}>
-                  <Box textAlign="center" px={4} py={2} bg="indigo.50" borderRadius="lg">
+                  <Box textAlign="center" px={4} py={2} bg="blue.50" borderRadius="lg">
                     <Text fontSize="xs" color="gray.500" fontWeight="600" textTransform="uppercase">Total Users</Text>
-                    <Text fontSize="2xl" fontWeight="700" color="indigo.600">{(stats!.total_users || 0).toLocaleString()}</Text>
+                    <Text fontSize="2xl" fontWeight="700" color="blue.600">{(stats!.total_users || 0).toLocaleString()}</Text>
                   </Box>
                 </Flex>
                 <Box h="260px">
@@ -2335,7 +2332,7 @@ const AdminDashboard: React.FC = () => {
                     <Text fontWeight="600" fontSize="sm">{a.action}</Text>
                     <Text fontSize="xs" color={mutedTextColor}>{new Date(a.latest).toLocaleTimeString()}</Text>
                   </VStack>
-                  <Badge colorScheme="indigo" borderRadius="full" px={3}>{a.count}</Badge>
+                  <Badge colorScheme="blue" borderRadius="full" px={3}>{a.count}</Badge>
                 </HStack>
               ))}
             </SimpleGrid>
@@ -2532,11 +2529,11 @@ const AdminDashboard: React.FC = () => {
                               <Menu>
                                 <MenuButton as={IconButton} icon={<FiMoreVertical />} size="xs" variant="ghost" aria-label="Actions" />
                                 <MenuList shadow="lg" borderRadius="lg" minW="180px">
-                                  {['Warn User', 'Delete Listing', 'Suspend Account', 'Mark Resolved', 'Dismiss'].map(action => (
+                                  {['Mark Reviewed', 'Escalate Report', 'Mark Resolved', 'Dismiss'].map(action => (
                                     <MenuItem
                                       key={action}
                                       fontSize="sm"
-                                      color={action === 'Suspend Account' || action === 'Delete Listing' ? '#f43f5e' : 'gray.700'}
+                                      color={action === 'Escalate Report' ? '#f43f5e' : 'gray.700'}
                                       onClick={() => setModerationTarget({ report, action })}
                                     >
                                       {action}
@@ -3083,7 +3080,7 @@ const AdminDashboard: React.FC = () => {
         </Modal>
 
         {/* Reject Rider Modal */}
-        <Modal isOpen={!!rejectRiderTarget} onClose={() => { setRejectRiderTarget(null); setRejectRiderReason(''); }} isCentered>
+        <Modal isOpen={!!rejectRiderTarget} onClose={() => { setRejectRiderTarget(null); setRejectRiderReason(''); }} isCentered closeOnOverlayClick={false}>
           <ModalOverlay />
           <ModalContent>
             <ModalHeader fontSize="md">Reject Rider Application</ModalHeader>
@@ -3198,8 +3195,8 @@ const AdminDashboard: React.FC = () => {
             <Button size="sm" onClick={() => fetchAdminProducts(1)}>Search</Button>
           </HStack>
           {selectedProductIds.size > 0 && (
-            <HStack mt={3} p={3} bg={useColorModeValue('blue.50', 'blue.900')} borderRadius="md" spacing={3}>
-              <Text fontSize="sm" fontWeight="600" color={useColorModeValue('blue.900', 'blue.100')}>
+            <HStack mt={3} p={3} bg={selectedPanelBg} borderRadius="md" spacing={3} wrap="wrap">
+              <Text fontSize="sm" fontWeight="600" color={selectedPanelText}>
                 {selectedProductIds.size} item{selectedProductIds.size !== 1 ? 's' : ''} selected
               </Text>
               <Button size="xs" colorScheme="red" variant="solid" onClick={() => handleBulkDeleteProducts()} isLoading={isSelectingProducts}>
@@ -3235,12 +3232,12 @@ const AdminDashboard: React.FC = () => {
                       const isSuspended = product.status === 'suspended';
                       const isSelected = selectedProductIds.has(product.id);
                       return (
-                        <Tr key={product.id} _hover={{ bg: hoverBg }} bg={isSelected ? useColorModeValue('blue.50', 'blue.900') : undefined}>
+                        <Tr key={product.id} _hover={{ bg: hoverBg }} bg={isSelected ? selectedPanelBg : undefined}>
                           <Td px={2}><Checkbox isChecked={isSelected} onChange={(e: React.ChangeEvent<HTMLInputElement>) => { const newSet = new Set(selectedProductIds); if (e.target.checked) { newSet.add(product.id); } else { newSet.delete(product.id); } setSelectedProductIds(newSet); }} /></Td>
                           <Td><HStack spacing={3}><Avatar size="sm" variant="rounded" name={product.title} src={product.image_urls?.[0] || undefined} /><VStack spacing={0} align="start"><Text fontWeight="600" fontSize="sm" noOfLines={1} maxW="150px">{product.title}</Text><Text fontSize="xs" color={mutedTextColor}>ID #{product.id}</Text></VStack></HStack></Td>
-                          <Td><Text fontSize="sm">{product.seller_name || `User #${product.seller_id}`}</Text></Td>
+                          <Td display={{ base: 'none', md: 'table-cell' }}><Text fontSize="sm">{product.seller_name || `User #${product.seller_id}`}</Text></Td>
                           <Td px={3}><Tag size="sm" colorScheme={product.status === 'available' ? 'green' : product.status === 'suspended' ? 'red' : 'gray'} px={2.5} py={1} isTruncated maxW="100px">{product.status.charAt(0).toUpperCase() + product.status.slice(1)}</Tag></Td>
-                          <Td isNumeric px={3} pr={14}><Text fontSize="sm">{product.price != null ? formatCurrency(product.price) : '—'}</Text></Td>
+                          <Td isNumeric px={3} pr={14} display={{ base: 'none', sm: 'table-cell' }}><Text fontSize="sm">{product.price != null ? formatCurrency(product.price) : '—'}</Text></Td>
                           <Td textAlign="right" pl={6}>
                             <HStack spacing={1} justify="flex-end">
                               <Tooltip label="View Details" hasArrow>
@@ -3639,7 +3636,7 @@ const AdminDashboard: React.FC = () => {
 
   return (
     <ErrorBoundary>
-      <Box minH="100vh" bg={mainBg} display="flex">
+      <Box minH="100vh" bg={mainBg} display="flex" overflowX="hidden">
 
         {/* â"€â"€ Desktop Sidebar â"€â"€ */}
         {!isMobile && (
@@ -3652,7 +3649,6 @@ const AdminDashboard: React.FC = () => {
             position="fixed"
             top={0}
             left={0}
-            ml={20}
             overflowY="auto"
             zIndex={20}
             boxShadow="sm"
@@ -3673,7 +3669,7 @@ const AdminDashboard: React.FC = () => {
         </Drawer>
 
         {/* â"€â"€ Main Content â"€â"€ */}
-        <Box flex={1} ml={isMobile ? 0 : '350px'} display="flex" flexDirection="column">
+        <Box flex={1} ml={isMobile ? 0 : '330px'} display="flex" flexDirection="column" minWidth={0} overflowX="hidden">
 
           {/* Top Bar */}
           <Box
@@ -3687,7 +3683,7 @@ const AdminDashboard: React.FC = () => {
             zIndex={10}
             boxShadow="sm"
           >
-            <Flex justify="space-between" align="center">
+            <Flex justify="space-between" align="center" gap={3} wrap="wrap">
               <HStack spacing={3}>
                 {isMobile && (
                   <IconButton aria-label="Open menu" icon={<FiMenu />} variant="ghost" size="sm" onClick={openSidebar} />
@@ -3697,8 +3693,8 @@ const AdminDashboard: React.FC = () => {
                   {isUsingMockData && <Badge colorScheme="orange" variant="subtle" fontSize="xs">Demo Mode</Badge>}
                 </VStack>
               </HStack>
-              <HStack spacing={2} mr={20}>
-                <Button onClick={handleBackfillLedgers} size="sm" colorScheme="orange" variant="solid" isLoading={backfillLoading}>Sync Legacy Ledgers</Button>
+              <HStack spacing={2} flexWrap="wrap" justify={{ base: 'flex-start', md: 'flex-end' }}>
+                <Button onClick={handleBackfillLedgers} size="sm" colorScheme="orange" variant="outline" isLoading={backfillLoading}>Sync Legacy Ledgers</Button>
                 <Button leftIcon={<FiRefreshCw />} onClick={handleRefresh} size="sm" colorScheme="brand" variant="outline" isLoading={loading}>Refresh</Button>
               </HStack>
             </Flex>
@@ -3764,7 +3760,7 @@ const AdminDashboard: React.FC = () => {
             <AlertDialogContent borderRadius="xl">
               <AlertDialogHeader fontSize="lg" fontWeight="800">Confirm: {moderationTarget?.action}</AlertDialogHeader>
               <AlertDialogBody>
-                Are you sure you want to <b>{moderationTarget?.action}</b> for report <b>#{moderationTarget?.report?.id}</b>? This will update the report status immediately.
+                Are you sure you want to <b>{moderationTarget?.action}</b> for report <b>#{moderationTarget?.report?.id}</b>? This updates the report status only and does not delete listings or suspend accounts.
               </AlertDialogBody>
               <AlertDialogFooter>
                 <Button ref={cancelModerationRef} onClick={() => setModerationTarget(null)} variant="ghost">Cancel</Button>
@@ -3777,7 +3773,7 @@ const AdminDashboard: React.FC = () => {
 
 
         {/* â"€â"€ Campaign Create/Edit Modal â"€â"€ */}
-        <Modal isOpen={isCampaignModalOpen} onClose={() => { closeCampaignModal(); setEditingCampaign(null); }} size="lg">
+        <Modal isOpen={isCampaignModalOpen} onClose={() => { closeCampaignModal(); setEditingCampaign(null); }} size="lg" scrollBehavior="inside" closeOnOverlayClick={false}>
           <ModalOverlay />
           <ModalContent borderRadius="xl">
             <form onSubmit={handleSaveCampaign}>

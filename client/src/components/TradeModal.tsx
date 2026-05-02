@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react'
-import { Modal, ModalOverlay, ModalContent, ModalHeader, ModalBody, VStack, Grid, Box, Image, Text, FormControl, FormLabel, Input, HStack, Button, useToast, Badge, Card, CardBody, Icon, useColorModeValue, Spinner, Flex, Checkbox, Alert, AlertIcon, Switch, RadioGroup, Radio, useBreakpointValue, Accordion, AccordionItem, AccordionButton, AccordionPanel, AccordionIcon, Progress, Divider, Tooltip, CloseButton } from '@chakra-ui/react'
+import { Modal, ModalOverlay, ModalContent, ModalHeader, ModalBody, VStack, Grid, Box, Image, Text, FormControl, FormLabel, Input, HStack, Button, useToast, Badge, Card, CardBody, Icon, useColorModeValue, Spinner, Flex, Checkbox, Alert, AlertIcon, RadioGroup, Radio, useBreakpointValue, Accordion, AccordionItem, AccordionButton, AccordionPanel, AccordionIcon, Progress, Divider, Tooltip, CloseButton } from '@chakra-ui/react'
 import { AnimatePresence, motion, useDragControls, useReducedMotion, type PanInfo } from 'framer-motion'
 import { FaMapMarkerAlt, FaTruck, FaLocationArrow, FaBoxOpen, FaHandshake, FaTimes, FaCheckCircle, FaExternalLinkAlt, FaClock, FaLock, FaInfoCircle } from 'react-icons/fa'
 import { AvailabilitySlot } from '../types'
@@ -70,7 +70,6 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
   const [committedProductIds, setCommittedProductIds] = useState<Set<number>>(new Set())
   const [loadingPendingCheck, setLoadingPendingCheck] = useState(false)
   const [detectingLocation, setDetectingLocation] = useState(false)
-  const [multiTargetMode, setMultiTargetMode] = useState(true)
   const [additionalTargetIds, setAdditionalTargetIds] = useState<number[]>([])
   const [sellerProducts, setSellerProducts] = useState<Product[]>([])
   const [targetSearchTerm, setTargetSearchTerm] = useState('')
@@ -144,7 +143,7 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
 
   const selectedProducts = useMemo(() => userProducts.filter(p => selectedOfferIds.includes(p.id)), [userProducts, selectedOfferIds])
   const visibleProducts = useMemo(() => {
-    const hidden = new Set(['traded', 'sold', 'suspended', 'deleted'])
+    const hidden = new Set(['traded', 'sold', 'locked', 'suspended', 'deleted'])
     return userProducts
       .filter(p => p.title.toLowerCase().includes(searchTerm) && !hidden.has(p.status))
       .sort((a, b) => {
@@ -155,7 +154,7 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
   }, [userProducts, searchTerm, committedProductIds])
   const selectedOfferIdSet = useMemo(() => new Set(selectedOfferIds), [selectedOfferIds])
   const visibleSellerProducts = useMemo(() => {
-    const hidden = new Set(['traded', 'sold', 'suspended', 'deleted'])
+    const hidden = new Set(['traded', 'sold', 'locked', 'suspended', 'deleted'])
     return sellerProducts
       .filter(p => p.title.toLowerCase().includes(targetSearchTerm) && !hidden.has(p.status))
       .sort((a, b) => {
@@ -180,6 +179,47 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
 
   const selectedTargetsHaveDifferentLocations = selectedTargetLocationKeys.size > 1
   const selectedTargetsNeedLocationPlan = selectedTargetProducts.length > 1 && selectedTargetsHaveDifferentLocations
+  const resolveProductTradeValue = (product: Product): number | null => {
+    const askingPrice = Number(product.price)
+    if (Number.isFinite(askingPrice) && askingPrice > 0) return askingPrice
+
+    const min = Number(product.estimated_value_min)
+    const max = Number(product.estimated_value_max)
+    if (Number.isFinite(min) && min > 0 && Number.isFinite(max) && max > 0) return Math.round((min + max) / 2)
+    if (Number.isFinite(min) && min > 0) return min
+    if (Number.isFinite(max) && max > 0) return max
+    return null
+  }
+  const summarizeTradeValue = (products: Product[]) => {
+    if (products.length === 0) return { total: null as number | null, unavailable: true }
+    const values = products.map(resolveProductTradeValue)
+    const unavailable = values.some(value => value === null)
+    return {
+      total: unavailable ? null : values.reduce<number>((sum, value) => sum + (value ?? 0), 0),
+      unavailable,
+    }
+  }
+  const requestedValueSummary = useMemo(() => summarizeTradeValue(selectedTargetProducts), [selectedTargetProducts])
+  const offeredValueSummary = useMemo(() => summarizeTradeValue(selectedProducts), [selectedProducts])
+  const valueDifference = requestedValueSummary.total !== null && offeredValueSummary.total !== null
+    ? offeredValueSummary.total - requestedValueSummary.total
+    : null
+  const formatPesoValue = (value: number | null) => (
+    value === null ? 'Estimate unavailable' : `₱${Math.round(value).toLocaleString()} total`
+  )
+  const formatPesoDifference = (value: number | null) => (
+    value === null ? 'Estimate unavailable' : `₱${Math.abs(Math.round(value)).toLocaleString()}`
+  )
+  const fairnessHint = (() => {
+    if (valueDifference === null || requestedValueSummary.total === null || offeredValueSummary.total === null) {
+      return 'This is only a guide to help you judge fairness.'
+    }
+    const largerValue = Math.max(requestedValueSummary.total, offeredValueSummary.total, 1)
+    const closeThreshold = Math.max(500, largerValue * 0.15)
+    if (Math.abs(valueDifference) <= closeThreshold) return 'Looks like a balanced trade.'
+    if (valueDifference < 0) return 'You may need to offer more items or a better match.'
+    return 'You may be offering more value than requested.'
+  })()
   const fmtTime = (t: string) => {
     const [h, m] = t.split(':').map(Number)
     const ampm = h >= 12 ? 'PM' : 'AM'
@@ -438,7 +478,6 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
     setManualAddress('')
     setDetectingLocation(false)
     setCommittedProductIds(new Set())
-    setMultiTargetMode(!editTrade)
     setAdditionalTargetIds([])
     setSellerProducts([])
     setTargetSearchTerm('')
@@ -549,9 +588,9 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
     }
   }, [meetupChoice, meetupMidpointCoords, midpointLabel])
 
-  // Fetch the other trader's products when multi-target mode is enabled
+  // Fetch the other trader's products so users can request one or more items.
   useEffect(() => {
-    if (!multiTargetMode || !targetProduct?.seller_id || !isOpen) {
+    if (!targetProduct?.seller_id || !isOpen) {
       setSellerProducts([])
       return
     }
@@ -568,7 +607,7 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
         setLoadingSellerProducts(false)
       }
     })()
-  }, [multiTargetMode, targetProduct?.seller_id, isOpen, targetProductId])
+  }, [targetProduct?.seller_id, isOpen, targetProductId])
 
   const toggleAdditionalTarget = (productId: number) => {
     setAdditionalTargetIds(prev =>
@@ -830,7 +869,7 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
         offered_cash_amount: offeredCashAmount || undefined,
         trade_option: 'meetup',
         meeting_type: tradeOption === 'pickup' ? 'pickup' : 'meetup',
-        ...(multiTargetMode && additionalTargetIds.length > 0 && {
+        ...(additionalTargetIds.length > 0 && {
           additional_target_product_ids: additionalTargetIds,
         }),
         ...(proposedMeetupLocation && { meetup_location: proposedMeetupLocation }),
@@ -872,7 +911,6 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
       setTradeOption(null)
       setDetectedCoords(null)
       setManualAddress('')
-      setMultiTargetMode(true)
       setAdditionalTargetIds([])
       setSellerProducts([])
       setTargetSearchTerm('')
@@ -932,14 +970,8 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
             <VStack spacing={2.5} align="stretch">
               <HStack justify="space-between" align="center">
                 <Text fontSize="10px" fontWeight="bold" color={targetLabelColor} textTransform="uppercase" letterSpacing="0.5px">
-                  Trading For: {multiTargetMode ? `${additionalTargetIds.length + 1} Item${additionalTargetIds.length > 0 ? 's' : ''}` : '1 Item'}
+                  Trading For: {additionalTargetIds.length + 1} Item{additionalTargetIds.length > 0 ? 's' : ''}
                 </Text>
-                {!isEditMode && (
-                  <HStack spacing={2} align="center">
-                    <Text fontSize="10px" color={mutedTextColor} fontWeight="600">Multiple</Text>
-                    <Switch size="md" colorScheme="blue" isChecked={multiTargetMode} onChange={() => { if (multiTargetMode) { setAdditionalTargetIds([]); setTargetSearchTerm('') } setMultiTargetMode(prev => !prev) }} />
-                  </HStack>
-                )}
               </HStack>
               <HStack spacing={3} align="start">
                 <Image src={getFirstImage(targetProduct.image_urls)} alt={targetProduct.title} w={{ base: '56px', md: '64px' }} h={{ base: '56px', md: '64px' }} objectFit="cover" rounded="md" loading="lazy" flexShrink={0} />
@@ -958,12 +990,19 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
         </Card>
       ) : null}
 
-      {multiTargetMode && (
-        <VStack spacing={2} align="stretch" minH={0}>
-          <HStack justify="space-between" align="center">
-            <Text fontSize="11px" color="blue.600" fontWeight="700">Selected: {additionalTargetIds.length + 1} item{additionalTargetIds.length > 0 ? 's' : ''}</Text>
-            <Badge colorScheme="blue" variant="subtle">Bundle request</Badge>
-          </HStack>
+      <VStack spacing={2} align="stretch" minH={0}>
+          <Box>
+            <HStack justify="space-between" align="center">
+              <Text fontSize="11px" color="blue.600" fontWeight="700">Requested items: {additionalTargetIds.length + 1} selected</Text>
+              {additionalTargetIds.length > 0 && <Badge colorScheme="blue" variant="subtle">Bundle request</Badge>}
+            </HStack>
+            <Text fontSize="10px" color={mutedTextColor} mt={0.5}>You can select more than one item for a bundle trade.</Text>
+          </Box>
+          {additionalTargetIds.length > 0 && (
+            <Box bg="blue.50" borderWidth="1px" borderColor="blue.100" borderRadius="md" px={2.5} py={2}>
+              <Text fontSize="10px" color="blue.700" fontWeight="700">You’re requesting multiple items from this trader.</Text>
+            </Box>
+          )}
           {additionalTargetIds.length > 0 && (
             <HStack spacing={1.5} overflowX="auto" pb={1} sx={{ scrollbarWidth: 'thin' }}>
               {sellerProducts.filter(p => additionalTargetIds.includes(p.id)).map(p => (
@@ -1013,7 +1052,6 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
             </Box>
           )}
         </VStack>
-      )}
     </VStack>
   )
 
@@ -1671,6 +1709,29 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
     </VStack>
   )
 
+  const tradeValueEstimateSummary = (
+    <Box borderWidth="1px" borderColor={borderColor} borderRadius="md" bg="gray.50" px={3} py={2.5} mb={2.5}>
+      <VStack align="stretch" spacing={1.5}>
+        <Text fontSize="11px" fontWeight="800" color="gray.800">Estimated trade value</Text>
+        <HStack justify="space-between" align="center">
+          <Text fontSize="10px" color={mutedTextColor}>Requested items</Text>
+          <Text fontSize="10px" fontWeight="700" color="gray.800">{formatPesoValue(requestedValueSummary.total)}</Text>
+        </HStack>
+        <HStack justify="space-between" align="center">
+          <Text fontSize="10px" color={mutedTextColor}>Your offered items</Text>
+          <Text fontSize="10px" fontWeight="700" color="gray.800">{formatPesoValue(offeredValueSummary.total)}</Text>
+        </HStack>
+        <HStack justify="space-between" align="center">
+          <Text fontSize="10px" color={mutedTextColor}>Difference</Text>
+          <Text fontSize="10px" fontWeight="700" color="gray.800">{formatPesoDifference(valueDifference)}</Text>
+        </HStack>
+        <Text fontSize="10px" color={valueDifference === null ? mutedTextColor : selectedTextColor} fontWeight="600" pt={0.5}>
+          {fairnessHint}
+        </Text>
+      </VStack>
+    </Box>
+  )
+
   const actionButtons = (
     <HStack justify="flex-end" spacing={3} pt={isMobile ? 0 : 1}>
       {isMobile && mobileStep > 0 && <Button variant="outline" onClick={() => setMobileStep(step => Math.max(0, step - 1))} fontSize="12px" minH="42px" flex={1}>Back</Button>}
@@ -1786,6 +1847,7 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
 
         {user && (
           <Box flexShrink={0} bg={cardBg} borderTopWidth="1px" borderColor={borderColor} px={{ base: 3, md: 5 }} py={3} boxShadow={{ base: '0 -8px 20px rgba(0,0,0,0.08)', md: 'none' }}>
+            {tradeValueEstimateSummary}
             {actionButtons}
           </Box>
         )}

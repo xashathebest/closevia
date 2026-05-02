@@ -1043,10 +1043,10 @@ func (h *ProductHandler) GetProducts(c *fiber.Ctx) error {
 		if hasOffers, err := strconv.ParseBool(hasActiveOffersStr); err == nil {
 			if hasOffers {
 				// Products with active offers/trades
-				whereClause += " AND (SELECT COUNT(*) FROM trades WHERE target_product_id = p.id AND status NOT IN ('declined', 'cancelled', 'cancelled_due_to_conflict', 'completed', 'auto_completed', 'expired', 'broken', 'history')) > 0"
+				whereClause += " AND (SELECT COUNT(*) FROM trades WHERE target_product_id = p.id AND status NOT IN ('declined', 'cancelled', 'cancelled_due_to_conflict', 'completed', 'did_not_push_through', 'auto_completed', 'expired', 'broken', 'history')) > 0"
 			} else {
 				// Products without active offers
-				whereClause += " AND (SELECT COUNT(*) FROM trades WHERE target_product_id = p.id AND status NOT IN ('declined', 'cancelled', 'cancelled_due_to_conflict', 'completed', 'auto_completed', 'expired', 'broken', 'history')) = 0"
+				whereClause += " AND (SELECT COUNT(*) FROM trades WHERE target_product_id = p.id AND status NOT IN ('declined', 'cancelled', 'cancelled_due_to_conflict', 'completed', 'did_not_push_through', 'auto_completed', 'expired', 'broken', 'history')) = 0"
 			}
 		}
 	}
@@ -1728,7 +1728,7 @@ func (h *ProductHandler) GetBoostCandidates(c *fiber.Ctx) error {
 		  AND p.status = 'available'
 		  AND p.created_at < DATE_SUB(NOW(), INTERVAL 3 DAY)
 		  AND (p.boosted_at IS NULL OR p.boosted_at < DATE_SUB(NOW(), INTERVAL 3 DAY))
-		  AND (SELECT COUNT(*) FROM trades t WHERE t.target_product_id = p.id AND t.status NOT IN ('declined','cancelled','completed')) = 0
+		  AND (SELECT COUNT(*) FROM trades t WHERE t.target_product_id = p.id AND t.status NOT IN ('declined','cancelled','completed','did_not_push_through')) = 0
 		  AND (SELECT COUNT(*) FROM wishlists w WHERE w.product_id = p.id) = 0
 		ORDER BY p.created_at ASC
 		LIMIT 20
@@ -2668,7 +2668,7 @@ func (h *ProductHandler) DeleteProduct(c *fiber.Ctx) error {
 			WHERE (target_product_id = ? OR id IN (
 				SELECT DISTINCT trade_id FROM trade_items WHERE product_id = ?
 			))
-			AND status NOT IN ('declined', 'cancelled', 'cancelled_due_to_conflict', 'completed', 'auto_completed', 'expired', 'broken', 'history')
+			AND status NOT IN ('declined', 'cancelled', 'cancelled_due_to_conflict', 'completed', 'did_not_push_through', 'auto_completed', 'expired', 'broken', 'history')
 		`, productID, productID).Scan(&results.tradeCount)
 	}()
 

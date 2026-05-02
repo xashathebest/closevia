@@ -271,7 +271,7 @@ func (h *TradeHandler) SubmitTradeReview(c *fiber.Ctx) error {
 		// 8a: Guard — don't finalize an already-terminal trade.
 		var currentStatus string
 		_ = h.db.QueryRow("SELECT status FROM trades WHERE id=?", tradeID).Scan(&currentStatus)
-		if currentStatus == "cancelled" || currentStatus == "completed" || currentStatus == "auto_completed" {
+		if currentStatus == "cancelled" || currentStatus == "completed" || currentStatus == "auto_completed" || currentStatus == "did_not_push_through" || currentStatus == "under_review" {
 			goto skipAutoComplete
 		}
 

@@ -133,6 +133,18 @@ func main() {
 	defer database.CloseDatabase()
 	log.Println("[STARTUP] Database connected successfully")
 
+	// Promote ADMIN_EMAIL to admin role on every startup (safe to run repeatedly).
+	if adminEmail := strings.TrimSpace(os.Getenv("ADMIN_EMAIL")); adminEmail != "" {
+		var count int
+		if err := database.DB.QueryRow("SELECT COUNT(*) FROM users WHERE email = ?", adminEmail).Scan(&count); err == nil && count > 0 {
+			if _, err := database.DB.Exec("UPDATE users SET role = 'admin' WHERE email = ?", adminEmail); err == nil {
+				log.Printf("[STARTUP] Admin role ensured for %s", adminEmail)
+			}
+		} else if count == 0 {
+			log.Printf("[STARTUP] ADMIN_EMAIL %s not found in users table yet — will be promoted on first login", adminEmail)
+		}
+	}
+
 	// Auto-migration (CreateTables) can be extremely slow on hosted DBs (ALTER TABLE on large tables).
 	// Default behavior:
 	// - local DB: run CreateTables

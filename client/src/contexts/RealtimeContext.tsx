@@ -100,6 +100,13 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     queryClient.refetchQueries({ queryKey: ['trades'], type: 'all' })
   }, [queryClient])
 
+  const refreshTradeHistoryNow = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: DASHBOARD_QUERY_KEYS.tradeHistory })
+    queryClient.invalidateQueries({ queryKey: DASHBOARD_QUERY_KEYS.archivedTrades })
+    queryClient.refetchQueries({ queryKey: DASHBOARD_QUERY_KEYS.tradeHistory, type: 'active' })
+    queryClient.refetchQueries({ queryKey: DASHBOARD_QUERY_KEYS.archivedTrades, type: 'active' })
+  }, [queryClient])
+
   const refreshProductListsNow = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: DASHBOARD_QUERY_KEYS.products })
     window.dispatchEvent(new CustomEvent('clovia:products-refresh'))
@@ -214,10 +221,14 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           case 'trade_created':
             // Invalidate offers/trades in React Query cache so Dashboard refreshes immediately
             refreshOfferQueriesNow()
+            refreshTradeHistoryNow()
             refreshCounts()
             // Refresh received offers and ongoing trades
             if (refreshCallbacksRef.current.receivedOffers) {
               refreshCallbacksRef.current.receivedOffers()
+            }
+            if (refreshCallbacksRef.current.sentOffers) {
+              refreshCallbacksRef.current.sentOffers()
             }
             if (refreshCallbacksRef.current.ongoingTrades) {
               refreshCallbacksRef.current.ongoingTrades()
@@ -241,9 +252,12 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             }
             // Invalidate offers/trades cache so updated trade appears immediately
             refreshOfferQueriesNow()
+            refreshTradeHistoryNow()
             refreshCounts()
+            if (refreshCallbacksRef.current.sentOffers) refreshCallbacksRef.current.sentOffers()
             if (refreshCallbacksRef.current.receivedOffers) refreshCallbacksRef.current.receivedOffers()
             if (refreshCallbacksRef.current.ongoingTrades) refreshCallbacksRef.current.ongoingTrades()
+            if (refreshCallbacksRef.current.history) refreshCallbacksRef.current.history()
             refreshProductListsNow()
             break
           case 'trade_review_submitted':
@@ -253,9 +267,13 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           case 'trade_loop_ongoing':
           case 'trade_loop_broken':
           case 'trade_loop_cancelled':
+          case 'trade_loop_did_not_push_through':
             if (payload.type !== 'trade_loop_message') {
               if (shouldNotify({ notification_type: payload.type, message })) {
-                showNotification(message || (payload.type === 'trade_completed' ? 'Trade completed!' : 'Trade updated'), 'success')
+                showNotification(
+                  message || (payload.type === 'trade_completed' ? 'Trade completed!' : 'Trade updated'),
+                  payload.type === 'trade_loop_did_not_push_through' ? 'info' : 'success'
+                )
               }
             }
             // Refresh counts and all relevant tabs
@@ -263,9 +281,13 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             if (refreshCallbacksRef.current.multiway) refreshCallbacksRef.current.multiway()
             if (refreshCallbacksRef.current.multiwayAlert) refreshCallbacksRef.current.multiwayAlert()
             if (refreshCallbacksRef.current.ongoingTrades) refreshCallbacksRef.current.ongoingTrades()
+            if (refreshCallbacksRef.current.sentOffers) refreshCallbacksRef.current.sentOffers()
+            if (refreshCallbacksRef.current.receivedOffers) refreshCallbacksRef.current.receivedOffers()
+            if (refreshCallbacksRef.current.history) refreshCallbacksRef.current.history()
             refreshProductListsNow()
             // Invalidate queries for fresh data
             refreshOfferQueriesNow()
+            refreshTradeHistoryNow()
             break
           case 'notification':
             refreshCounts()
@@ -304,10 +326,12 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
               showNotification('Trade auto-completed!', 'success')
             }
             refreshOfferQueriesNow()
+            refreshTradeHistoryNow()
             refreshCounts()
             if (refreshCallbacksRef.current.ongoingTrades) {
               refreshCallbacksRef.current.ongoingTrades()
             }
+            if (refreshCallbacksRef.current.history) refreshCallbacksRef.current.history()
             refreshProductListsNow()
             break
           case 'trade_message':
@@ -370,7 +394,7 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         streamAbortRef.current = null
       }
     }
-  }, [user, getSseBaseUrl, shouldNotify, showNotification, queryClient, refreshCounts, refreshOfferQueriesNow, refreshProductListsNow])
+  }, [user, getSseBaseUrl, shouldNotify, showNotification, queryClient, refreshCounts, refreshOfferQueriesNow, refreshTradeHistoryNow, refreshProductListsNow])
 
   useEffect(() => { if (user) refreshCounts() }, [user, refreshCounts])
 

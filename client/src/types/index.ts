@@ -247,7 +247,7 @@ export interface PaginatedResponse<T> {
   total_pages: number
 }
 
-export type TradeStatus = 'pending' | 'partially_accepted' | 'pending_multiway' | 'accepted' | 'accepted_by_one' | 'accepted_by_both' | 'confirmed' | 'declined' | 'rejected' | 'countered' | 'active' | 'ongoing' | 'awaiting_confirmation' | 'completed' | 'auto_completed' | 'cancelled' | 'cancelled_due_to_conflict' | 'expired' | 'broken' | 'history' | 'multiway_active' | 'pending_user3' | 'user3_accepted'
+export type TradeStatus = 'pending' | 'partially_accepted' | 'pending_multiway' | 'accepted' | 'accepted_by_one' | 'accepted_by_both' | 'confirmed' | 'declined' | 'rejected' | 'countered' | 'active' | 'ongoing' | 'awaiting_confirmation' | 'awaiting_other_party' | 'completed' | 'did_not_push_through' | 'under_review' | 'auto_completed' | 'cancelled' | 'cancelled_due_to_conflict' | 'expired' | 'broken' | 'history' | 'multiway_active' | 'pending_user3' | 'user3_accepted'
 export type TradeOption = 'meetup' | 'delivery'
 
 export interface TradeItem {
@@ -373,7 +373,7 @@ export interface MultiWayTrade {
   participants: MultiWayTradeParticipant[]
   edges: TradeEdge[]
   total_value?: number
-  status: 'pending' | 'partially_accepted' | 'accepted' | 'confirmed' | 'ongoing' | 'cancelled' | 'cancelled_due_to_conflict' | 'broken' | 'expired' | 'rejected' | 'history' | 'active' | 'completed' | 'user3_accepted' | 'pending_user3' | 'multiway_active'
+  status: 'pending' | 'partially_accepted' | 'accepted' | 'confirmed' | 'ongoing' | 'did_not_push_through' | 'cancelled' | 'cancelled_due_to_conflict' | 'broken' | 'expired' | 'rejected' | 'history' | 'active' | 'completed' | 'user3_accepted' | 'pending_user3' | 'multiway_active'
   created_at?: string
   expires_at?: string
 }
