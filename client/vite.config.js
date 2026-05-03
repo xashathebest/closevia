@@ -13,7 +13,7 @@ export default defineConfig({
             injectRegister: false,
             manifest: false,
             workbox: {
-                cacheId: 'clovia-v2-logo-update',
+                cacheId: 'clovia-v3-png-icons',
                 cleanupOutdatedCaches: true,
                 importScripts: ['/push-sw.js?v=2'],
                 maximumFileSizeToCacheInBytes: 3 * 1024 * 1024,
@@ -22,7 +22,7 @@ export default defineConfig({
                         urlPattern: ({ request }) => request.destination === 'document',
                         handler: 'NetworkFirst',
                         options: {
-                            cacheName: 'pages-cache-v2-logo-update',
+                            cacheName: 'pages-cache-v2-png-icons',
                             networkTimeoutSeconds: 5,
                         },
                     },
@@ -33,7 +33,7 @@ export default defineConfig({
                         urlPattern: /^https:\/\/.*\.firebaseapp\.com\/.*\/(auth\/)?(iframe|__)?.*\.js$/,
                         handler: 'CacheFirst',
                         options: {
-                            cacheName: 'firebase-auth-cache-v2-logo-update',
+                            cacheName: 'firebase-auth-cache-v2-png-icons',
                             expiration: {
                                 maxEntries: 50,
                                 maxAgeSeconds: 60 * 60 * 24 * 365, // 1 year
@@ -48,7 +48,7 @@ export default defineConfig({
                         urlPattern: /^https:\/\/(www\.)?firebase\.googleapis\.com\/.*/,
                         handler: 'CacheFirst',
                         options: {
-                            cacheName: 'firebase-api-cache-v2-logo-update',
+                            cacheName: 'firebase-api-cache-v2-png-icons',
                             expiration: {
                                 maxEntries: 50,
                                 maxAgeSeconds: 60 * 60 * 24 * 30, // 30 days
@@ -63,7 +63,7 @@ export default defineConfig({
                         urlPattern: /^https:\/\/(fonts\.googleapis\.com|fonts\.gstatic\.com)\/.*/,
                         handler: 'CacheFirst',
                         options: {
-                            cacheName: 'google-fonts-cache-v2-logo-update',
+                            cacheName: 'google-fonts-cache-v2-png-icons',
                             expiration: {
                                 maxEntries: 100,
                                 maxAgeSeconds: 60 * 60 * 24 * 365, // 1 year - fonts URLs are versioned
@@ -78,7 +78,7 @@ export default defineConfig({
                         urlPattern: /^https:\/\/res\.cloudinary\.com\/.*/,
                         handler: 'CacheFirst',
                         options: {
-                            cacheName: 'cloudinary-cache-v2-logo-update',
+                            cacheName: 'cloudinary-cache-v2-png-icons',
                             expiration: {
                                 maxEntries: 200,
                                 maxAgeSeconds: 60 * 60 * 24 * 365, // 1 year
@@ -93,7 +93,7 @@ export default defineConfig({
                         urlPattern: /^https:\/\/(cdn\.|images\.).*/,
                         handler: 'CacheFirst',
                         options: {
-                            cacheName: 'cdn-cache-v2-logo-update',
+                            cacheName: 'cdn-cache-v2-png-icons',
                             expiration: {
                                 maxEntries: 100,
                                 maxAgeSeconds: 60 * 60 * 24 * 180, // 6 months
@@ -107,7 +107,7 @@ export default defineConfig({
                         urlPattern: ({ request }) => ['script', 'style', 'worker'].includes(request.destination),
                         handler: 'StaleWhileRevalidate',
                         options: {
-                            cacheName: 'assets-cache-v2-logo-update',
+                            cacheName: 'assets-cache-v2-png-icons',
                             expiration: {
                                 maxAgeSeconds: 60 * 60 * 24 * 7, // 7 days for local assets
                             },
@@ -117,7 +117,7 @@ export default defineConfig({
                         urlPattern: ({ request }) => request.destination === 'image',
                         handler: 'CacheFirst',
                         options: {
-                            cacheName: 'images-cache-v2-logo-update',
+                            cacheName: 'images-cache-v2-png-icons',
                             expiration: {
                                 maxEntries: 100,
                                 maxAgeSeconds: 60 * 60 * 24 * 30,

@@ -127,6 +127,7 @@ const MEETUP_CONFIRM_RADIUS_M = 100
 const LOW_GPS_ACCURACY_WARNING_M = 100
 const MEETUP_GRACE_PERIOD_MINUTES = 10
 const ARRIVAL_CONFIRM_EARLY_WINDOW_MINUTES = 60
+const SCHEDULE_EXPIRATION_GRACE_HOURS = 2
 
 const calculateDistanceMeters = (lat1: number, lng1: number, lat2: number, lng2: number) => {
   const toRad = (value: number) => value * Math.PI / 180
@@ -228,6 +229,7 @@ const getArrivalWindowState = (deadline: Date | null, nowMs: number, gracePeriod
 
   const startsAt = new Date(deadline.getTime() - ARRIVAL_CONFIRM_EARLY_WINDOW_MINUTES * 60000)
   const endsAt = new Date(deadline.getTime() + Math.max(1, gracePeriodMinutes) * 60000)
+  const expiresAt = new Date(deadline.getTime() + SCHEDULE_EXPIRATION_GRACE_HOURS * 60 * 60000)
   if (nowMs < startsAt.getTime()) {
     return {
       startsAt,
@@ -238,14 +240,14 @@ const getArrivalWindowState = (deadline: Date | null, nowMs: number, gracePeriod
       message: 'You can confirm starting 1 hour before the scheduled time.',
     }
   }
-  if (nowMs > endsAt.getTime() + 60 * 60000) {
+  if (nowMs > expiresAt.getTime()) {
     return {
       startsAt,
       endsAt,
-      isOpen: true,
+      isOpen: false,
       isTooEarly: false,
-      isExpired: false,
-      message: 'No-show has a much bigger trust score impact.',
+      isExpired: true,
+      message: 'Scheduled time has passed. This trade will move to history.',
     }
   }
   if (nowMs > endsAt.getTime()) {
@@ -255,7 +257,7 @@ const getArrivalWindowState = (deadline: Date | null, nowMs: number, gracePeriod
       isOpen: true,
       isTooEarly: false,
       isExpired: false,
-      message: 'If you are late, you can still confirm, but your trust score may be slightly affected.',
+      message: 'Scheduled time has passed. You can still confirm during the grace period.',
     }
   }
   return {
@@ -2017,9 +2019,9 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
   const pickupArrivalMissingMap = pickupMapMissing && !meetupTrackingPoint
   const pickupConfirmDisabled = isPickupTrade
     ? (isPickupTraveler
-      ? buyerMetConfirmed || pickupArrivalMissingMap || !meetupLocationVerified || arrivalWindowState.isTooEarly
-      : sellerMetConfirmed || !buyerMetConfirmed || arrivalWindowState.isTooEarly)
-    : userMetConfirmed || !meetupLocationVerified || arrivalWindowState.isTooEarly
+      ? buyerMetConfirmed || pickupArrivalMissingMap || !meetupLocationVerified || arrivalWindowState.isTooEarly || arrivalWindowState.isExpired
+      : sellerMetConfirmed || !buyerMetConfirmed || arrivalWindowState.isTooEarly || arrivalWindowState.isExpired)
+    : userMetConfirmed || !meetupLocationVerified || arrivalWindowState.isTooEarly || arrivalWindowState.isExpired
   const trackingConfirmLabel = isPickupTrade
     ? (isUserBuyer
       ? (buyerMetConfirmed ? 'Arrival Confirmed' : 'Confirm Pickup Arrival')

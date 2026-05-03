@@ -160,6 +160,7 @@ const MULTIWAY_CONFIRM_RADIUS_M = 150
 const LOW_GPS_ACCURACY_WARNING_M = 100
 const MEETUP_GRACE_PERIOD_MINUTES = 10
 const ARRIVAL_CONFIRM_EARLY_WINDOW_MINUTES = 60
+const SCHEDULE_EXPIRATION_GRACE_HOURS = 2
 
 const calculateDistanceMeters = (lat1: number, lng1: number, lat2: number, lng2: number) => {
   const toRad = (value: number) => value * Math.PI / 180
@@ -209,6 +210,7 @@ const getArrivalWindowState = (scheduled: Date | null, nowMs: number, gracePerio
   }
   const startsAt = scheduled.getTime() - ARRIVAL_CONFIRM_EARLY_WINDOW_MINUTES * 60000
   const endsAt = scheduled.getTime() + Math.max(1, gracePeriodMinutes) * 60000
+  const expiresAt = scheduled.getTime() + SCHEDULE_EXPIRATION_GRACE_HOURS * 60 * 60000
   if (nowMs < startsAt) {
     return {
       isOpen: false,
@@ -217,20 +219,20 @@ const getArrivalWindowState = (scheduled: Date | null, nowMs: number, gracePerio
       message: 'You can confirm starting 1 hour before the scheduled time.',
     }
   }
-  if (nowMs > endsAt + 60 * 60000) {
+  if (nowMs > expiresAt) {
     return {
-      isOpen: true,
+      isOpen: false,
       isTooEarly: false,
       isExpired: true,
-      message: 'No-show has a much bigger trust score impact.',
+      message: 'Scheduled time has passed. This trade will move to history.',
     }
   }
   if (nowMs > endsAt) {
     return {
       isOpen: true,
       isTooEarly: false,
-      isExpired: true,
-      message: 'If you are late, you can still confirm, but your trust score may be slightly affected.',
+      isExpired: false,
+      message: 'Scheduled time has passed. You can still confirm during the grace period.',
     }
   }
   return {
@@ -1848,7 +1850,7 @@ const MultiWayTradeModal: React.FC<MultiWayTradeModalProps> = ({
     if (!agreedMeetup) return null
 
     const missingSchedule = !agreedMeetup?.meetup_location || !agreedMeetup?.meetup_date || !agreedMeetup?.meetup_time
-    const confirmDisabled = myMetConfirmed || !multiwayLocationVerified || arrivalWindowState.isTooEarly || missingSchedule
+    const confirmDisabled = myMetConfirmed || !multiwayLocationVerified || arrivalWindowState.isTooEarly || arrivalWindowState.isExpired || missingSchedule
     const confirmReason = myMetConfirmed
       ? 'You already confirmed.'
       : missingSchedule

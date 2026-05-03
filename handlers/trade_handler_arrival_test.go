@@ -44,6 +44,18 @@ func TestValidateArrivalConfirmationWindow(t *testing.T) {
 	}
 }
 
+func TestValidateScheduledTradeNotExpired(t *testing.T) {
+	scheduled := time.Date(2026, 4, 30, 14, 0, 0, 0, time.UTC)
+
+	if err := validateScheduledTradeNotExpired(scheduled.Add(90*time.Minute), scheduled); err != nil {
+		t.Fatalf("expected schedule to remain actionable during grace period: %v", err)
+	}
+	err := validateScheduledTradeNotExpired(scheduled.Add(time.Duration(scheduledTradeExpirationGraceHours)*time.Hour+time.Minute), scheduled)
+	if err == nil || err.Error() != "Scheduled time has passed. This trade will move to history." {
+		t.Fatalf("expected expired schedule error, got %v", err)
+	}
+}
+
 func TestParseTradeArrivalDeadlineRequiresFullDate(t *testing.T) {
 	if _, ok := parseTradeArrivalDeadline("15:04"); ok {
 		t.Fatal("time-only meetup value should not be accepted as a reliable arrival deadline")

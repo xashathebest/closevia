@@ -193,6 +193,7 @@ const meetupConfirmRadiusMeters = 100.0
 const multiwayConfirmRadiusMeters = 150.0
 const meetupGracePeriodMinutes = 10
 const meetupConfirmEarlyWindowMinutes = 60
+const scheduledTradeExpirationGraceHours = 2
 
 func validCoordinate(lat, lng float64) bool {
 	return lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180 && !(lat == 0 && lng == 0)
@@ -246,6 +247,14 @@ func validateArrivalConfirmationWindow(now, scheduled time.Time) error {
 	earlyWindow := scheduled.Add(-time.Duration(meetupConfirmEarlyWindowMinutes) * time.Minute)
 	if now.Before(earlyWindow) {
 		return fmt.Errorf("You can only confirm arrival within 1 hour before the scheduled time.")
+	}
+	return nil
+}
+
+func validateScheduledTradeNotExpired(now, scheduled time.Time) error {
+	expiresAt := scheduled.Add(time.Duration(scheduledTradeExpirationGraceHours) * time.Hour)
+	if now.After(expiresAt) {
+		return fmt.Errorf("Scheduled time has passed. This trade will move to history.")
 	}
 	return nil
 }
@@ -2155,12 +2164,27 @@ func (h *TradeHandler) GetTrades(c *fiber.Ctx) error {
 
 	status := c.Query("status", "")
 	direction := c.Query("direction", "")
+	pageParam := strings.TrimSpace(c.Query("page", ""))
+	isPaginated := pageParam != "" || strings.EqualFold(strings.TrimSpace(c.Query("paginate", "")), "true")
+	page := 1
+	if pageParam != "" {
+		if pageVal, err := strconv.Atoi(pageParam); err == nil && pageVal > 0 {
+			page = pageVal
+		}
+	}
 	limit := 1000 // Default unlimited (high cap)
+	if isPaginated {
+		limit = 20
+	}
 	if limitStr := c.Query("limit"); limitStr != "" {
 		if limitVal, err := strconv.Atoi(limitStr); err == nil && limitVal > 0 {
 			limit = limitVal
 		}
 	}
+	if isPaginated && limit > 100 {
+		limit = 100
+	}
+	offset := (page - 1) * limit
 	where := "WHERE (t.buyer_id = ? OR t.seller_id = ?)"
 	args := []interface{}{userID, userID}
 	switch direction {
@@ -2182,6 +2206,8 @@ func (h *TradeHandler) GetTrades(c *fiber.Ctx) error {
 	if status != "" {
 		if status == "pending" {
 			where += " AND (t.status = 'pending' OR t.status = 'pending_multiway' OR t.status = 'accepted_by_one')"
+		} else if status == "history" {
+			where += " AND t.status IN ('completed', 'auto_completed', 'did_not_push_through', 'cancelled', 'cancelled_due_to_conflict', 'declined', 'rejected', 'expired', 'broken')"
 		} else {
 			where += " AND t.status = ?"
 			args = append(args, status)
@@ -2191,6 +2217,15 @@ func (h *TradeHandler) GetTrades(c *fiber.Ctx) error {
 		if pid, err := strconv.Atoi(targetProductID); err == nil && pid > 0 {
 			where += " AND t.target_product_id = ?"
 			args = append(args, pid)
+		}
+	}
+
+	total := 0
+	if isPaginated {
+		countQuery := `SELECT COUNT(*) FROM trades t ` + where
+		if err := h.db.QueryRow(countQuery, args...).Scan(&total); err != nil {
+			log.Printf("GetTrades count query error: %v", err)
+			total = 0
 		}
 	}
 
@@ -2274,10 +2309,23 @@ func (h *TradeHandler) GetTrades(c *fiber.Ctx) error {
         JOIN users ub ON ub.id = t.buyer_id
         JOIN users us ON us.id = t.seller_id
         LEFT JOIN products p ON p.id = t.target_product_id
-        ` + where + `
-        ORDER BY t.created_at DESC`
+        ` + where
 
-	rows, err := h.db.Query(query, args...)
+	sortParam := strings.ToLower(strings.TrimSpace(c.Query("sort", "newest")))
+	orderDir := "DESC"
+	if sortParam == "oldest" {
+		orderDir = "ASC"
+	}
+	query += `
+        ORDER BY COALESCE(t.completed_at, t.updated_at, t.created_at) ` + orderDir
+
+	queryArgs := append([]interface{}{}, args...)
+	if isPaginated {
+		query += ` LIMIT ? OFFSET ?`
+		queryArgs = append(queryArgs, limit, offset)
+	}
+
+	rows, err := h.db.Query(query, queryArgs...)
 	if err != nil {
 		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to fetch trades"})
 	}
@@ -2426,7 +2474,7 @@ func (h *TradeHandler) GetTrades(c *fiber.Ctx) error {
 
 	// Also include multiway-active trades where user is User3 (not buyer/seller on original trade).
 	// This ensures all 3 participants see the trade in "Ongoing Trades" after everyone accepts.
-	if status == "multiway_active" || status == "" {
+	if !isPaginated && (status == "multiway_active" || status == "") {
 		mwRows, mwErr := h.db.Query(`
 			SELECT t.id FROM trades t
 			JOIN multiway_trades m ON m.original_trade_id = t.id
@@ -2489,6 +2537,21 @@ func (h *TradeHandler) GetTrades(c *fiber.Ctx) error {
 			break
 		}
 		trades = append(trades, *tr)
+	}
+
+	if isPaginated {
+		totalPages := 0
+		if limit > 0 && total > 0 {
+			totalPages = (total + limit - 1) / limit
+		}
+		return c.JSON(models.APIResponse{Success: true, Data: fiber.Map{
+			"data":        trades,
+			"total":       total,
+			"page":        page,
+			"limit":       limit,
+			"total_pages": totalPages,
+			"totalPages":  totalPages,
+		}})
 	}
 
 	return c.JSON(models.APIResponse{Success: true, Data: trades})
@@ -3787,6 +3850,9 @@ func (h *TradeHandler) UpdateTrade(c *fiber.Ctx) error {
 		}
 		now := time.Now()
 		if err := validateArrivalConfirmationWindow(now, agreedDeadline.Time); err != nil {
+			return c.Status(400).JSON(models.APIResponse{Success: false, Error: err.Error()})
+		}
+		if err := validateScheduledTradeNotExpired(now, agreedDeadline.Time); err != nil {
 			return c.Status(400).JSON(models.APIResponse{Success: false, Error: err.Error()})
 		}
 		if meetingType == "pickup" {
@@ -5597,6 +5663,9 @@ func (h *TradeHandler) UpdateTradeLoopMeetup(c *fiber.Ctx) error {
 		}
 		now := time.Now()
 		if err := validateArrivalConfirmationWindow(now, scheduled); err != nil {
+			return c.Status(400).JSON(models.APIResponse{Success: false, Error: err.Error()})
+		}
+		if err := validateScheduledTradeNotExpired(now, scheduled); err != nil {
 			return c.Status(400).JSON(models.APIResponse{Success: false, Error: err.Error()})
 		}
 
@@ -7521,6 +7590,23 @@ func (h *TradeHandler) GetTradeLoops(c *fiber.Ctx) error {
 	}
 
 	statusFilter := c.Query("status", "")
+	pageParam := strings.TrimSpace(c.Query("page", ""))
+	isPaginated := pageParam != "" || strings.EqualFold(strings.TrimSpace(c.Query("paginate", "")), "true")
+	page := 1
+	if pageParam != "" {
+		if pageVal, err := strconv.Atoi(pageParam); err == nil && pageVal > 0 {
+			page = pageVal
+		}
+	}
+	limit := 20
+	if limitStr := strings.TrimSpace(c.Query("limit", "")); limitStr != "" {
+		if limitVal, err := strconv.Atoi(limitStr); err == nil && limitVal > 0 {
+			limit = limitVal
+		}
+	}
+	if limit > 100 {
+		limit = 100
+	}
 	refreshLoops := strings.EqualFold(strings.TrimSpace(c.Query("refresh", "")), "true") ||
 		strings.TrimSpace(c.Query("refresh", "")) == "1"
 	if statusFilter == "" && refreshLoops {
@@ -7555,6 +7641,18 @@ func (h *TradeHandler) GetTradeLoops(c *fiber.Ctx) error {
 			FROM trade_like_loops l
 			JOIN trade_like_loop_participants p ON p.loop_id = l.id
 			WHERE p.user_id = ? AND l.status IN ('rejected', 'cancelled', 'cancelled_due_to_conflict', 'broken', 'expired')
+			ORDER BY l.updated_at DESC
+		`
+		args = []interface{}{userID}
+	case "history":
+		query = `
+			SELECT l.id, l.status, l.updated_at
+			FROM trade_like_loops l
+			JOIN trade_like_loop_participants p ON p.loop_id = l.id
+			WHERE p.user_id = ? AND l.status IN (
+				'completed', 'history', 'did_not_push_through', 'rejected', 'cancelled',
+				'cancelled_due_to_conflict', 'broken', 'expired'
+			)
 			ORDER BY l.updated_at DESC
 		`
 		args = []interface{}{userID}
@@ -7618,6 +7716,30 @@ func (h *TradeHandler) GetTradeLoops(c *fiber.Ctx) error {
 		loops = []map[string]interface{}{}
 	}
 
+	if isPaginated {
+		total := len(loops)
+		start := (page - 1) * limit
+		if start > total {
+			start = total
+		}
+		end := start + limit
+		if end > total {
+			end = total
+		}
+		totalPages := 0
+		if limit > 0 && total > 0 {
+			totalPages = (total + limit - 1) / limit
+		}
+		return c.JSON(models.APIResponse{Success: true, Data: fiber.Map{
+			"data":        loops[start:end],
+			"total":       total,
+			"page":        page,
+			"limit":       limit,
+			"total_pages": totalPages,
+			"totalPages":  totalPages,
+		}})
+	}
+
 	return c.JSON(models.APIResponse{Success: true, Data: loops})
 }
 
@@ -7666,6 +7788,8 @@ func (h *TradeHandler) getMultiwayChainSummariesForUser(userID int, statusFilter
 	switch statusFilter {
 	case "completed":
 		statuses = []string{"completed", "history"}
+	case "history":
+		statuses = []string{"completed", "history", "did_not_push_through", "cancelled", "cancelled_due_to_conflict", "broken", "expired", "user3_declined"}
 	case "cancelled":
 		statuses = []string{"cancelled", "cancelled_due_to_conflict", "broken", "expired", "user3_declined"}
 	}

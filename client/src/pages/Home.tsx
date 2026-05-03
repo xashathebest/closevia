@@ -77,6 +77,11 @@ import { useTradeMatchScores } from '../hooks/useTradeMatchScore'
 import AdvertisementCarousel from '../components/AdvertisementCarousel'
 import AppDownloadBanner from '../components/AppDownloadBanner'
 import { getBoostStatus } from '../utils/boostUtils'
+
+const HOME_CONTENT_MAX_W = { base: '100%', lg: 'min(1560px, calc(100vw - 70px - 64px))', xl: 'min(1560px, calc(100vw - 70px - 80px))' }
+const HOME_SHELL_MAX_W = { base: '100%', lg: 'min(1640px, calc(100vw - 70px))' }
+const HOME_SECTION_MX = { base: 'auto', lg: 0 }
+
 const useDebounce = (value: string, delay: number) => {
   const [debouncedValue, setDebouncedValue] = useState(value)
 
@@ -698,9 +703,10 @@ const Home: React.FC = () => {
         templateColumns={{
           base: 'repeat(2, 1fr)',
           sm: 'repeat(3, 1fr)',
-          md: 'repeat(5, 1fr)',
+          lg: 'repeat(4, 1fr)',
+          xl: 'repeat(5, 1fr)',
         }}
-        gap={{ base: 2, md: 3 }}
+        gap={{ base: 2, md: 3, lg: 4, xl: 5 }}
         w="full"
         sx={{
           '& > *': {
@@ -741,7 +747,7 @@ const Home: React.FC = () => {
   }
 
   return (
-    <Box minH="100vh" bg="#FFFDF1">
+    <Box minH="100vh" w="full" maxW="100%" overflowX="hidden" bg="#FFFDF1">
       <AppDownloadBanner variant="card" position="top" />
       {/* Sticky Search Header - desktop: centered max-width */}
       <Box
@@ -756,9 +762,8 @@ const Home: React.FC = () => {
         <VStack
           spacing={4}
           w="full"
-          maxW={{ lg: '1600px', xl: '1620px', '2xl': '1920px' }}
-          mx={{ base: 'auto', lg: 0 }}
-          ml={{ base: 0, md: -2, lg: -6, xl: -8 }}
+          maxW={HOME_CONTENT_MAX_W}
+          mx={HOME_SECTION_MX}
           position="relative"
         >
           {/* Main Search Bar - Full width on mobile, inline on desktop */}
@@ -1392,9 +1397,8 @@ const Home: React.FC = () => {
       >
         <Box
           w="full"
-          maxW={{ lg: '1600px', xl: '1620px', '2xl': '1920px' }}
-          mx={{ base: 'auto', lg: 0 }}
-          ml={{ base: 0, md: -2, lg: -6, xl: -8 }}
+          maxW={HOME_CONTENT_MAX_W}
+          mx={HOME_SECTION_MX}
         >
           <HStack
             spacing={{ base: 2.5, md: 3 }}
@@ -1493,8 +1497,10 @@ const Home: React.FC = () => {
         </Box>
       </Box>
 
-      <Box mt={{ base: 0, md: 6, lg: 8 }}>
+      <Box px={{ base: 3, md: 6, lg: 8, xl: 10 }} mt={{ base: 0, md: 6, lg: 8 }}>
+        <Box maxW={HOME_CONTENT_MAX_W} mx={HOME_SECTION_MX}>
         <ActivityFeed />
+        </Box>
       </Box>
 
       {/* Main Content - desktop: centered max-width */}
@@ -1502,9 +1508,8 @@ const Home: React.FC = () => {
         px={{ base: 3, md: 6, lg: 8, xl: 10 }}
         py={8}
         sx={{ '@media (max-width: 850px)': { paddingLeft: '12px', paddingRight: '12px' } }}
-        maxW={{ lg: '1600px', xl: '1620px', '2xl': '1920px' }}
-        mx={{ base: 'auto', lg: 0 }}
-        ml={{ base: 0, md: -2, lg: -6, xl: -8 }}
+        maxW={HOME_SHELL_MAX_W}
+        mx={HOME_SECTION_MX}
         w="full"
       >
         {/* Loading State with Skeleton */}
@@ -1516,12 +1521,12 @@ const Home: React.FC = () => {
 
         {/* Error Display removed intentionally for cleaner UX */}
 
-        {/* Products Grid - desktop: no extra maxW (parent constrains), 2xl: 6 cols */}
+        {/* Products Grid - desktop remains capped at 5 columns while the shared container widens. */}
         {!loading && !isLoadingCategoryChange && products.length > 0 && (
           <Box
             w="full"
             mx="auto"
-            px={{ base: 3.5, md: 4, lg: 0 }}
+            px={{ base: 3.5, md: 0 }}
             pb={{ base: 20, md: 0 }}
             minH={{ base: '1200px', md: '1600px' }}
             sx={{ '@media (max-width: 850px)': { paddingLeft: '12px', paddingRight: '12px', marginLeft: 0 } }}

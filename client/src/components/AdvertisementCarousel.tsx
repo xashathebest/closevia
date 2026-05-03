@@ -14,6 +14,9 @@ import { ArrowLeftIcon, ArrowRightIcon } from '@chakra-ui/icons'
 import { api } from '../services/api'
 import { getImageUrl } from '../utils/imageUtils'
 
+const HOME_SHELL_MAX_W = { base: '100%', lg: 'min(1640px, calc(100vw - 70px))' }
+const HOME_SECTION_MX = { base: 'auto', lg: 0 }
+
 interface Advertisement {
   id: number
   title: string
@@ -120,7 +123,7 @@ const AdvertisementCarousel = () => {
 
   if (loading) {
     return (
-      <Box w="full" maxW={{ lg: '1600px', xl: '1620px', '2xl': '1920px' }} mx={{ base: 'auto', lg: 0 }} ml={{ base: 0, md: -2, lg: -6, xl: -8 }} mb={8} px={{ base: 3, md: 6, lg: 8, xl: 10 }}>
+      <Box w="full" maxW={HOME_SHELL_MAX_W} mx={HOME_SECTION_MX} mb={8} px={{ base: 3, md: 6, lg: 8, xl: 10 }}>
         <Skeleton w="full" h={{ base: '260px', sm: '290px', md: '260px', lg: '350px', xl: '380px', '2xl': '420px' }} rounded="lg" />
       </Box>
     )
@@ -130,7 +133,7 @@ const AdvertisementCarousel = () => {
   if (ads.length === 0) {
     const staticAds = ['/1.jpg', '/2.jpg', '/3.jpg']
     return (
-      <Box w="full" maxW={{ lg: '1600px', xl: '1620px', '2xl': '1920px' }} mx={{ base: 'auto', lg: 0 }} ml={{ base: 0, md: -2, lg: -6, xl: -8 }} mb={8} px={{ base: 3, md: 6, lg: 8, xl: 10 }}>
+      <Box w="full" maxW={HOME_SHELL_MAX_W} mx={HOME_SECTION_MX} mb={8} px={{ base: 3, md: 6, lg: 8, xl: 10 }}>
         <Box position="relative" overflow="hidden" w="full" h={{ base: '260px', sm: '290px', md: '260px', lg: '350px', xl: '380px', '2xl': '420px' }} rounded="lg" bg="gray.100">
           <Image src={staticAds[0]} w="full" h="full" objectFit="cover" />
         </Box>
@@ -141,9 +144,8 @@ const AdvertisementCarousel = () => {
   return (
     <Box
       w="full"
-      maxW={{ lg: '1600px', xl: '1620px', '2xl': '1920px' }}
-      mx={{ base: 'auto', lg: 0 }}
-      ml={{ base: 0, md: -2, lg: -6, xl: -8 }}
+      maxW={HOME_SHELL_MAX_W}
+      mx={HOME_SECTION_MX}
       mb={8}
       px={{ base: 3, md: 6, lg: 8, xl: 10 }}
     >

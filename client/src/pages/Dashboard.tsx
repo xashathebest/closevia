@@ -138,6 +138,9 @@ const Dashboard: React.FC = () => {
   const shouldLoadTradeHistory = activeTab === 4
   const activeOffersRefetchInterval = shouldLoadOffersTab ? 30000 : false
   const activeMultiWayRefetchInterval = shouldLoadMultiWay ? 30000 : false
+  const tradeHistoryPerPage = 6
+  const [tradeHistorySort, setTradeHistorySort] = useState<'newest' | 'oldest'>('newest')
+  const [tradeHistoryPage, setTradeHistoryPage] = useState(1)
 
   // Use React Query hooks for cached data
   const { data: userProducts = [], isLoading: productsLoading, isFetched: productsFetched } = useDashboardProducts(user?.id, { enabled: shouldLoadProducts })
@@ -154,7 +157,17 @@ const Dashboard: React.FC = () => {
     refetch: refetchMultiWayLoops,
   } = useMultiWayLoops(user?.id, { enabled: shouldLoadMultiWay, refetchInterval: activeMultiWayRefetchInterval })
   const { data: archivedTradesData = [], isFetched: archivedFetched, isFetching: archivedFetching } = useArchivedTrades({ enabled: shouldLoadArchivedTrades })
-  const { data: tradeHistoryData = [], isFetched: historyFetched, isLoading: historyLoading, isFetching: historyFetching } = useTradeHistory({ enabled: shouldLoadTradeHistory, refetchInterval: shouldLoadTradeHistory ? 30000 : false })
+  const {
+    data: tradeHistoryResult = { items: [], total: 0, page: 1, limit: tradeHistoryPerPage, totalPages: 0 },
+    isFetched: historyFetched,
+    isLoading: historyLoading,
+  } = useTradeHistory({
+    enabled: shouldLoadTradeHistory,
+    page: tradeHistoryPage,
+    limit: tradeHistoryPerPage,
+    sort: tradeHistorySort,
+    refetchInterval: false,
+  })
 
   // Unified initial loading: true until all critical queries have fetched at least once
   // Once set to false, stays false (via ref) so background refetches never re-trigger loading
@@ -243,6 +256,7 @@ const Dashboard: React.FC = () => {
   // Offers data from React Query hooks (replacing local state)
   const incoming = receivedOffersData // received offers
   const outgoing = sentOffersData // sent offers
+  const tradeHistoryData = tradeHistoryResult.items
   const tradeHistory = tradeHistoryData
 
   // Loading states from React Query
@@ -1728,7 +1742,7 @@ const Dashboard: React.FC = () => {
       countered: 'Countered',
       cancelled: 'Cancelled',
       cancelled_due_to_conflict: 'Cancelled',
-      expired: 'Expired',
+      expired: 'Scheduled time passed',
       completed: 'Completed',
       did_not_push_through: "Trade didn't push through",
       under_review: 'Under Review',
@@ -1941,8 +1955,6 @@ const Dashboard: React.FC = () => {
 
   // Trade History: All completed trades
   const [tradeHistorySearch, setTradeHistorySearch] = useState('')
-  const [tradeHistorySort, setTradeHistorySort] = useState<'newest' | 'oldest'>('newest')
-  const [tradeHistoryPage, setTradeHistoryPage] = useState(1)
   const [multiwayDetailsTrade, setMultiwayDetailsTrade] = useState<Trade | null>(null)
 
   const isMultiwayHistoryTrade = useCallback((trade: Trade) => {
@@ -2278,12 +2290,29 @@ const Dashboard: React.FC = () => {
     return filtered
   }, [tradeHistory, unifiedSearch, tradeHistorySearch, tradeHistorySort, applyUnifiedSearch])
 
-  const tradeHistoryPerPage = 6
-  const tradeHistoryTotalPages = Math.ceil(allCompletedTrades.length / tradeHistoryPerPage)
+  const isTradeHistoryClientFiltered = Boolean((unifiedSearch || tradeHistorySearch).trim())
+  const tradeHistoryItemsCount = isTradeHistoryClientFiltered ? allCompletedTrades.length : tradeHistoryResult.total
+  const tradeHistoryTotalPages = isTradeHistoryClientFiltered
+    ? Math.ceil(allCompletedTrades.length / tradeHistoryPerPage)
+    : tradeHistoryResult.totalPages
   const paginatedTradeHistory = useMemo(() => {
+    if (!isTradeHistoryClientFiltered) {
+      return allCompletedTrades
+    }
     const start = (tradeHistoryPage - 1) * tradeHistoryPerPage
     return allCompletedTrades.slice(start, start + tradeHistoryPerPage)
-  }, [allCompletedTrades, tradeHistoryPage])
+  }, [allCompletedTrades, isTradeHistoryClientFiltered, tradeHistoryPage, tradeHistoryPerPage])
+
+  useEffect(() => {
+    setTradeHistoryPage(1)
+  }, [tradeHistorySearch, tradeHistorySort, unifiedSearch])
+
+  useEffect(() => {
+    const safeTotalPages = Math.max(1, tradeHistoryTotalPages)
+    if (tradeHistoryPage > safeTotalPages) {
+      setTradeHistoryPage(safeTotalPages)
+    }
+  }, [tradeHistoryPage, tradeHistoryTotalPages])
 
   // Get current tab's trades (memoized to prevent unnecessary recalculations)
   const currentTabTrades = useMemo(() => {
@@ -2728,22 +2757,93 @@ const Dashboard: React.FC = () => {
     currentPage,
     totalPages,
     onPageChange,
-    itemsCount
+    itemsCount,
+    pageSize = itemsPerPage,
   }: {
     currentPage: number
     totalPages: number
     onPageChange: (page: number) => void
     itemsCount: number
+    pageSize?: number
   }) => {
-    if (itemsCount <= itemsPerPage) return null
+    if (itemsCount <= pageSize || totalPages <= 1) return null
+
+    const safeTotalPages = Math.max(1, totalPages)
+    const getVisiblePages = () => {
+      if (safeTotalPages <= 7) {
+        return Array.from({ length: safeTotalPages }, (_, i) => i + 1)
+      }
+      const pages: Array<number | 'ellipsis-left' | 'ellipsis-right'> = [1]
+      if (currentPage > 4) {
+        pages.push('ellipsis-left')
+      }
+      const start = Math.max(2, currentPage - 1)
+      const end = Math.min(safeTotalPages - 1, currentPage + 1)
+      for (let page = start; page <= end; page += 1) {
+        pages.push(page)
+      }
+      if (currentPage < safeTotalPages - 3) {
+        pages.push('ellipsis-right')
+      }
+      pages.push(safeTotalPages)
+      return pages
+    }
 
     return (
-      <HStack spacing={2} justify="center" mt={6}>
+      <Stack spacing={3} align="center" justify="center" mt={6} w="full">
+        <HStack
+          display={{ base: 'flex', md: 'none' }}
+          spacing={2}
+          justify="center"
+          w="full"
+          maxW="360px"
+          mx="auto"
+        >
+          <Button
+            size="md"
+            variant="outline"
+            leftIcon={<ChevronLeftIcon />}
+            onClick={() => onPageChange(Math.max(1, currentPage - 1))}
+            isDisabled={currentPage === 1}
+            minH="44px"
+            minW="104px"
+            px={3}
+            _hover={{ bg: 'gray.50' }}
+          >
+            Previous
+          </Button>
+          <Text
+            fontSize="sm"
+            color="gray.600"
+            fontWeight="600"
+            textAlign="center"
+            flex="1"
+            minW={0}
+            whiteSpace="nowrap"
+          >
+            Page {currentPage} of {safeTotalPages}
+          </Text>
+          <Button
+            size="md"
+            variant="outline"
+            rightIcon={<ChevronRightIcon />}
+            onClick={() => onPageChange(Math.min(safeTotalPages, currentPage + 1))}
+            isDisabled={currentPage === safeTotalPages}
+            minH="44px"
+            minW="84px"
+            px={3}
+            _hover={{ bg: 'gray.50' }}
+          >
+            Next
+          </Button>
+        </HStack>
+
+        <HStack spacing={2} justify="center" display={{ base: 'none', md: 'flex' }}>
         <Button
           size="sm"
           variant="outline"
           leftIcon={<ChevronLeftIcon />}
-          onClick={() => onPageChange(currentPage - 1)}
+          onClick={() => onPageChange(Math.max(1, currentPage - 1))}
           isDisabled={currentPage === 1}
           _hover={{ bg: 'gray.50' }}
         >
@@ -2751,18 +2851,24 @@ const Dashboard: React.FC = () => {
         </Button>
 
         <HStack spacing={1}>
-          {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => (
-            <Button
-              key={page}
-              size="sm"
-              variant={page === currentPage ? 'solid' : 'outline'}
-              colorScheme={page === currentPage ? 'brand' : 'gray'}
-              onClick={() => onPageChange(page)}
-              minW="40px"
-              _hover={{ bg: page === currentPage ? 'brand.600' : 'gray.50' }}
-            >
-              {page}
-            </Button>
+          {getVisiblePages().map((page) => (
+            typeof page === 'number' ? (
+              <Button
+                key={page}
+                size="sm"
+                variant={page === currentPage ? 'solid' : 'outline'}
+                colorScheme={page === currentPage ? 'brand' : 'gray'}
+                onClick={() => onPageChange(page)}
+                minW="40px"
+                _hover={{ bg: page === currentPage ? 'brand.600' : 'gray.50' }}
+              >
+                {page}
+              </Button>
+            ) : (
+              <Text key={page} color="gray.400" px={1} fontSize="sm" aria-hidden>
+                ...
+              </Text>
+            )
           ))}
         </HStack>
 
@@ -2770,13 +2876,14 @@ const Dashboard: React.FC = () => {
           size="sm"
           variant="outline"
           rightIcon={<ChevronRightIcon />}
-          onClick={() => onPageChange(currentPage + 1)}
-          isDisabled={currentPage === totalPages}
+          onClick={() => onPageChange(Math.min(safeTotalPages, currentPage + 1))}
+          isDisabled={currentPage === safeTotalPages}
           _hover={{ bg: 'gray.50' }}
         >
           Next
         </Button>
       </HStack>
+      </Stack>
     )
   }
 
@@ -6286,12 +6393,6 @@ const Dashboard: React.FC = () => {
                 {/* Trade History Tab */}
                 <TabPanel px={{ base: 2, md: 4 }} py={{ base: 3, md: 4 }}>
                   <VStack spacing={6} align="stretch">
-                    {historyFetching && tradeHistoryData.length > 0 && (
-                      <HStack spacing={2} color="gray.500" fontSize="xs">
-                        <Spinner size="xs" />
-                        <Text>Updating history...</Text>
-                      </HStack>
-                    )}
                     {/* Trade History Grid */}
                     {tradeHistoryLoading ? (
                       <SimpleGrid columns={{ base: 1, sm: 2, md: 2, lg: 3, xl: 4 }} spacing={{ base: 3, md: 4 }}>
@@ -6539,7 +6640,8 @@ const Dashboard: React.FC = () => {
                           currentPage={tradeHistoryPage}
                           totalPages={tradeHistoryTotalPages}
                           onPageChange={setTradeHistoryPage}
-                          itemsCount={allCompletedTrades.length}
+                          itemsCount={tradeHistoryItemsCount}
+                          pageSize={tradeHistoryPerPage}
                         />
                       </>
                     ) : (
@@ -6813,31 +6915,13 @@ const Dashboard: React.FC = () => {
                         </VStack>
 
                         {/* Pagination */}
-                        {tradeHistoryTotalPages > 1 && (
-                          <HStack justify="center" spacing={2} mt={6}>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              leftIcon={<ChevronLeftIcon />}
-                              onClick={() => setTradeHistoryPage(p => Math.max(1, p - 1))}
-                              isDisabled={tradeHistoryPage === 1}
-                            >
-                              Previous
-                            </Button>
-                            <Text fontSize="sm" color="gray.600">
-                              Page {tradeHistoryPage} of {tradeHistoryTotalPages}
-                            </Text>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              rightIcon={<ChevronRightIcon />}
-                              onClick={() => setTradeHistoryPage(p => Math.min(tradeHistoryTotalPages, p + 1))}
-                              isDisabled={tradeHistoryPage === tradeHistoryTotalPages}
-                            >
-                              Next
-                            </Button>
-                          </HStack>
-                        )}
+                        <PaginationControls
+                          currentPage={tradeHistoryPage}
+                          totalPages={tradeHistoryTotalPages}
+                          onPageChange={setTradeHistoryPage}
+                          itemsCount={tradeHistoryItemsCount}
+                          pageSize={tradeHistoryPerPage}
+                        />
                       </>
                     )}
                   </VStack>

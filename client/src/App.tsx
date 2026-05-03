@@ -1,5 +1,5 @@
 import React, { Suspense, lazy } from 'react'
-import { ChakraProvider, Box, Center, Button, VStack, Text, useColorMode, Skeleton, SkeletonCircle } from '@chakra-ui/react'
+import { ChakraProvider, Box, Center, Button, VStack, Text, useColorMode, SkeletonCircle } from '@chakra-ui/react'
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom'
 import { AnimatePresence } from 'framer-motion'
 import { theme } from './theme'
@@ -53,24 +53,6 @@ const ThemeApplier: React.FC<{ children: React.ReactNode }> = ({ children }) => 
 
   return <>{children}</>
 }
-const RouteFallback: React.FC = () => (
-  <Box minH="100vh" px={{ base: 4, md: 8 }} py={6}>
-    <VStack align="stretch" spacing={4} maxW="960px" mx="auto">
-      <Skeleton height="34px" width="45%" borderRadius="md" />
-      <Skeleton height="16px" width="70%" borderRadius="md" />
-      <Box display="grid" gridTemplateColumns={{ base: 'repeat(2, 1fr)', md: 'repeat(4, 1fr)' }} gap={3}>
-        {Array.from({ length: 8 }).map((_, index) => (
-          <Box key={index} bg="white" borderWidth="1px" borderColor="gray.100" borderRadius="lg" overflow="hidden" p={2}>
-            <Skeleton height="120px" borderRadius="md" mb={2} />
-            <Skeleton height="14px" width="80%" borderRadius="md" mb={2} />
-            <Skeleton height="12px" width="55%" borderRadius="md" />
-          </Box>
-        ))}
-      </Box>
-    </VStack>
-  </Box>
-)
-
 const lazyWithFallback = (importer: () => Promise<{ default: React.ComponentType<any> }>, label: string) =>
   lazy(() =>
     importer().catch(() => ({
@@ -186,37 +168,37 @@ const AppContent: React.FC = () => {
         <Route path="/rider-queue" element={<Navigate to="/rider-home" replace />} />
         <Route path="/rider-home" element={
           <PageTransition>
-            <Suspense fallback={<RouteFallback />}><RiderHome /></Suspense>
+            <Suspense fallback={null}><RiderHome /></Suspense>
           </PageTransition>
         } />
         <Route path="/rider-application" element={
           <PageTransition>
-            <Suspense fallback={<RouteFallback />}><RiderApplication /></Suspense>
+            <Suspense fallback={null}><RiderApplication /></Suspense>
           </PageTransition>
         } />
         <Route path="/batch-preview/:batchId" element={
           <PageTransition>
-            <Suspense fallback={<RouteFallback />}><BatchPreview /></Suspense>
+            <Suspense fallback={null}><BatchPreview /></Suspense>
           </PageTransition>
         } />
         <Route path="/batch-status/:batchId" element={
           <PageTransition>
-            <Suspense fallback={<RouteFallback />}><BatchStatus /></Suspense>
+            <Suspense fallback={null}><BatchStatus /></Suspense>
           </PageTransition>
         } />
         <Route path="/remittance-ledger" element={
           <PageTransition>
-            <Suspense fallback={<RouteFallback />}><RemittanceLedger /></Suspense>
+            <Suspense fallback={null}><RemittanceLedger /></Suspense>
           </PageTransition>
         } />
         <Route path="/task-stepper/:batchId" element={
           <PageTransition>
-            <Suspense fallback={<RouteFallback />}><TaskStepper /></Suspense>
+            <Suspense fallback={null}><TaskStepper /></Suspense>
           </PageTransition>
         } />
         <Route path="/delivery" element={
           <PageTransition>
-            <Suspense fallback={<RouteFallback />}><DeliveryOption /></Suspense>
+            <Suspense fallback={null}><DeliveryOption /></Suspense>
           </PageTransition>
         } />
 
@@ -224,7 +206,7 @@ const AppContent: React.FC = () => {
         <Route path="/*" element={
           <Box minH="100vh" bg="gray.50">
             <Sidebar />
-            <Box as="main" ml={{ base: 0, lg: '70px' }} w="full">
+            <Box as="main" ml={{ base: 0, lg: '70px' }} w={{ base: 'full', lg: 'calc(100% - 70px)' }} minW={0} overflowX="hidden">
               <Routes>
                 <Route path="/home" element={
                   <PageTransition>
@@ -258,67 +240,67 @@ const AppContent: React.FC = () => {
                 } />
                 <Route path="/products/:id" element={
                   <PageTransition>
-                    <Suspense fallback={<RouteFallback />}><ProductDetail /></Suspense>
+                    <Suspense fallback={null}><ProductDetail /></Suspense>
                   </PageTransition>
                 } />
                 <Route path="/products" element={
                   <PageTransition>
-                    <Suspense fallback={<RouteFallback />}><ProductsList /></Suspense>
+                    <Suspense fallback={null}><ProductsList /></Suspense>
                   </PageTransition>
                 } />
                 <Route path="/dashboard" element={
                   <PageTransition>
-                    <Suspense fallback={<RouteFallback />}><Dashboard key="dashboard-route" /></Suspense>
+                    <Suspense fallback={null}><Dashboard key="dashboard-route" /></Suspense>
                   </PageTransition>
                 } />
                 <Route path="/add-product" element={
                   <PageTransition>
-                    <ProtectedRoute><Suspense fallback={<RouteFallback />}><AddProduct /></Suspense></ProtectedRoute>
+                    <ProtectedRoute><Suspense fallback={null}><AddProduct /></Suspense></ProtectedRoute>
                   </PageTransition>
                 } />
                 <Route path="/edit-product/:id" element={
                   <PageTransition>
-                    <ProtectedRoute><Suspense fallback={<RouteFallback />}><EditProduct /></Suspense></ProtectedRoute>
+                    <ProtectedRoute><Suspense fallback={null}><EditProduct /></Suspense></ProtectedRoute>
                   </PageTransition>
                 } />
                 <Route path="/notifications" element={
                   <PageTransition>
-                    <ProtectedRoute><Suspense fallback={<RouteFallback />}><Notifications /></Suspense></ProtectedRoute>
+                    <ProtectedRoute><Suspense fallback={null}><Notifications /></Suspense></ProtectedRoute>
                   </PageTransition>
                 } />
                 <Route path="/profile" element={
                   <PageTransition>
-                    <ProtectedRoute><Suspense fallback={<RouteFallback />}><Profile /></Suspense></ProtectedRoute>
+                    <ProtectedRoute><Suspense fallback={null}><Profile /></Suspense></ProtectedRoute>
                   </PageTransition>
                 } />
                 <Route path="/UserProfile" element={
                   <PageTransition>
-                    <ProtectedRoute><Suspense fallback={<RouteFallback />}><UserProfile /></Suspense></ProtectedRoute>
+                    <ProtectedRoute><Suspense fallback={null}><UserProfile /></Suspense></ProtectedRoute>
                   </PageTransition>
                 } />
                 <Route path="/users/:id" element={
                   <PageTransition>
-                    <Suspense fallback={<RouteFallback />}><UserProfile /></Suspense>
+                    <Suspense fallback={null}><UserProfile /></Suspense>
                   </PageTransition>
                 } />
                 <Route path="/organizations/new" element={
                   <PageTransition>
-                    <ProtectedRoute><Suspense fallback={<RouteFallback />}><CreateOrganization /></Suspense></ProtectedRoute>
+                    <ProtectedRoute><Suspense fallback={null}><CreateOrganization /></Suspense></ProtectedRoute>
                   </PageTransition>
                 } />
                 <Route path="/organizations" element={
                   <PageTransition>
-                    <Suspense fallback={<RouteFallback />}><Organizations /></Suspense>
+                    <Suspense fallback={null}><Organizations /></Suspense>
                   </PageTransition>
                 } />
                 <Route path="/org/:handle" element={
                   <PageTransition>
-                    <Suspense fallback={<RouteFallback />}><OrganizationProfile /></Suspense>
+                    <Suspense fallback={null}><OrganizationProfile /></Suspense>
                   </PageTransition>
                 } />
                 <Route path="/settings" element={
                   <PageTransition>
-                    <ProtectedRoute><Suspense fallback={<RouteFallback />}><Settings /></Suspense></ProtectedRoute>
+                    <ProtectedRoute><Suspense fallback={null}><Settings /></Suspense></ProtectedRoute>
                   </PageTransition>
                 } />
                 <Route path="/trades" element={
@@ -326,24 +308,24 @@ const AppContent: React.FC = () => {
                 } />
                 <Route path="/offers" element={
                   <PageTransition>
-                    <ProtectedRoute><Suspense fallback={<RouteFallback />}><Offers /></Suspense></ProtectedRoute>
+                    <ProtectedRoute><Suspense fallback={null}><Offers /></Suspense></ProtectedRoute>
                   </PageTransition>
                 } />
                 <Route path="/saved-products" element={
                   <PageTransition>
-                    <PrivateRoute><Suspense fallback={<RouteFallback />}><SavedProducts /></Suspense></PrivateRoute>
+                    <PrivateRoute><Suspense fallback={null}><SavedProducts /></Suspense></PrivateRoute>
                   </PageTransition>
                 } />
                 <Route path="/admin" element={
                   <PageTransition>
-                    <Suspense fallback={<RouteFallback />}>
+                    <Suspense fallback={null}>
                       <AdminRoute><AdminDashboard /></AdminRoute>
                     </Suspense>
                   </PageTransition>
                 } />
                 <Route path="/premium" element={
                   <PageTransition>
-                    <ProtectedRoute><Suspense fallback={<RouteFallback />}><Premium /></Suspense></ProtectedRoute>
+                    <ProtectedRoute><Suspense fallback={null}><Premium /></Suspense></ProtectedRoute>
                   </PageTransition>
                 } />
 

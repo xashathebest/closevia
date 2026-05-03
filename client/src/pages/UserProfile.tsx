@@ -729,14 +729,13 @@ const UserProfile: React.FC<UserProfileProps> = ({ userId }) => {
   // Use sellerStats as source of truth; fall back to actual reviews array length (not user.total_reviews which may be stale)
   const displayTotalReviews = sellerStats?.total_feedback ?? (reviews.filter(r => !r.id?.toString().startsWith('mock')).length) ?? 0
 
-  // Derive positive percent from reviews when stats are missing
+  // Derive positive percent from the same completed-trade review list when stats are missing.
   const derivedPositivePercent = React.useMemo(() => {
     if (typeof sellerStats?.positive_percent === 'number') return sellerStats.positive_percent
-    if (typeof user?.positive_feedback === 'number') return user.positive_feedback
     if (reviews.length === 0) return null
     const positiveCount = reviews.filter(r => (r.rating ?? r.score ?? 0) >= 4).length
     return Math.round((positiveCount / reviews.length) * 100)
-  }, [sellerStats, user, reviews])
+  }, [sellerStats, reviews])
 
   const displayPositivePercentValue = derivedPositivePercent ?? 0
 

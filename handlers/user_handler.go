@@ -2447,70 +2447,16 @@ func (h *UserHandler) GetSellerStats(c *fiber.Ctx) error {
 	stats.SuccessfulTrades = stats.CompletedTrades
 	stats.TotalTrades = stats.CompletedTrades + stats.PendingTrades + stats.CancelledTrades
 
-	// Calculate average rating and positive feedback percentage from post-trade
-	// reviews only. General profile reviews are intentionally excluded so the
-	// trust score reflects ratings tied to completed trades.
-	var avgRating sql.NullFloat64
-	var totalReviews sql.NullInt64
-	var positivePercent sql.NullFloat64
-
-	err = h.db.QueryRow(`
-		SELECT 
-			AVG(rating) AS avg_rating,
-			COUNT(*) AS total_reviews,
-			SUM(CASE WHEN rating >= 4 THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*), 0) AS positive_feedback
-		FROM (
-			SELECT tr.rating
-			FROM trade_reviews tr
-			JOIN trades t ON t.id = tr.trade_id
-			WHERE tr.is_followup = FALSE
-			  AND COALESCE(tr.is_auto_generated, FALSE) = FALSE
-			  AND t.status IN ('completed', 'auto_completed', 'did_not_push_through')
-			  AND (
-				(tr.reviewer_id = t.buyer_id AND t.seller_id = ?)
-				OR
-				(tr.reviewer_id = t.seller_id AND t.buyer_id = ?)
-			  )
-
-			UNION ALL
-
-			SELECT t.buyer_rating AS rating
-			FROM trades t
-			WHERE t.seller_id = ?
-			  AND t.status IN ('completed', 'auto_completed', 'did_not_push_through')
-			  AND t.buyer_rating IS NOT NULL
-			  AND NOT EXISTS (
-				SELECT 1
-				FROM trade_reviews tr
-				WHERE tr.trade_id = t.id
-				  AND tr.reviewer_id = t.buyer_id
-				  AND tr.is_followup = FALSE
-			  )
-
-			UNION ALL
-
-			SELECT t.seller_rating AS rating
-			FROM trades t
-			WHERE t.buyer_id = ?
-			  AND t.status IN ('completed', 'auto_completed', 'did_not_push_through')
-			  AND t.seller_rating IS NOT NULL
-			  AND NOT EXISTS (
-				SELECT 1
-				FROM trade_reviews tr
-				WHERE tr.trade_id = t.id
-				  AND tr.reviewer_id = t.seller_id
-				  AND tr.is_followup = FALSE
-			  )
-		) user_reviews
-	`, userID, userID, userID, userID).Scan(&avgRating, &totalReviews, &positivePercent)
-
-	if err == nil && totalReviews.Valid {
-		stats.TotalFeedback = int(totalReviews.Int64)
-		if stats.TotalFeedback > 0 && avgRating.Valid {
-			stats.AvgRating = avgRating.Float64
+	// Calculate average rating and positive feedback percentage from the same
+	// received post-trade review source used by the profile review list.
+	reviewStats, err := getReceivedTradeReviewStats(h.db, userID)
+	if err == nil {
+		stats.TotalFeedback = reviewStats.TotalReviews
+		if stats.TotalFeedback > 0 && reviewStats.AvgRating.Valid {
+			stats.AvgRating = reviewStats.AvgRating.Float64
 		}
-		if stats.TotalFeedback > 0 && positivePercent.Valid {
-			stats.PositivePercent = positivePercent.Float64
+		if stats.TotalFeedback > 0 && reviewStats.PositivePercent.Valid {
+			stats.PositivePercent = reviewStats.PositivePercent.Float64
 		}
 	}
 

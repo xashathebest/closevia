@@ -57,9 +57,10 @@ export const ProductGridSkeleton: React.FC<ProductGridSkeletonProps> = ({ count 
       templateColumns={{
         base: 'repeat(2, 1fr)',
         sm: 'repeat(3, 1fr)',
-        md: 'repeat(5, 1fr)',
+        lg: 'repeat(4, 1fr)',
+        xl: 'repeat(5, 1fr)',
       }}
-      gap={{ base: 2, md: 3 }}
+      gap={{ base: 2, md: 3, lg: 4, xl: 5 }}
       w="full"
     >
       {Array.from({ length: count }).map((_, idx) => (

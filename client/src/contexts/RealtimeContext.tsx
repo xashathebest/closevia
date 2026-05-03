@@ -40,6 +40,27 @@ const RealtimeContext = createContext<RealtimeContextValue>({
 const POLL_INTERVAL_MS = 60000
 const SSE_MESSAGE_DEDUP_WINDOW = 2000  // Prevent duplicate SSE messages within 2 seconds
 
+const getNotificationCountCacheKey = (user?: { id?: number; role?: string } | null) =>
+  user?.id ? `clovia_notification_count_${user.id}_${user.role || 'user'}` : 'clovia_notification_count_guest'
+
+const readCachedNotificationCount = (user?: { id?: number; role?: string } | null) => {
+  try {
+    const cached = localStorage.getItem(getNotificationCountCacheKey(user))
+    const parsed = cached ? Number(cached) : NaN
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+const writeCachedNotificationCount = (user: { id?: number; role?: string } | null | undefined, count: number) => {
+  try {
+    localStorage.setItem(getNotificationCountCacheKey(user), String(Math.max(0, count)))
+  } catch {
+    // localStorage can be unavailable in private browsing or tests.
+  }
+}
+
 export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user } = useAuth()
   const { showNotification } = useNotification()
@@ -67,15 +88,30 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   })
   const [offerCount, setOfferCount] = useState(0)
   const [notificationCount, setNotificationCount] = useState(0)
+  const notificationCountRef = useRef(0)
   const userNotificationPreferences = (user as any)?.notification_preferences
 
   const adjustNotificationCount = useCallback((delta: number) => {
-    setNotificationCount((current) => Math.max(0, current + delta))
-  }, [])
+    setNotificationCount((current) => {
+      const next = Math.max(0, current + delta)
+      notificationCountRef.current = next
+      writeCachedNotificationCount(user, next)
+      queryClient.setQueryData(DASHBOARD_QUERY_KEYS.counts, (old: any) => (
+        old ? { ...old, unread_notifications: next } : old
+      ))
+      return next
+    })
+  }, [queryClient, user])
 
   const setNotificationCountImmediate = useCallback((count: number) => {
-    setNotificationCount(Math.max(0, count))
-  }, [])
+    const next = Math.max(0, count)
+    notificationCountRef.current = next
+    writeCachedNotificationCount(user, next)
+    setNotificationCount(next)
+    queryClient.setQueryData(DASHBOARD_QUERY_KEYS.counts, (old: any) => (
+      old ? { ...old, unread_notifications: next } : old
+    ))
+  }, [queryClient, user])
 
   const shouldNotify = useCallback((notification: { type?: string; notification_type?: string; message?: string; participant_count?: number | string }) => {
     return isNotificationAllowed(userNotificationPreferences, notification)
@@ -121,12 +157,31 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     try {
       // Admin only sees report notifications, so only count those for the badge
       const notifEndpoint = user?.role === 'admin' ? '/api/notifications?type=report' : '/api/notifications'
-      const [offersRes, notifRes] = await Promise.all([
-        api.get('/api/trades/count', { params: { direction: 'incoming', status: 'pending' } }),
-        api.get(notifEndpoint),
-      ])
-      const count = offersRes.data?.data?.count ?? 0
-      setOfferCount(count)
+      void api.get('/api/trades/count', { params: { direction: 'incoming', status: 'pending' } })
+        .then((offersRes) => {
+          const count = offersRes.data?.data?.count ?? 0
+          setOfferCount(count)
+        })
+        .catch(() => {})
+
+      void api.get('/api/dashboard/counts')
+        .then((countsRes) => {
+          const data = countsRes.data?.data || countsRes.data || {}
+          const quickUnread = Number(data.unread_notifications)
+          const pendingOffers = Number(data.pending_offers || 0)
+          if (Number.isFinite(quickUnread) && quickUnread >= 0 && notificationCountRef.current === 0) {
+            notificationCountRef.current = quickUnread
+            setNotificationCount(quickUnread)
+            writeCachedNotificationCount(user, quickUnread)
+          }
+          queryClient.setQueryData(DASHBOARD_QUERY_KEYS.counts, {
+            unread_notifications: Number.isFinite(quickUnread) ? quickUnread : notificationCountRef.current,
+            pending_offers: Number.isFinite(pendingOffers) ? pendingOffers : 0,
+          })
+        })
+        .catch(() => {})
+
+      const notifRes = await api.get(notifEndpoint)
       const notifs = Array.isArray(notifRes.data?.data) ? notifRes.data.data : []
 
       // Apply the same filter used in the Notifications page — multiway
@@ -137,7 +192,14 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         return true
       })
 
-      setNotificationCount(visibleNotifs.filter((n: any) => !n.read).length)
+      const nextNotificationCount = visibleNotifs.filter((n: any) => !n.read).length
+      notificationCountRef.current = nextNotificationCount
+      setNotificationCount(nextNotificationCount)
+      writeCachedNotificationCount(user, nextNotificationCount)
+      queryClient.setQueryData(DASHBOARD_QUERY_KEYS.counts, (old: any) => ({
+        pending_offers: Number(old?.pending_offers || 0),
+        unread_notifications: nextNotificationCount,
+      }))
 
       // Polling fallback: show global toast for new unread notifications we haven't seen
       if (!hasInitializedSeenRef.current) {
@@ -178,7 +240,7 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         seenNotifIdsRef.current = new Set(ids)
       }
     } catch { }
-  }, [user, showNotification, shouldNotify])
+  }, [user, showNotification, shouldNotify, queryClient])
 
   useEffect(() => {
     if (!user) {
@@ -188,9 +250,19 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       }
       setOfferCount(0)
       setNotificationCount(0)
+      notificationCountRef.current = 0
       seenNotifIdsRef.current = new Set()
       hasInitializedSeenRef.current = false
       return
+    }
+
+    const cachedCount = readCachedNotificationCount(user)
+    if (cachedCount !== null) {
+      notificationCountRef.current = cachedCount
+      setNotificationCount(cachedCount)
+      queryClient.setQueryData(DASHBOARD_QUERY_KEYS.counts, (old: any) => (
+        old ? { ...old, unread_notifications: cachedCount } : old
+      ))
     }
 
     const handleMessage = (rawData: string) => {

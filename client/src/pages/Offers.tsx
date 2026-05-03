@@ -587,7 +587,9 @@ const Offers: React.FC = () => {
   
   const getStatusBadge = (status: Trade['status']) => {
     const { color, icon } = badgeColor(status)
-    const statusText = status.charAt(0).toUpperCase() + status.slice(1)
+    const statusText = status === 'expired'
+      ? 'Scheduled time passed'
+      : status.charAt(0).toUpperCase() + status.slice(1)
     return (
       <Badge 
         colorScheme={color} 

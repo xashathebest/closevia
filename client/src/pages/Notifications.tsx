@@ -170,7 +170,7 @@ const Notifications: React.FC = () => {
   const { user } = useAuth()
   const prefersReducedMotion = useReducedMotion()
   const { products } = useProducts()
-  const { adjustNotificationCount, refreshCounts } = useRealtime()
+  const { adjustNotificationCount, setNotificationCountImmediate, refreshCounts } = useRealtime()
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const [notifications, setNotifications] = useState<Notification[]>([])
@@ -224,6 +224,8 @@ const Notifications: React.FC = () => {
       const list: Notification[] = Array.isArray(response.data?.data) ? response.data.data : []
       setNotifications(list)
       try { localStorage.setItem(cacheKey, JSON.stringify(list)) } catch {}
+      const visibleUnread = list.filter((n) => n.type !== 'trade_loop' && !n.read && isNotificationAllowed((user as any)?.notification_preferences, n)).length
+      setNotificationCountImmediate(visibleUnread)
     } catch (error: any) {
       setError(error.message || "We couldn't load your notifications right now.")
       toast({ id: 'notifications-error', title: "Couldn't load notifications", description: "Something went wrong. Pull down to try again.", status: 'error', duration: 3000, isClosable: true })

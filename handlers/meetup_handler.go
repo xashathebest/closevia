@@ -182,6 +182,9 @@ func (h *MeetupHandler) MarkArrived(c *fiber.Ctx) error {
 	if err := validateArrivalConfirmationWindow(now, agreedDeadline.Time); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 	}
+	if err := validateScheduledTradeNotExpired(now, agreedDeadline.Time); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
+	}
 
 	// GPS radius check.
 	if !meetupLat.Valid || !meetupLng.Valid {

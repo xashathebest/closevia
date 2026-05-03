@@ -95,7 +95,7 @@ const ActivityFeed = () => {
 
     if (isLoading) {
         return (
-            <Box w="full" bgGradient="linear(to-r, brand.600, brand.500)" py={2.5} px={3} borderY="1px solid" borderColor="brand.700" shadow="sm" zIndex={10}>
+            <Box w="full" bgGradient="linear(to-r, brand.600, brand.500)" py={2.5} px={3} border="1px solid" borderColor="brand.700" shadow="sm" zIndex={10} borderRadius="xl">
                 <HStack spacing={3} overflow="hidden">
                     <Skeleton h="18px" w={{ base: '42%', md: '28%' }} startColor="whiteAlpha.300" endColor="whiteAlpha.500" borderRadius="md" />
                     <Skeleton h="18px" w={{ base: '36%', md: '24%' }} startColor="whiteAlpha.300" endColor="whiteAlpha.500" borderRadius="md" />
@@ -108,7 +108,7 @@ const ActivityFeed = () => {
     if (renderedActivities.length === 0) return null;
 
     return (
-        <Box w="full" bgGradient="linear(to-r, brand.600, brand.500)" color="white" py={2.5} overflow="hidden" position="relative" borderY="1px solid" borderColor="brand.700" shadow="sm" zIndex={10}>
+        <Box w="full" bgGradient="linear(to-r, brand.600, brand.500)" color="white" py={2.5} overflow="hidden" position="relative" border="1px solid" borderColor="brand.700" shadow="sm" zIndex={10} borderRadius="xl">
             <Box animation={`${scrollAnimation} ${Math.max(renderedActivities.length * 6, 30)}s linear infinite`} whiteSpace="nowrap" display="inline-flex">
                 <HStack spacing={12} display="inline-flex" pr={12}>
                     {renderedActivities.map((act, index) => (
