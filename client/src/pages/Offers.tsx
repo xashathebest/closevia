@@ -22,7 +22,8 @@ const OFFERS_TAB_TO_INDEX: Record<string, number> = {
   progress: 2,
   ongoing: 2,
   history: 3,
-  archive: 4,
+  archive: 3,
+  archived: 3,
 }
 
 const getOffersTabIndex = (tab: string | null) => tab ? OFFERS_TAB_TO_INDEX[tab] ?? 0 : 0
@@ -176,7 +177,14 @@ const Offers: React.FC = () => {
   }, [setRefreshCallback])
 
   useEffect(() => {
-    setActiveTab(getOffersTabIndex(searchParams.get('tab')))
+    const tab = searchParams.get('tab')
+    if (tab === 'archive' || tab === 'archived') {
+      const next = new URLSearchParams(searchParams)
+      next.set('tab', 'history')
+      setSearchParams(next, { replace: true })
+      return
+    }
+    setActiveTab(getOffersTabIndex(tab))
   }, [searchParams])
 
   const updateTrade = async (id: number, action: TradeAction) => {
@@ -359,14 +367,13 @@ const Offers: React.FC = () => {
   const incomingSorted = useMemo(() => sortList(incoming), [incoming, sort])
   const outgoingSorted = useMemo(() => sortList(outgoing), [outgoing, sort])
   // statuses that should be treated as "history"
-  const historyStatuses = ['declined', 'cancelled', 'completed', 'did_not_push_through', 'auto_completed', 'awaiting_other_party']
-  const archiveStatuses = ['expired']
-  const ongoingStatuses: Trade['status'][] = ['accepted', 'active', 'ongoing', 'awaiting_confirmation', 'under_review', 'multiway_active']
+  const historyStatuses = ['declined', 'cancelled', 'completed', 'did_not_push_through', 'auto_completed', 'awaiting_other_party', 'expired', 'archived']
+  const ongoingStatuses: Trade['status'][] = ['ongoing']
   const isOngoingTrade = (trade: Trade) => ongoingStatuses.includes(trade.status)
 
   // visible lists for the two main tabs (exclude history and active/accepted items)
-  const offersReceivedVisible = incomingSorted.filter(t => !historyStatuses.includes(t.status) && !archiveStatuses.includes(t.status) && !isOngoingTrade(t) && t.status !== 'pending_multiway')
-  const offersSentVisible = outgoingSorted.filter(t => !historyStatuses.includes(t.status) && !archiveStatuses.includes(t.status) && !isOngoingTrade(t))
+  const offersReceivedVisible = incomingSorted.filter(t => !historyStatuses.includes(t.status) && !isOngoingTrade(t) && t.status !== 'pending_multiway')
+  const offersSentVisible = outgoingSorted.filter(t => !historyStatuses.includes(t.status) && !isOngoingTrade(t))
 
   // Priority ranking: countered first, then pending, then others
   const statusRank = (s?: string) => {
@@ -410,11 +417,6 @@ const Offers: React.FC = () => {
     ...outgoingSorted.filter(t => historyStatuses.includes(t.status)).map(t => ({ ...t, source: 'Offers Sent' as const })),
   ]
 
-  // archive list: expired/failed trades
-  const archiveItems: SourceTrade[] = [
-    ...incomingSorted.filter(t => archiveStatuses.includes(t.status)).map(t => ({ ...t, source: 'Offers Received' as const })),
-    ...outgoingSorted.filter(t => archiveStatuses.includes(t.status)).map(t => ({ ...t, source: 'Offers Sent' as const })),
-  ]
   const ongoingItems = incomingSorted.concat(outgoingSorted).filter(isOngoingTrade)
 
   useEffect(() => {
@@ -427,7 +429,6 @@ const Offers: React.FC = () => {
       offersSentSorted,
       ongoingItems,
       historyItems,
-      archiveItems,
     ]
     const tabIndex = tabLists.findIndex(list => list.some(trade => Number(trade.id) === linkedTradeId))
     const linkedTrade = tabIndex >= 0 ? tabLists[tabIndex].find(trade => Number(trade.id) === linkedTradeId) : null
@@ -437,7 +438,7 @@ const Offers: React.FC = () => {
       setActiveTab(tabIndex)
       openTradeDetails(linkedTrade)
     }
-  }, [archiveItems, historyItems, loading, offersReceivedSorted, offersSentSorted, ongoingItems, searchParams])
+  }, [historyItems, loading, offersReceivedSorted, offersSentSorted, ongoingItems, searchParams])
 
   const needsCurrentUserAcceptance = (trade: Trade) => {
     if (!currentUserId) return false
@@ -572,6 +573,7 @@ const Offers: React.FC = () => {
   }
 
   const badgeColor = (status: Trade['status']) => {
+    if (status === 'archived') return { color: 'teal', icon: 'âŒ›' }
     const statusMap: Record<string, { color: string; icon: string }> = {
       'pending': { color: 'yellow', icon: '🕓' },
       'accepted': { color: 'green', icon: '✓' },
@@ -589,6 +591,8 @@ const Offers: React.FC = () => {
     const { color, icon } = badgeColor(status)
     const statusText = status === 'expired'
       ? 'Scheduled time passed'
+      : status === 'archived'
+      ? 'Archived due to inactivity'
       : status.charAt(0).toUpperCase() + status.slice(1)
     return (
       <Badge 
@@ -1059,7 +1063,7 @@ const Offers: React.FC = () => {
           onChange={(index) => {
             setActiveTab(index)
             const next = new URLSearchParams(searchParams)
-            const tabNames = ['inbox', 'sent', 'progress', 'history', 'archive']
+            const tabNames = ['inbox', 'sent', 'progress', 'history']
             next.set('tab', tabNames[index] || 'inbox')
             next.delete('trade_id')
             setSearchParams(next, { replace: true })
@@ -1162,29 +1166,6 @@ const Offers: React.FC = () => {
               History
               <Badge ml={2} colorScheme="gray" variant="subtle" fontSize="xs">
                 {historyItems.length}
-              </Badge>
-            </Tab>
-            <Tab
-              _selected={{
-                bg: "blue.500",
-                color: "white",
-                transform: "translateY(-1px)",
-                boxShadow: "sm"
-              }}
-              _hover={{
-                bg: "red.50",
-                transform: "translateY(-1px)"
-              }}
-              transition="all 0.2s ease"
-              fontWeight="medium"
-              fontSize="sm"
-              borderRadius="md"
-              px={4}
-              py={2}
-            >
-              Archive
-              <Badge ml={2} colorScheme="red" variant="subtle" fontSize="xs">
-                {archiveItems.length}
               </Badge>
             </Tab>
           </TabList>
@@ -1789,47 +1770,6 @@ const Offers: React.FC = () => {
                         )}
                         <Text fontSize="10px" color="gray.600" noOfLines={1}>Trader: {(t.buyer_name || 'User').substring(0, 15)} • Trader: {(t.seller_name || 'User').substring(0, 15)}</Text>
                         <Text fontSize="9px" color="gray.400">Source: {t.source}</Text>
-                      </VStack>
-                      {getStatusBadge(t.status)}
-                    </HStack>
-                  </Box>
-                </ScaleFade>
-              ))}
-            </VStack>
-          </TabPanel>
-          <TabPanel p={0}>
-            <VStack spacing={2} align="stretch">
-              {archiveItems.length === 0 ? (
-                <Text color="gray.500" textAlign="center" py={8}>No archived trades yet.</Text>
-              ) : archiveItems.map((t) => (
-                <ScaleFade in={true} key={t.id}>
-                  <Box
-                    bg="white"
-                    borderWidth="1px"
-                    borderColor="red.100"
-                    rounded="lg"
-                    p={3}
-                    boxShadow="sm"
-                    h="100px"
-                    display="flex"
-                    flexDirection="column"
-                    _hover={{
-                      boxShadow: "md",
-                      transform: "translateY(-1px)",
-                      borderColor: "red.200"
-                    }}
-                    transition="all 0.2s ease"
-                  >
-                    <HStack justify="space-between" align="start" spacing={2}>
-                      <VStack align="start" spacing={0.5} flex="1" overflow="hidden">
-                        <Text fontWeight="semibold" color="gray.800" fontSize="sm" noOfLines={1}>{getRequestedBundleTitle(t)}</Text>
-                        {getRequestedBundleCount(t) > 1 && (
-                          <Badge colorScheme="blue" variant="subtle" fontSize="8px" px={1} py={0}>
-                            {getRequestedBundleCount(t)} requested items
-                          </Badge>
-                        )}
-                        <Text fontSize="10px" color="gray.600" noOfLines={1}>Trader: {(t.buyer_name || 'User').substring(0, 15)} • Trader: {(t.seller_name || 'User').substring(0, 15)}</Text>
-                        <Text fontSize="9px" color="red.400">Expired due to 7 days of inactivity</Text>
                       </VStack>
                       {getStatusBadge(t.status)}
                     </HStack>

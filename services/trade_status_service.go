@@ -10,6 +10,7 @@ import (
 )
 
 const scheduledTradeExpiryGraceHours = 2
+const inactiveTradeArchiveDays = 7
 
 // StartTradeStatusScheduler runs every 10 minutes and handles trade-state
 // transitions that are not covered by the existing trade_timeout.go pass:
@@ -53,6 +54,9 @@ func runTradeStatusPass(db *sql.DB) {
 		name string
 		fn   func(*sql.DB)
 	}{
+		{"archive_inactive_trades", archiveInactiveTrades},
+		{"archive_inactive_trade_loops", archiveInactiveTradeLoops},
+		{"archive_inactive_multiway_chains", archiveInactiveMultiwayChains},
 		{"expire_unanswered_meetup_proposals", expireUnansweredMeetupProposals},
 		{"expire_scheduled_trades_after_grace", expireScheduledTradesAfterGrace},
 		{"expire_scheduled_trade_loops_after_grace", expireScheduledTradeLoopsAfterGrace},
@@ -64,6 +68,279 @@ func runTradeStatusPass(db *sql.DB) {
 	}
 
 	log.Println("[TradeStatus] Trade-status pass complete")
+}
+
+func archiveInactiveTrades(db *sql.DB) {
+	if !tableHasColumn(db, "trades", "last_activity_at") ||
+		!tableHasColumn(db, "trades", "archived_at") ||
+		!tableHasColumn(db, "trades", "archived_reason") {
+		return
+	}
+
+	rows, err := db.Query(`
+		SELECT id, buyer_id, seller_id
+		FROM trades
+		WHERE status IN ('accepted','active','ongoing','awaiting_confirmation','multiway_active')
+		  AND COALESCE(last_activity_at, updated_at, created_at) <= DATE_SUB(NOW(), INTERVAL ? DAY)
+		ORDER BY COALESCE(last_activity_at, updated_at, created_at) ASC
+		LIMIT 500
+	`, inactiveTradeArchiveDays)
+	if err != nil {
+		log.Printf("[TradeStatus] inactive trade archive query: %v", err)
+		return
+	}
+	defer rows.Close()
+
+	type candidate struct{ id, buyerID, sellerID int }
+	var candidates []candidate
+	for rows.Next() {
+		var c candidate
+		if rows.Scan(&c.id, &c.buyerID, &c.sellerID) == nil {
+			candidates = append(candidates, c)
+		}
+	}
+
+	for _, c := range candidates {
+		res, err := db.Exec(`
+			UPDATE trades
+			SET status = 'archived',
+			    archived_reason = ?,
+			    archived_at = NOW(),
+			    updated_at = NOW()
+			WHERE id = ?
+			  AND status IN ('accepted','active','ongoing','awaiting_confirmation','multiway_active')
+			  AND COALESCE(last_activity_at, updated_at, created_at) <= DATE_SUB(NOW(), INTERVAL ? DAY)
+		`, TradeArchiveReasonInactiveTimeout, c.id, inactiveTradeArchiveDays)
+		if err != nil {
+			log.Printf("[TradeStatus] archive inactive trade %d: %v", c.id, err)
+			continue
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			continue
+		}
+
+		unlockTradeProducts(db, c.id)
+		_, _ = db.Exec("INSERT INTO trade_events (trade_id, from_status, to_status, note) VALUES (?, 'ongoing', 'archived', ?)", c.id, "Archived due to inactivity")
+		msg := "A trade was archived due to 7 days of inactivity. You can find it in your archive."
+		for _, uid := range uniquePositiveInts(c.buyerID, c.sellerID) {
+			_, _ = db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)", uid, msg)
+			PublishUserEvent(uid, "trade_archived", map[string]interface{}{
+				"trade_id": c.id,
+				"status":   "archived",
+				"reason":   TradeArchiveReasonInactiveTimeout,
+			})
+		}
+		log.Printf("[TradeStatus] Archived inactive trade %d", c.id)
+	}
+}
+
+func archiveInactiveTradeLoops(db *sql.DB) {
+	if !tableHasColumn(db, "trade_like_loops", "last_activity_at") ||
+		!tableHasColumn(db, "trade_like_loops", "archived_at") ||
+		!tableHasColumn(db, "trade_like_loops", "archived_reason") {
+		return
+	}
+
+	rows, err := db.Query(`
+		SELECT id
+		FROM trade_like_loops
+		WHERE status IN ('accepted','confirmed','ongoing')
+		  AND COALESCE(last_activity_at, updated_at, created_at) <= DATE_SUB(NOW(), INTERVAL ? DAY)
+		ORDER BY COALESCE(last_activity_at, updated_at, created_at) ASC
+		LIMIT 500
+	`, inactiveTradeArchiveDays)
+	if err != nil {
+		log.Printf("[TradeStatus] inactive trade-loop archive query: %v", err)
+		return
+	}
+	defer rows.Close()
+
+	var loopIDs []int
+	for rows.Next() {
+		var id int
+		if rows.Scan(&id) == nil {
+			loopIDs = append(loopIDs, id)
+		}
+	}
+
+	for _, loopID := range loopIDs {
+		res, err := db.Exec(`
+			UPDATE trade_like_loops
+			SET status = 'archived',
+			    archived_reason = ?,
+			    archived_at = NOW(),
+			    updated_at = NOW()
+			WHERE id = ?
+			  AND status IN ('accepted','confirmed','ongoing')
+			  AND COALESCE(last_activity_at, updated_at, created_at) <= DATE_SUB(NOW(), INTERVAL ? DAY)
+		`, TradeArchiveReasonInactiveTimeout, loopID, inactiveTradeArchiveDays)
+		if err != nil {
+			log.Printf("[TradeStatus] archive inactive trade-loop %d: %v", loopID, err)
+			continue
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			continue
+		}
+		_, _ = db.Exec("UPDATE trade_like_loop_participants SET status = 'cancelled' WHERE loop_id = ? AND status NOT IN ('completed','cancelled','declined','rejected')", loopID)
+		unlockTradeLoopProducts(db, loopID)
+		notifyTradeLoopArchived(db, loopID)
+		log.Printf("[TradeStatus] Archived inactive trade loop %d", loopID)
+	}
+}
+
+func archiveInactiveMultiwayChains(db *sql.DB) {
+	if !tableHasColumn(db, "multiway_trades", "last_activity_at") ||
+		!tableHasColumn(db, "multiway_trades", "archived_at") ||
+		!tableHasColumn(db, "multiway_trades", "archived_reason") {
+		return
+	}
+
+	rows, err := db.Query(`
+		SELECT id, chain_id, COALESCE(original_trade_id, 0)
+		FROM multiway_trades
+		WHERE status IN ('user3_accepted','active')
+		  AND COALESCE(last_activity_at, updated_at, created_at) <= DATE_SUB(NOW(), INTERVAL ? DAY)
+		ORDER BY COALESCE(last_activity_at, updated_at, created_at) ASC
+		LIMIT 500
+	`, inactiveTradeArchiveDays)
+	if err != nil {
+		log.Printf("[TradeStatus] inactive multiway archive query: %v", err)
+		return
+	}
+	defer rows.Close()
+
+	type candidate struct {
+		id, tradeID int
+		chainID     string
+	}
+	var candidates []candidate
+	for rows.Next() {
+		var c candidate
+		if rows.Scan(&c.id, &c.chainID, &c.tradeID) == nil {
+			candidates = append(candidates, c)
+		}
+	}
+
+	for _, c := range candidates {
+		res, err := db.Exec(`
+			UPDATE multiway_trades
+			SET status = 'archived',
+			    archived_reason = ?,
+			    archived_at = NOW(),
+			    updated_at = NOW()
+			WHERE id = ?
+			  AND status IN ('user3_accepted','active')
+			  AND COALESCE(last_activity_at, updated_at, created_at) <= DATE_SUB(NOW(), INTERVAL ? DAY)
+		`, TradeArchiveReasonInactiveTimeout, c.id, inactiveTradeArchiveDays)
+		if err != nil {
+			log.Printf("[TradeStatus] archive inactive multiway %s: %v", c.chainID, err)
+			continue
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			continue
+		}
+		_, _ = db.Exec("UPDATE multiway_trade_legs SET status = 'cancelled', updated_at = NOW() WHERE chain_id = ? AND status NOT IN ('completed','cancelled')", c.chainID)
+		if c.tradeID > 0 {
+			_, _ = db.Exec(`
+				UPDATE trades
+				SET status = 'archived',
+				    archived_reason = ?,
+				    archived_at = COALESCE(archived_at, NOW()),
+				    updated_at = NOW()
+				WHERE id = ?
+				  AND status IN ('pending_multiway','multiway_active','accepted','active','ongoing','awaiting_confirmation')
+			`, TradeArchiveReasonInactiveTimeout, c.tradeID)
+			unlockTradeProducts(db, c.tradeID)
+		}
+		unlockMultiwayChainProducts(db, c.chainID)
+		notifyMultiwayChainArchived(db, c.chainID)
+		log.Printf("[TradeStatus] Archived inactive multiway chain %s", c.chainID)
+	}
+}
+
+func unlockTradeProducts(db *sql.DB, tradeID int) {
+	_, _ = db.Exec("UPDATE products SET status='available', updated_at=NOW() WHERE id = (SELECT target_product_id FROM trades WHERE id = ?) AND status='locked'", tradeID)
+	_, _ = db.Exec(`
+		UPDATE products
+		SET status='available', updated_at=NOW()
+		WHERE id IN (SELECT product_id FROM trade_items WHERE trade_id = ?)
+		  AND status='locked'
+	`, tradeID)
+}
+
+func unlockTradeLoopProducts(db *sql.DB, loopID int) {
+	_, _ = db.Exec(`
+		UPDATE products
+		SET status='available', updated_at=NOW()
+		WHERE id IN (
+			SELECT offered_product_id FROM trade_like_loop_participants WHERE loop_id = ?
+			UNION
+			SELECT wanted_product_id FROM trade_like_loop_participants WHERE loop_id = ?
+		) AND status='locked'
+	`, loopID, loopID)
+}
+
+func unlockMultiwayChainProducts(db *sql.DB, chainID string) {
+	_, _ = db.Exec(`
+		UPDATE products
+		SET status='available', updated_at=NOW()
+		WHERE id IN (SELECT product_id FROM multiway_trade_legs WHERE chain_id = ?)
+		  AND status='locked'
+	`, chainID)
+}
+
+func notifyTradeLoopArchived(db *sql.DB, loopID int) {
+	rows, err := db.Query("SELECT DISTINCT user_id FROM trade_like_loop_participants WHERE loop_id = ?", loopID)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	msg := "A multiway trade was archived due to 7 days of inactivity. You can find it in your archive."
+	for rows.Next() {
+		var uid int
+		if rows.Scan(&uid) == nil && uid > 0 {
+			_, _ = db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)", uid, msg)
+			PublishUserEvent(uid, "trade_loop_archived", map[string]interface{}{
+				"loop_id": loopID,
+				"status":  "archived",
+				"reason":  TradeArchiveReasonInactiveTimeout,
+			})
+		}
+	}
+}
+
+func notifyMultiwayChainArchived(db *sql.DB, chainID string) {
+	selectColumns := []string{"user1_id", "user2_id", "COALESCE(user3_id, 0)"}
+	hasUser4 := tableHasColumn(db, "multiway_trades", "user4_id")
+	hasUser5 := tableHasColumn(db, "multiway_trades", "user5_id")
+	if hasUser4 {
+		selectColumns = append(selectColumns, "COALESCE(user4_id, 0)")
+	}
+	if hasUser5 {
+		selectColumns = append(selectColumns, "COALESCE(user5_id, 0)")
+	}
+
+	var u1, u2, u3, u4, u5 int
+	scanTargets := []interface{}{&u1, &u2, &u3}
+	if hasUser4 {
+		scanTargets = append(scanTargets, &u4)
+	}
+	if hasUser5 {
+		scanTargets = append(scanTargets, &u5)
+	}
+	if err := db.QueryRow(fmt.Sprintf("SELECT %s FROM multiway_trades WHERE chain_id = ?", strings.Join(selectColumns, ", ")), chainID).Scan(scanTargets...); err != nil {
+		return
+	}
+
+	msg := "A multiway trade was archived due to 7 days of inactivity. You can find it in your archive."
+	for _, uid := range uniquePositiveInts(u1, u2, u3, u4, u5) {
+		_, _ = db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)", uid, msg)
+		PublishUserEvent(uid, "multiway_archived", map[string]interface{}{
+			"chain_id": chainID,
+			"status":   "archived",
+			"reason":   TradeArchiveReasonInactiveTimeout,
+		})
+	}
 }
 
 func runTradeStatusJob(db *sql.DB, name string, fn func(*sql.DB)) {

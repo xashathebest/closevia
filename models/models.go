@@ -335,11 +335,14 @@ type Trade struct {
 	BuyerID         int         `json:"buyer_id"`
 	SellerID        int         `json:"seller_id"`
 	TargetProductID int         `json:"target_product_id"`
-	Status          string      `json:"status" validate:"oneof=pending accepted accepted_by_one accepted_by_both declined countered active ongoing awaiting_confirmation awaiting_other_party completed did_not_push_through under_review auto_completed cancelled cancelled_due_to_conflict expired broken history pending_multiway multiway_active"`
+	Status          string      `json:"status" validate:"oneof=pending accepted accepted_by_one accepted_by_both declined countered active ongoing awaiting_confirmation awaiting_other_party completed did_not_push_through under_review auto_completed cancelled cancelled_due_to_conflict expired broken history archived pending_multiway multiway_active"`
 	Message         string      `json:"message,omitempty"`
 	OfferedCash     *float64    `json:"offered_cash_amount,omitempty"`
 	CreatedAt       time.Time   `json:"created_at"`
 	UpdatedAt       time.Time   `json:"updated_at"`
+	LastActivityAt  *time.Time  `json:"last_activity_at,omitempty"`
+	ArchivedAt      *time.Time  `json:"archived_at,omitempty"`
+	ArchivedReason  string      `json:"archived_reason,omitempty"`
 	Items           []TradeItem `json:"items"`
 	BuyerCompleted  bool        `json:"buyer_completed"`
 	SellerCompleted bool        `json:"seller_completed"`

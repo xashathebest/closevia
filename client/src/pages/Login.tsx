@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { Link as RouterLink, useNavigate } from 'react-router-dom'
+import { Link as RouterLink, useLocation, useNavigate } from 'react-router-dom'
 import {
   Box,
   VStack,
@@ -54,8 +54,10 @@ const Login: React.FC = () => {
   const [isLoggingIn, setIsLoggingIn] = useState(false)
 
   const { login, googleLogin, user, isAuthenticated, loading: authLoading } = useAuth()
+  const location = useLocation()
   const navigate = useNavigate()
   const toast = useToast()
+  const sessionExpired = new URLSearchParams(location.search).get('expired') === 'true'
 
   const completeGoogleLogin = useCallback(async (firebaseUser: FirebaseUser) => {
     const idToken = await firebaseUser.getIdToken()
@@ -384,6 +386,12 @@ const Login: React.FC = () => {
                 <Alert status="error" borderRadius="10px" fontSize="sm" mb={4} py={2.5}>
                   <AlertIcon boxSize={4} />
                   <Text fontSize="sm">{error}</Text>
+                </Alert>
+              )}
+              {sessionExpired && !error && (
+                <Alert status="info" borderRadius="10px" fontSize="sm" mb={4} py={2.5}>
+                  <AlertIcon boxSize={4} />
+                  <Text fontSize="sm">Session expired. Please log in again.</Text>
                 </Alert>
               )}
 

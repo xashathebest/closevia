@@ -1,6 +1,6 @@
 import axios, { AxiosError, AxiosRequestConfig } from 'axios'
 import { isAuthInvalid, markAuthInvalidIfAuthenticated } from '../utils/authEvents'
-import { clearStoredAuth, hasStoredAuthenticatedSession } from '../utils/authStorage'
+import { hasStoredAuthenticatedSession } from '../utils/authStorage'
 
 function normalizeLoopbackBaseUrl(raw: string): string {
   try {
@@ -206,15 +206,10 @@ api.interceptors.response.use(
       console.warn(`[API ERROR] request_id=${requestId} status=${status ?? 'ERR'} url=${url}`)
     }
 
-    // On 401 after retry failed, let route guards and component-level handlers decide UX.
-    // Do NOT hard-redirect here, because some pages are intentionally browsable by guests.
     if (status === 401) {
-      const shouldInvalidateAuthenticatedSession = !isReviewEndpoint
-        && !isAuthRecoveryApiUrl(url)
-        && hasStoredAuthenticatedSession()
+      const shouldInvalidateAuthenticatedSession = !isAuthRecoveryApiUrl(url) && hasStoredAuthenticatedSession()
 
       if (shouldInvalidateAuthenticatedSession) {
-        clearStoredAuth()
         markAuthInvalidIfAuthenticated(typeof url === 'string' && url.includes('/api/auth/refresh-session') ? 'refresh_failed' : 'unauthorized')
       }
       if (isReviewEndpoint) {

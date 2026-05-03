@@ -74,9 +74,8 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
   const [sellerProducts, setSellerProducts] = useState<Product[]>([])
   const [targetSearchTerm, setTargetSearchTerm] = useState('')
   const [loadingSellerProducts, setLoadingSellerProducts] = useState(false)
-  const [locationPlan, setLocationPlan] = useState<'product' | 'shared' | 'later'>('product')
+  const [pickupLocationProductId, setPickupLocationProductId] = useState<number | null>(null)
   const [mobileStep, setMobileStep] = useState(0)
-  const [locationPlanAcknowledged, setLocationPlanAcknowledged] = useState(false)
 
   // One-time trade method onboarding hint
   const [showTradeHint, setShowTradeHint] = useState(() => {
@@ -173,7 +172,7 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
   }, [additionalTargetIds, sellerProducts, targetProduct])
 
   const selectedTargetLocationKeys = useMemo(
-    () => new Set(selectedTargetProducts.map(getProductLocationKey)),
+    () => new Set(selectedTargetProducts.map(getProductLocationKey).filter(key => key && key !== 'none')),
     [selectedTargetProducts]
   )
 
@@ -288,12 +287,32 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
     const lng = (p as any).pickup_longitude ?? (p as any).longitude
     return lat != null && lng != null ? { lat: Number(lat), lng: Number(lng) } : null
   }
-  const targetPickupCoords = getProductCoords(targetProduct)
+  const selectedTargetPickupOptions = useMemo(() => {
+    const seen = new Set<string>()
+    return selectedTargetProducts
+      .map((product) => ({
+        product,
+        key: getProductLocationKey(product),
+        label: getProductRawLocation(product) || getProductLocationLabel(product),
+        coords: getProductCoords(product),
+      }))
+      .filter((option) => option.label && option.key !== 'none')
+      .filter((option) => {
+        if (seen.has(option.key)) return false
+        seen.add(option.key)
+        return true
+      })
+  }, [selectedTargetProducts])
+  const selectedPickupProduct = useMemo(() => {
+    if (!selectedTargetsNeedLocationPlan) return targetProduct
+    return selectedTargetPickupOptions.find(option => option.product.id === pickupLocationProductId)?.product || null
+  }, [pickupLocationProductId, selectedTargetPickupOptions, selectedTargetsNeedLocationPlan, targetProduct])
+  const selectedPickupCoords = getProductCoords(selectedPickupProduct)
   const userCoords = user?.latitude != null && user?.longitude != null
     ? { lat: Number(user.latitude), lng: Number(user.longitude) }
     : null
-  const pickupDistanceLabel = targetPickupCoords && userCoords
-    ? formatDistance(distanceMeters(userCoords, targetPickupCoords))
+  const pickupDistanceLabel = selectedPickupCoords && userCoords
+    ? formatDistance(distanceMeters(userCoords, selectedPickupCoords))
     : 'Distance unavailable'
 
   const searchMeetupLocations = async (query: string) => {
@@ -481,8 +500,7 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
     setAdditionalTargetIds([])
     setSellerProducts([])
     setTargetSearchTerm('')
-    setLocationPlan('product')
-    setLocationPlanAcknowledged(false)
+    setPickupLocationProductId(null)
     setScheduleAgreed(false)
     setMobileStep(0)
     setSelectedSlotId(null)
@@ -541,10 +559,17 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
 
   useEffect(() => {
     if (!selectedTargetsNeedLocationPlan) {
-      setLocationPlan('product')
-      setLocationPlanAcknowledged(false)
+      setPickupLocationProductId(null)
     }
   }, [selectedTargetsNeedLocationPlan])
+
+  useEffect(() => {
+    if (!selectedTargetsNeedLocationPlan || selectedTargetPickupOptions.length === 0) return
+    const stillValid = selectedTargetPickupOptions.some(option => option.product.id === pickupLocationProductId)
+    if (!stillValid) {
+      setPickupLocationProductId(selectedTargetPickupOptions[0].product.id)
+    }
+  }, [pickupLocationProductId, selectedTargetPickupOptions, selectedTargetsNeedLocationPlan])
 
   useEffect(() => {
     if (!isOpen || !user?.latitude || !user?.longitude) return
@@ -758,24 +783,25 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
       return
     }
 
-    if (selectedTargetProducts.length > 0 && !scheduleAgreed) {
+    if (tradeOption === 'pickup' && selectedTargetsNeedLocationPlan && !selectedPickupProduct) {
       toast({
-        id: 'trademodal-schedule-ack',
-        title: 'Confirm location & schedule',
-        description: tradeOption === 'pickup'
-          ? 'Please confirm you agree to go to the pickup location at the selected time.'
-          : 'Please check the box confirming you agree with the location and preferred schedule.',
+        id: "trademodal-pickup-location-choice",
+        title: 'Choose pickup location',
+        description: 'These items have different pickup locations. Please choose one location for this trade.',
         status: 'warning',
         duration: 3500,
       })
       return
     }
-
-    if (selectedTargetsNeedLocationPlan && !locationPlanAcknowledged) {
+    if (selectedTargetProducts.length > 0 && !scheduleAgreed) {
       toast({
-        id: "trademodal-location-plan-ack",
-        title: 'Confirm pickup location details',
-        description: 'Selected products have different pickup locations. Please review and confirm the meetup plan.',
+        id: 'trademodal-schedule-ack',
+        title: 'Confirm location & schedule',
+        description: selectedTargetsNeedLocationPlan
+          ? 'These items have different pickup locations. Please choose one location for this trade, then confirm the selected plan.'
+          : tradeOption === 'pickup'
+          ? 'Please confirm you agree to go to the pickup location at the selected time.'
+          : 'Please check the box confirming you agree with the location and preferred schedule.',
         status: 'warning',
         duration: 3500,
       })
@@ -810,11 +836,12 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
     try {
       setSubmittingTrade(true)
 
-      const pickupLocation = getProductRawLocation(targetProduct) || ''
+      const pickupProduct = selectedPickupProduct || targetProduct
+      const pickupLocation = getProductRawLocation(pickupProduct) || ''
       const proposedMeetupLocation = tradeOption === 'pickup'
         ? pickupLocation.trim()
         : (resolvedMeetupAddress || '').trim()
-      const proposedMeetupCoords = tradeOption === 'pickup' ? getProductCoords(targetProduct) : resolvedMeetupCoords
+      const proposedMeetupCoords = tradeOption === 'pickup' ? getProductCoords(pickupProduct) : resolvedMeetupCoords
       const proposedMeetupDate = meetupDate.trim()
       const proposedMeetupTime = meetupTime.trim()
       if (sellerAvailabilityType === 'strict' && currentAvailabilitySlots.length > 0 && !selectedSlotId) {
@@ -914,8 +941,6 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
       setAdditionalTargetIds([])
       setSellerProducts([])
       setTargetSearchTerm('')
-      setLocationPlan('product')
-      setLocationPlanAcknowledged(false)
       onClose()
     } catch (e: any) {
       const errorMessage = e?.response?.data?.error || (isEditMode ? 'Failed to update trade' : 'Failed to send trade')
@@ -927,7 +952,8 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
   }
 
   const strictSlotSatisfied = sellerAvailabilityType !== 'strict' || currentAvailabilitySlots.length === 0 || !!selectedSlotId
-  const canConfirm = selectedOfferIds.length > 0 && !!tradeOption && !!meetupDate && !!meetupTime && strictSlotSatisfied && (tradeOption === 'pickup' || !!resolvedMeetupAddress) && (!selectedTargetsNeedLocationPlan || locationPlanAcknowledged) && (selectedTargetProducts.length === 0 || scheduleAgreed)
+  const pickupLocationChoiceSatisfied = tradeOption !== 'pickup' || !selectedTargetsNeedLocationPlan || !!selectedPickupProduct
+  const canConfirm = selectedOfferIds.length > 0 && !!tradeOption && !!meetupDate && !!meetupTime && strictSlotSatisfied && (tradeOption === 'pickup' || !!resolvedMeetupAddress) && pickupLocationChoiceSatisfied && (selectedTargetProducts.length === 0 || scheduleAgreed)
   const mobileSteps = ['Trading For', 'My Offered Items', 'Trade Details', 'Review']
 
   const selectedSummary = selectedProducts.length > 0 ? (
@@ -1435,43 +1461,6 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
           )}
           {tradeOption === 'pickup' && (
             <VStack spacing={2.5} align="stretch" mb={3}>
-              <Alert status="info" variant="left-accent" borderRadius="md" py={2} px={2.5} fontSize="11px">
-                <AlertIcon boxSize="14px" />
-                <Box>
-                  <Text fontSize="11px" fontWeight="700" color="blue.900" mb={0.5}>
-                    {selectedTargetsHaveDifferentLocations ? 'Multiple pickup locations' : 'Pickup at product location'}
-                  </Text>
-                  <Text fontSize="10px" color="blue.800">
-                    {selectedTargetsHaveDifferentLocations
-                      ? 'You will pick up each item at its listed location.'
-                      : 'Pickup happens at the owner\'s product location.'}
-                  </Text>
-                </Box>
-              </Alert>
-
-              {targetPickupCoords && (
-                <Box borderRadius="lg" overflow="hidden" borderWidth="1px" borderColor="orange.200" bg="white">
-                  <Box h="120px">
-                    <Box
-                      as="iframe"
-                      title="Pickup location map"
-                      src={`https://www.openstreetmap.org/export/embed.html?bbox=${targetPickupCoords.lng - 0.02},${targetPickupCoords.lat - 0.015},${targetPickupCoords.lng + 0.02},${targetPickupCoords.lat + 0.015}&layer=mapnik&marker=${targetPickupCoords.lat},${targetPickupCoords.lng}`}
-                      width="100%"
-                      height="100%"
-                      style={{ border: 'none', pointerEvents: 'none' }}
-                      loading="lazy"
-                    />
-                  </Box>
-                  <HStack px={2.5} py={2} justify="space-between" spacing={2}>
-                    <Box minW={0}>
-                      <Text fontSize="10px" fontWeight="800" color="orange.800">Buyer goes to this pickup location</Text>
-                      <Text fontSize="9px" color="gray.600" noOfLines={1}>{getProductRawLocation(targetProduct)}</Text>
-                    </Box>
-                    <Badge colorScheme="orange" flexShrink={0}>{pickupDistanceLabel}</Badge>
-                  </HStack>
-                </Box>
-              )}
-
               <Box p={3} bg="orange.50" borderWidth="1px" borderColor="orange.100" borderRadius="lg">
                 <HStack justify="space-between" align="center" mb={2}>
                   <Box minW={0}>
@@ -1562,9 +1551,9 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
   )
 
   // Helper: format a time string "HH:MM" → "3:00 PM"
+  const selectedPickupLocationLabel = selectedPickupProduct ? getProductRawLocation(selectedPickupProduct) : null
   const locationSection = selectedTargetProducts.length > 0 ? (
     <Box borderWidth="1px" borderColor={selectedTargetsNeedLocationPlan ? 'orange.200' : 'gray.200'} borderRadius="lg" overflow="hidden">
-      {/* Header */}
       <HStack px={3} py={2} bg="gray.50" borderBottomWidth="1px" borderBottomColor="gray.200" spacing={2}>
         <Icon as={FaMapMarkerAlt} color="gray.500" boxSize={3.5} />
         <Text fontSize="11px" fontWeight="800" textTransform="uppercase" color={mutedTextColor} letterSpacing="0.5px">Location Details</Text>
@@ -1573,114 +1562,86 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
         )}
       </HStack>
 
-      <VStack spacing={0} align="stretch" divider={<Box borderBottomWidth="1px" borderBottomColor="gray.100" />}>
-        {selectedTargetProducts.map((prod) => {
-          const displayLabel = getProductLocationLabel(prod)
-          const coords = getProductCoords(prod)
-          const mapUrl = coords
-            ? `https://www.openstreetmap.org/?mlat=${coords.lat}&mlon=${coords.lng}&zoom=14`
-            : null
-          const embedUrl = coords
-            ? `https://www.openstreetmap.org/export/embed.html?bbox=${coords.lng - 0.02},${coords.lat - 0.015},${coords.lng + 0.02},${coords.lat + 0.015}&layer=mapnik&marker=${coords.lat},${coords.lng}`
-            : null
+      <VStack spacing={0} align="stretch">
+        <VStack spacing={1.5} align="stretch" p={3} borderBottomWidth="1px" borderBottomColor="gray.100">
+          {selectedTargetProducts.map((prod) => {
+            const displayLabel = getProductLocationLabel(prod)
+            return (
+              <HStack key={prod.id} spacing={2} p={2} bg="blue.50" borderRadius="md" borderLeft="3px solid" borderLeftColor="blue.400" align="start">
+                <Icon as={FaMapMarkerAlt} color="blue.500" boxSize={3} mt="1px" flexShrink={0} />
+                <Box minW={0} flex={1}>
+                  <Text fontSize="10px" fontWeight="800" color="blue.900" noOfLines={1}>{prod.title}</Text>
+                  <Text fontSize="11px" fontWeight="600" color="blue.900" noOfLines={2}>{displayLabel || 'To Be Decided'}</Text>
+                </Box>
+              </HStack>
+            )
+          })}
+        </VStack>
 
-          return (
-            <Box key={prod.id} p={3}>
-              {/* ── 1. PICKUP LOCATION ── */}
-              <Text fontSize="9px" fontWeight="800" color="gray.500" textTransform="uppercase" letterSpacing="0.6px" mb={1.5}>
-                Pickup Location
-              </Text>
-
-              {(displayLabel || coords) ? (
-                <VStack align="stretch" spacing={1.5}>
-                  {displayLabel && (
-                    <HStack spacing={2} p={2} bg="blue.50" borderRadius="md" borderLeft="3px solid" borderLeftColor="blue.400">
-                      <Icon as={FaMapMarkerAlt} color="blue.500" boxSize={3} flexShrink={0} />
-                      <Text fontSize="11px" fontWeight="600" color="blue.900" flex={1}>{displayLabel}</Text>
-                    </HStack>
-                  )}
-
-                  {/* Mini map preview (approximate area — exact address hidden for privacy) */}
-                  {embedUrl && (
-                    <Box borderRadius="md" overflow="hidden" borderWidth="1px" borderColor="gray.200" h="90px" position="relative">
-                      <Box
-                        as="iframe"
-                        src={embedUrl}
-                        width="100%"
-                        height="100%"
-                        style={{ border: 'none', pointerEvents: 'none' }}
-                        title="Pickup location map"
-                        loading="lazy"
-                      />
-                      {/* Overlay to prevent accidental interaction + show link */}
-                      <HStack
-                        position="absolute"
-                        bottom={1}
-                        right={1}
-                        zIndex={1}
-                      >
-                        <Button
-                          as="a"
-                          href={mapUrl!}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          size="xs"
-                          fontSize="9px"
-                          bg="white"
-                          color="blue.700"
-                          borderWidth="1px"
-                          borderColor="blue.200"
-                          _hover={{ bg: 'blue.50' }}
-                          leftIcon={<Icon as={FaExternalLinkAlt} boxSize={2} />}
-                          h="20px"
-                          px={2}
-                          onClick={(e: React.MouseEvent) => e.stopPropagation()}
-                        >
-                          Open map
-                        </Button>
-                      </HStack>
-                    </Box>
-                  )}
-                </VStack>
-              ) : (
-                <HStack spacing={2} p={2} bg="gray.50" borderRadius="md" borderLeft="3px solid" borderLeftColor="gray.300">
-                  <Icon as={FaMapMarkerAlt} color="gray.400" boxSize={3} flexShrink={0} />
-                  <Text fontSize="11px" color="gray.500" fontStyle="italic">Pickup location not available. The seller needs to set a location for this item.</Text>
-                </HStack>
-              )}
-
-            </Box>
-          )
-        })}
-
-        {/* ── Multi-location plan (if needed) ── */}
         {selectedTargetsNeedLocationPlan && (
-          <Box px={3} py={2.5} bg="orange.50">
+          <Box px={3} py={2.5} bg="orange.50" borderBottomWidth="1px" borderBottomColor="orange.100">
             <Text fontSize="10px" fontWeight="700" color="orange.800" mb={2}>
-              These products are in different locations — how will you handle pickup?
+              These items have different pickup locations. Please choose one location for this trade.
             </Text>
-            <RadioGroup value={locationPlan} onChange={(value) => setLocationPlan(value as 'product' | 'shared' | 'later')}>
-              <VStack align="stretch" spacing={1.5}>
-                <Radio size="sm" value="product" colorScheme="orange">
-                  <Text fontSize="11px">Pick up each item at its listed location</Text>
-                </Radio>
-                <Radio size="sm" value="shared" colorScheme="orange">
-                  <Text fontSize="11px">Agree on one shared meetup spot instead</Text>
-                </Radio>
-                <Radio size="sm" value="later" colorScheme="orange">
-                  <Text fontSize="11px">Decide the final arrangement later</Text>
-                </Radio>
-              </VStack>
-            </RadioGroup>
-            <Checkbox size="sm" colorScheme="orange" isChecked={locationPlanAcknowledged} onChange={(e) => setLocationPlanAcknowledged(e.target.checked)} mt={2}>
-              <Text fontSize="10px" color="gray.700">
-                I reviewed the different locations and will confirm the plan before {tradeOption === 'pickup' ? 'pickup' : 'meetup'}.
+            {tradeOption === 'pickup' ? (
+              <RadioGroup
+                value={pickupLocationProductId ? String(pickupLocationProductId) : ''}
+                onChange={(value) => setPickupLocationProductId(Number(value))}
+              >
+                <VStack align="stretch" spacing={1.5}>
+                  {selectedTargetPickupOptions.map((option) => (
+                    <Radio key={option.product.id} size="sm" value={String(option.product.id)} colorScheme="orange">
+                      <Text fontSize="11px">{option.product.title}: {option.label}</Text>
+                    </Radio>
+                  ))}
+                </VStack>
+              </RadioGroup>
+            ) : (
+              <Text fontSize="10px" color="orange.800">
+                Use the meetup options above to choose one shared or custom location for the trade.
               </Text>
-            </Checkbox>
+            )}
           </Box>
         )}
 
-        {/* ── Agreement checkbox ── */}
+        {tradeOption === 'pickup' && selectedPickupCoords && (
+          <Box borderBottomWidth="1px" borderBottomColor="gray.100">
+            <Box h="120px">
+              <Box
+                as="iframe"
+                title="Pickup location map"
+                src={`https://www.openstreetmap.org/export/embed.html?bbox=${selectedPickupCoords.lng - 0.02},${selectedPickupCoords.lat - 0.015},${selectedPickupCoords.lng + 0.02},${selectedPickupCoords.lat + 0.015}&layer=mapnik&marker=${selectedPickupCoords.lat},${selectedPickupCoords.lng}`}
+                width="100%"
+                height="100%"
+                style={{ border: 'none', pointerEvents: 'none' }}
+                loading="lazy"
+              />
+            </Box>
+            <HStack px={3} py={2} justify="space-between" spacing={2}>
+              <Box minW={0}>
+                <Text fontSize="10px" fontWeight="800" color="orange.800">Selected pickup location</Text>
+                <Text fontSize="9px" color="gray.600" noOfLines={1}>{selectedPickupLocationLabel}</Text>
+              </Box>
+              <Badge colorScheme="orange" flexShrink={0}>{pickupDistanceLabel}</Badge>
+            </HStack>
+          </Box>
+        )}
+
+        {tradeOption === 'meetup' && resolvedMeetupAddress && (
+          <HStack px={3} py={2.5} bg="teal.50" borderBottomWidth="1px" borderBottomColor="teal.100" align="start" spacing={2}>
+            <Icon as={FaHandshake} color="teal.600" boxSize={3.5} mt="1px" />
+            <Box minW={0} flex={1}>
+              <Text fontSize="10px" fontWeight="800" color="teal.800">Selected meetup location</Text>
+              <Text fontSize="11px" color="teal.900" noOfLines={2}>{resolvedMeetupAddress}</Text>
+            </Box>
+            {meetupMapUrl && (
+              <Button as="a" href={meetupMapUrl} target="_blank" rel="noopener noreferrer" size="xs" variant="outline" colorScheme="teal" leftIcon={<Icon as={FaExternalLinkAlt} boxSize={2.5} />} fontSize="10px">
+                Map
+              </Button>
+            )}
+          </HStack>
+        )}
+
         <Box px={3} py={2.5} bg={scheduleAgreed ? 'green.50' : 'gray.50'}>
           <Checkbox
             size="md"
@@ -1689,7 +1650,9 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
             onChange={(e) => setScheduleAgreed(e.target.checked)}
           >
             <Text fontSize="11px" color="gray.800" fontWeight="600">
-              {tradeOption === 'pickup'
+              {selectedTargetsNeedLocationPlan
+                ? 'I reviewed the selected location and collection time for this trade.'
+                : tradeOption === 'pickup'
                 ? 'I agree to go to the pickup location at the selected time.'
                 : 'I reviewed the meetup location and selected time.'}
             </Text>
@@ -1745,7 +1708,20 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
       {targetProduct && <Box p={3} borderWidth="1px" borderColor={targetCardBorderColor} bg={targetCardBg} borderRadius="md"><Text fontSize="10px" fontWeight="700" color={targetLabelColor} textTransform="uppercase" mb={2}>Trading For</Text><Text fontSize="13px" fontWeight="700" noOfLines={2}>{targetProduct.title}</Text>{additionalTargetIds.length > 0 && <Text fontSize="10px" color="blue.700" mt={1}>+ {additionalTargetIds.length} more requested item{additionalTargetIds.length > 1 ? 's' : ''}</Text>}</Box>}
       {selectedSummary || <Text fontSize="12px" color={mutedTextColor}>No offered items selected yet.</Text>}
       <Box p={3} borderWidth="1px" borderColor={borderColor} borderRadius="md"><VStack spacing={1.5} align="stretch"><HStack justify="space-between"><Text fontSize="11px" color={mutedTextColor}>Method</Text><Text fontSize="11px" fontWeight="700" textTransform="capitalize">{tradeOption || 'Not selected'}</Text></HStack><HStack justify="space-between"><Text fontSize="11px" color={mutedTextColor}>Money</Text><Text fontSize="11px" fontWeight="700">{cashAmount ? `PHP ${cashAmount}` : 'None'}</Text></HStack><HStack justify="space-between" align="start"><Text fontSize="11px" color={mutedTextColor}>Message</Text><Text fontSize="11px" fontWeight="600" maxW="65%" textAlign="right" noOfLines={2}>{tradeMessage || 'None'}</Text></HStack></VStack></Box>
-      {locationSection}
+      <Box p={3} borderWidth="1px" borderColor={borderColor} borderRadius="md" bg="gray.50">
+        <VStack spacing={1.5} align="stretch">
+          <HStack justify="space-between" align="start">
+            <Text fontSize="11px" color={mutedTextColor}>Location</Text>
+            <Text fontSize="11px" fontWeight="700" maxW="65%" textAlign="right" noOfLines={2}>
+              {tradeOption === 'pickup' ? selectedPickupLocationLabel || 'To Be Decided' : resolvedMeetupAddress || 'Not selected'}
+            </Text>
+          </HStack>
+          <HStack justify="space-between">
+            <Text fontSize="11px" color={mutedTextColor}>Collection time</Text>
+            <Text fontSize="11px" fontWeight="700">{meetupDate && meetupTime ? `${meetupDate} ${meetupTime}` : 'Not selected'}</Text>
+          </HStack>
+        </VStack>
+      </Box>
     </VStack>
   )
 

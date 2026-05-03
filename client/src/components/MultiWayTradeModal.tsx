@@ -337,6 +337,7 @@ function statusLabel(status: string): string {
     cancelled: 'Cancelled (Manual)',
     cancelled_due_to_conflict: 'Loop Ended',
     expired: 'Expired',
+    archived: 'Archived due to inactivity',
     rejected: 'Not Completed',
     in_progress: 'In Progress',
     multiway_active: 'Active',
@@ -367,6 +368,7 @@ function statusColorScheme(status: string): string {
     case 'rejected':
     case 'broken':
     case 'expired':
+    case 'archived':
     case 'cancelled_due_to_conflict':
       return 'gray'
     case 'cancelled':

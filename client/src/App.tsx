@@ -29,6 +29,7 @@ import ToastNotification from './components/ToastNotification'
 import SessionTimeoutManager from './components/SessionTimeoutManager'
 import PullToRefresh from './components/PullToRefresh'
 import ConnectionStatus from './components/ConnectionStatus'
+import AppLoader from './components/AppLoader'
 
 // Theme applier component - loads and applies saved theme preference
 const ThemeApplier: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -142,7 +143,7 @@ const AppContent: React.FC = () => {
 
   return (
     <>
-      {loading && !user ? <LoadingOverlay /> : null}
+      {loading ? <LoadingOverlay /> : null}
       <AnimatePresence mode="wait">
         <Routes>
         {/* Landing page route - no sidebar or app layout */}
@@ -306,6 +307,12 @@ const AppContent: React.FC = () => {
                 <Route path="/trades" element={
                   <Navigate to="/offers?tab=inbox" replace />
                 } />
+                <Route path="/offers/archive" element={
+                  <Navigate to="/offers?tab=history" replace />
+                } />
+                <Route path="/offers/history" element={
+                  <Navigate to="/offers?tab=history" replace />
+                } />
                 <Route path="/offers" element={
                   <PageTransition>
                     <ProtectedRoute><Suspense fallback={null}><Offers /></Suspense></ProtectedRoute>
@@ -348,27 +355,29 @@ function App() {
   return (
     <ChakraProvider theme={theme} toastOptions={{ defaultOptions: { position: 'top', duration: 4000, isClosable: true } }}>
       <ThemeApplier>
-        <AuthProvider>
-          <ProductProvider>
-            <MobileNavProvider>
-              <NotificationProvider>
-                <RealtimeProvider>
-                  <Router future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
-                    <ErrorBoundary>
-                      <SessionTimeoutManager />
-                      <ConnectionStatus />
-                      <PullToRefresh>
-                        <AppContent />
-                      </PullToRefresh>
-                    </ErrorBoundary>
-                    <GlobalPopup />
-                    <ToastNotification />
-                  </Router>
-                </RealtimeProvider>
-              </NotificationProvider>
-            </MobileNavProvider>
-          </ProductProvider>
-        </AuthProvider>
+        <AppLoader>
+          <AuthProvider>
+            <ProductProvider>
+              <MobileNavProvider>
+                <NotificationProvider>
+                  <RealtimeProvider>
+                    <Router future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+                      <ErrorBoundary>
+                        <SessionTimeoutManager />
+                        <ConnectionStatus />
+                        <PullToRefresh>
+                          <AppContent />
+                        </PullToRefresh>
+                      </ErrorBoundary>
+                      <GlobalPopup />
+                      <ToastNotification />
+                    </Router>
+                  </RealtimeProvider>
+                </NotificationProvider>
+              </MobileNavProvider>
+            </ProductProvider>
+          </AuthProvider>
+        </AppLoader>
       </ThemeApplier>
     </ChakraProvider>
   )

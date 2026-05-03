@@ -777,17 +777,11 @@ func (h *UserHandler) RefreshSession(c *fiber.Ctx) error {
 		}
 	}
 	if token == "" {
-		return c.Status(fiber.StatusUnauthorized).JSON(models.APIResponse{
-			Success: false,
-			Error:   "Authentication required",
-		})
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "unauthorized"})
 	}
 	if _, err := utils.ValidateJWT(token); err != nil {
 		utils.ClearAuthCookie(c)
-		return c.Status(fiber.StatusUnauthorized).JSON(models.APIResponse{
-			Success: false,
-			Error:   "Invalid or expired token",
-		})
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "unauthorized"})
 	}
 	utils.SetAuthCookie(c, token)
 	return c.JSON(models.APIResponse{

@@ -186,6 +186,11 @@ func main() {
 			if code >= fiber.StatusInternalServerError {
 				services.RecordBackendError()
 			}
+			if code == fiber.StatusUnauthorized {
+				return c.Status(code).JSON(fiber.Map{
+					"error": "unauthorized",
+				})
+			}
 			return c.Status(code).JSON(fiber.Map{
 				"success":    false,
 				"error":      message,
@@ -201,7 +206,11 @@ func main() {
 	app.Use(middleware.SecurityHeaders())
 	app.Use(middleware.RequestTiming())
 	app.Use(middleware.StructuredRequestLogger(appLogger))
-	app.Use(logger.New())
+	app.Use(logger.New(logger.Config{
+		Next: func(c *fiber.Ctx) bool {
+			return strings.TrimRight(c.Path(), "/") == "/health"
+		},
+	}))
 
 	corsOrigins := os.Getenv("CORS_ORIGINS")
 	if corsOrigins == "" {
@@ -338,11 +347,11 @@ func main() {
 		})
 	})
 
-	// Simple health check endpoint (for basic liveness probes, no DB ping)
+	// Simple health check endpoint for Render/UptimeRobot liveness probes.
+	// Keep this fast: no database, no external services, no internal self-ping.
 	app.Get("/health", func(c *fiber.Ctx) error {
-		return c.JSON(fiber.Map{
-			"status": "ok",
-		})
+		c.Set("Cache-Control", "no-store")
+		return c.SendStatus(fiber.StatusOK)
 	})
 
 	app.Get("/healthz", func(c *fiber.Ctx) error {

@@ -131,16 +131,19 @@ func validateCollectionDateTime(meetupDate, meetupTime string) error {
 	if err != nil {
 		location = time.Local
 	}
-	date, err := time.ParseInLocation("2006-01-02", strings.TrimSpace(meetupDate), location)
+	dateValue := strings.TrimSpace(meetupDate)
+	timeValue := strings.TrimSpace(meetupTime)
+	if _, err := time.ParseInLocation("2006-01-02", dateValue, location); err != nil {
+		return fmt.Errorf("Invalid collection date")
+	}
+	if _, err := time.ParseInLocation("15:04", timeValue, location); err != nil {
+		return fmt.Errorf("Invalid collection time")
+	}
+	collectionAt, err := time.ParseInLocation("2006-01-02 15:04", dateValue+" "+timeValue, location)
 	if err != nil {
 		return fmt.Errorf("Invalid collection date")
 	}
-	if _, err := time.ParseInLocation("15:04", strings.TrimSpace(meetupTime), location); err != nil {
-		return fmt.Errorf("Invalid collection time")
-	}
-	today := time.Now().In(location)
-	startOfToday := time.Date(today.Year(), today.Month(), today.Day(), 0, 0, 0, 0, location)
-	if date.Before(startOfToday) {
+	if collectionAt.Before(time.Now().In(location)) {
 		return fmt.Errorf("Collection date cannot be in the past")
 	}
 	return nil
@@ -494,6 +497,9 @@ func (h *TradeHandler) ensureTradeRuntimeColumns() {
 		{"seller_late_penalty_applied", "BOOLEAN DEFAULT FALSE"},
 		{"agreed_arrival_deadline", "TIMESTAMP NULL"},
 		{"grace_period_minutes", "INT DEFAULT 10"},
+		{"last_activity_at", "TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP"},
+		{"archived_at", "TIMESTAMP NULL"},
+		{"archived_reason", "VARCHAR(64) NULL"},
 	}
 
 	for _, col := range columns {
@@ -512,6 +518,45 @@ func (h *TradeHandler) ensureTradeRuntimeColumns() {
 			log.Printf("Warning: failed to add trade runtime column %s: %v", col.name, err)
 		}
 	}
+
+	_, _ = h.db.Exec(`ALTER TABLE trades MODIFY COLUMN status ENUM('pending','accepted','accepted_by_one','accepted_by_both','declined','countered','active','ongoing','awaiting_confirmation','awaiting_other_party','completed','did_not_push_through','under_review','cancelled','cancelled_due_to_conflict','auto_completed','expired','broken','history','archived','pending_multiway','multiway_active') DEFAULT 'pending'`)
+	_, _ = h.db.Exec("UPDATE trades SET last_activity_at = COALESCE(last_activity_at, updated_at, created_at) WHERE last_activity_at IS NULL")
+	_, _ = h.db.Exec("CREATE INDEX idx_trades_status_last_activity ON trades(status, last_activity_at)")
+
+	h.ensureArchiveRuntimeColumns("trade_like_loops")
+	h.ensureArchiveRuntimeColumns("multiway_trades")
+	_, _ = h.db.Exec(`ALTER TABLE trade_like_loops MODIFY COLUMN status ENUM('pending','partially_accepted','accepted','confirmed','ongoing','completed','did_not_push_through','history','rejected','cancelled','cancelled_due_to_conflict','broken','expired','archived') DEFAULT 'pending'`)
+	_, _ = h.db.Exec(`ALTER TABLE multiway_trades MODIFY COLUMN status ENUM('searching','pending_user3','pending_initiator_upgrade','waiting_acceptance','user3_accepted','user3_declined','active','completed','cancelled','expired','broken','history','archived','fully_declined') DEFAULT 'searching'`)
+	_, _ = h.db.Exec("CREATE INDEX idx_trade_like_loops_status_activity ON trade_like_loops(status, last_activity_at)")
+	_, _ = h.db.Exec("CREATE INDEX idx_multiway_trades_status_activity ON multiway_trades(status, last_activity_at)")
+}
+
+func (h *TradeHandler) ensureArchiveRuntimeColumns(tableName string) {
+	columns := []struct {
+		name       string
+		definition string
+	}{
+		{"last_activity_at", "TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP"},
+		{"archived_at", "TIMESTAMP NULL"},
+		{"archived_reason", "VARCHAR(64) NULL"},
+	}
+	for _, col := range columns {
+		var exists int
+		err := h.db.QueryRow(`
+			SELECT COUNT(*)
+			FROM information_schema.COLUMNS
+			WHERE TABLE_SCHEMA = DATABASE()
+			  AND TABLE_NAME = ?
+			  AND COLUMN_NAME = ?
+		`, tableName, col.name).Scan(&exists)
+		if err != nil || exists > 0 {
+			continue
+		}
+		if _, err := h.db.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", tableName, col.name, col.definition)); err != nil {
+			log.Printf("Warning: failed to add %s.%s: %v", tableName, col.name, err)
+		}
+	}
+	_, _ = h.db.Exec(fmt.Sprintf("UPDATE %s SET last_activity_at = COALESCE(last_activity_at, updated_at, created_at) WHERE last_activity_at IS NULL", tableName))
 }
 
 // applyCancellationPenalty updates strikes and auto-suspends a user after
@@ -1253,6 +1298,69 @@ func normalizeAdditionalTargetProductIDs(primaryTargetID int, values []int) ([]i
 	return normalized, nil
 }
 
+type tradePickupPoint struct {
+	ProductID int
+	Address   string
+	Lat       sql.NullFloat64
+	Lng       sql.NullFloat64
+}
+
+func normalizeLocationForCompare(value string) string {
+	return strings.Join(strings.Fields(strings.ToLower(strings.TrimSpace(value))), " ")
+}
+
+func (h *TradeHandler) getSelectedTargetPickupPoints(productIDs []int) ([]tradePickupPoint, error) {
+	productIDs = uniquePositiveInts(productIDs)
+	if len(productIDs) == 0 {
+		return nil, nil
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(productIDs)), ",")
+	args := make([]interface{}, 0, len(productIDs))
+	for _, id := range productIDs {
+		args = append(args, id)
+	}
+	rows, err := h.db.Query(fmt.Sprintf(`
+		SELECT id,
+		       COALESCE(NULLIF(location, ''), NULLIF(pickup_address, ''), '') AS pickup_address,
+		       COALESCE(pickup_latitude, latitude) AS pickup_latitude,
+		       COALESCE(pickup_longitude, longitude) AS pickup_longitude
+		FROM products
+		WHERE id IN (%s)
+	`, placeholders), args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	points := make([]tradePickupPoint, 0, len(productIDs))
+	for rows.Next() {
+		var point tradePickupPoint
+		if err := rows.Scan(&point.ProductID, &point.Address, &point.Lat, &point.Lng); err != nil {
+			return nil, err
+		}
+		points = append(points, point)
+	}
+	return points, rows.Err()
+}
+
+func findRequestedPickupPoint(points []tradePickupPoint, requested string, fallback string) (tradePickupPoint, bool) {
+	requestedKey := normalizeLocationForCompare(requested)
+	fallbackKey := normalizeLocationForCompare(fallback)
+	for _, point := range points {
+		pointKey := normalizeLocationForCompare(point.Address)
+		if requestedKey != "" && pointKey == requestedKey {
+			return point, true
+		}
+	}
+	for _, point := range points {
+		pointKey := normalizeLocationForCompare(point.Address)
+		if fallbackKey != "" && pointKey == fallbackKey {
+			return point, true
+		}
+	}
+	return tradePickupPoint{}, false
+}
+
 func validateOptionalWholePesoAmount(amount *float64) error {
 	if amount == nil {
 		return nil
@@ -1506,8 +1614,25 @@ func (h *TradeHandler) CreateTrade(c *fiber.Ctx) error {
 	if !collectionMethodEnabled(targetCollectionSetup, meetingType) {
 		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "This trade method is not available for this item."})
 	}
+	targetPickupPoints, err := h.getSelectedTargetPickupPoints(append([]int{payload.TargetProductID}, payload.AdditionalTargetProductIDs...))
+	if err != nil {
+		log.Printf("Error loading selected target pickup locations: %v", err)
+		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to validate pickup locations"})
+	}
 	if meetingType == "pickup" {
-		meetupLocation = strings.TrimSpace(targetPickupAddress)
+		if len(payload.AdditionalTargetProductIDs) > 0 && strings.TrimSpace(payload.MeetupLocation) != "" {
+			point, ok := findRequestedPickupPoint(targetPickupPoints, payload.MeetupLocation, targetPickupAddress)
+			if !ok || strings.TrimSpace(point.Address) == "" {
+				return c.Status(400).JSON(models.APIResponse{Success: false, Error: "These items have different pickup locations. Please choose one location for this trade."})
+			}
+			meetupLocation = strings.TrimSpace(point.Address)
+			targetPickupLat = point.Lat
+			targetPickupLng = point.Lng
+			targetLat = sql.NullFloat64{}
+			targetLng = sql.NullFloat64{}
+		} else {
+			meetupLocation = strings.TrimSpace(targetPickupAddress)
+		}
 		if meetupLocation == "" {
 			return c.Status(400).JSON(models.APIResponse{Success: false, Error: "Pickup location not available. The seller needs to set a location for this item."})
 		}
@@ -1523,12 +1648,12 @@ func (h *TradeHandler) CreateTrade(c *fiber.Ctx) error {
 	}
 	var meetupLat, meetupLng sql.NullFloat64
 	if meetingType == "pickup" {
-		if targetLat.Valid && targetLng.Valid {
-			meetupLat = targetLat
-			meetupLng = targetLng
-		} else if targetPickupLat.Valid && targetPickupLng.Valid {
+		if targetPickupLat.Valid && targetPickupLng.Valid {
 			meetupLat = targetPickupLat
 			meetupLng = targetPickupLng
+		} else if targetLat.Valid && targetLng.Valid {
+			meetupLat = targetLat
+			meetupLng = targetLng
 		}
 	}
 	if !meetupLat.Valid || !meetupLng.Valid {
@@ -2233,6 +2358,7 @@ func (h *TradeHandler) GetTrades(c *fiber.Ctx) error {
 	query := `
         SELECT
 		  t.id, t.buyer_id, t.seller_id, t.target_product_id, t.status, COALESCE(t.message, '') as message, t.offered_cash_amount, t.created_at, t.updated_at,
+		  t.last_activity_at, t.archived_at, COALESCE(t.archived_reason, '') as archived_reason,
           t.buyer_completed, t.seller_completed, COALESCE(t.buyer_accepted, FALSE) as buyer_accepted, COALESCE(t.seller_accepted, FALSE) as seller_accepted, t.completed_at`
 
 	// Check if trade_option column exists
@@ -2345,8 +2471,15 @@ func (h *TradeHandler) GetTrades(c *fiber.Ctx) error {
 		var offeredCashNull sql.NullFloat64
 		var meetupLatNull, meetupLngNull sql.NullFloat64
 		var buyerArrivedAt, sellerArrivedAt, agreedDeadline sql.NullTime
+		var lastActivityAt, archivedAt sql.NullTime
 
-		if err := rows.Scan(&tr.ID, &tr.BuyerID, &tr.SellerID, &tr.TargetProductID, &tr.Status, &tr.Message, &offeredCashNull, &tr.CreatedAt, &tr.UpdatedAt, &tr.BuyerCompleted, &tr.SellerCompleted, &tr.BuyerAccepted, &tr.SellerAccepted, &tr.CompletedAt, &tr.TradeOption, &tr.MeetingType, &tr.DeliveryAddress, &deliveryType, &paymentMethod, &paymentConfirmed, &deliveryInstructions, &proofOfDelivery, &buyerConfirmedReceipt, &sellerConfirmedDelivery, &tr.MeetupLocation, &tr.MeetupLabel, &tr.MeetupTime, &tr.BuyerMeetupConfirmed, &tr.SellerMeetupConfirmed, &meetupLatNull, &meetupLngNull, &tr.BuyerMeetupLocation, &tr.BuyerMeetupTime, &tr.SellerMeetupLocation, &tr.SellerMeetupTime, &tr.BuyerMet, &tr.SellerMet, &buyerArrivedAt, &sellerArrivedAt, &tr.BuyerWasLate, &tr.SellerWasLate, &tr.LatePenaltyApplied, &tr.BuyerLatePenaltyApplied, &tr.SellerLatePenaltyApplied, &agreedDeadline, &tr.GracePeriodMinutes, &tr.CounteredBy, &tr.ParentTradeID, &tr.BuyerName, &tr.SellerName, &tr.ProductTitle, &pimg, &pimgs, &targetPickupAddr, &targetPickupLat, &targetPickupLng); err == nil {
+		if err := rows.Scan(&tr.ID, &tr.BuyerID, &tr.SellerID, &tr.TargetProductID, &tr.Status, &tr.Message, &offeredCashNull, &tr.CreatedAt, &tr.UpdatedAt, &lastActivityAt, &archivedAt, &tr.ArchivedReason, &tr.BuyerCompleted, &tr.SellerCompleted, &tr.BuyerAccepted, &tr.SellerAccepted, &tr.CompletedAt, &tr.TradeOption, &tr.MeetingType, &tr.DeliveryAddress, &deliveryType, &paymentMethod, &paymentConfirmed, &deliveryInstructions, &proofOfDelivery, &buyerConfirmedReceipt, &sellerConfirmedDelivery, &tr.MeetupLocation, &tr.MeetupLabel, &tr.MeetupTime, &tr.BuyerMeetupConfirmed, &tr.SellerMeetupConfirmed, &meetupLatNull, &meetupLngNull, &tr.BuyerMeetupLocation, &tr.BuyerMeetupTime, &tr.SellerMeetupLocation, &tr.SellerMeetupTime, &tr.BuyerMet, &tr.SellerMet, &buyerArrivedAt, &sellerArrivedAt, &tr.BuyerWasLate, &tr.SellerWasLate, &tr.LatePenaltyApplied, &tr.BuyerLatePenaltyApplied, &tr.SellerLatePenaltyApplied, &agreedDeadline, &tr.GracePeriodMinutes, &tr.CounteredBy, &tr.ParentTradeID, &tr.BuyerName, &tr.SellerName, &tr.ProductTitle, &pimg, &pimgs, &targetPickupAddr, &targetPickupLat, &targetPickupLng); err == nil {
+			if lastActivityAt.Valid {
+				tr.LastActivityAt = &lastActivityAt.Time
+			}
+			if archivedAt.Valid {
+				tr.ArchivedAt = &archivedAt.Time
+			}
 			if meetupLatNull.Valid {
 				tr.MeetupLat = &meetupLatNull.Float64
 			}
@@ -2589,6 +2722,7 @@ func (h *TradeHandler) UpdateTrade(c *fiber.Ctx) error {
 		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "Invalid request body"})
 	}
 	log.Printf("Trade action received: %s for trade %d", payload.Action, tradeID)
+	defer services.TouchTradeActivity(h.db, tradeID)
 
 	switch payload.Action {
 	case "accept":
@@ -5147,6 +5281,7 @@ func (h *TradeHandler) SendTradeMessage(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to save message"})
 	}
+	services.TouchTradeActivity(h.db, tradeID)
 	id64, _ := res.LastInsertId()
 	var createdAt time.Time
 	_ = h.db.QueryRow("SELECT created_at FROM trade_messages WHERE id = ?", id64).Scan(&createdAt)
@@ -5239,6 +5374,7 @@ func (h *TradeHandler) SendTradeLoopMessage(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to save message"})
 	}
+	services.TouchTradeLoopActivity(h.db, loopID)
 	id64, _ := res.LastInsertId()
 	var createdAt time.Time
 	_ = h.db.QueryRow("SELECT created_at FROM trade_loop_messages WHERE id = ?", id64).Scan(&createdAt)
@@ -5732,6 +5868,8 @@ func (h *TradeHandler) UpdateTradeLoopMeetup(c *fiber.Ctx) error {
 	default:
 		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "Invalid action"})
 	}
+
+	services.TouchLoopOrChainActivity(h.db, loopID)
 
 	for _, participantID := range participantIDs {
 		publishToUser(participantID, sseEvent{
@@ -10003,6 +10141,7 @@ func (h *TradeHandler) UpdateLegHandoff(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to update handoffs"})
 	}
+	services.TouchMultiwayChainActivity(h.db, chainID)
 
 	// 3. Notify all other parties in the chain
 	rows, err := h.db.Query(`
@@ -10068,6 +10207,7 @@ func (h *TradeHandler) CompleteLeg(c *fiber.Ctx) error {
 	// Check if ALL legs of this chain are now complete Ã¢â€ â€™ auto-complete the chain.
 	var chainID string
 	h.db.QueryRow("SELECT chain_id FROM multiway_trade_legs WHERE id = ?", legID).Scan(&chainID)
+	services.TouchMultiwayChainActivity(h.db, chainID)
 
 	var totalLegs, completedLegs int
 	h.db.QueryRow("SELECT COUNT(*), SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) FROM multiway_trade_legs WHERE chain_id = ?", chainID).Scan(&totalLegs, &completedLegs)

@@ -65,6 +65,7 @@ func (h *MeetupHandler) ProposeMeetupTime(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
 	}
+	services.TouchTradeActivity(database.DB, tradeID)
 	sendPushToUser(otherUserID, "Trade schedule proposed", "Your trading partner proposed meetup details.", tradeDeepLink(tradeID), "meetup_update")
 
 	return c.JSON(fiber.Map{
@@ -99,6 +100,7 @@ func (h *MeetupHandler) MarkHeadingOut(c *fiber.Ctx) error {
 	if errMark != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": errMark.Error()})
 	}
+	services.TouchTradeActivity(database.DB, tradeID)
 
 	status, _ := meetupService.GetMeetupStatus(tradeID)
 
@@ -199,6 +201,7 @@ func (h *MeetupHandler) MarkArrived(c *fiber.Ctx) error {
 	if errArrived != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": errArrived.Error()})
 	}
+	services.TouchTradeActivity(database.DB, tradeID)
 
 	status, _ := meetupService.GetMeetupStatus(tradeID)
 
@@ -245,6 +248,7 @@ func (h *MeetupHandler) ConfirmCompletion(c *fiber.Ctx) error {
 	if errComplete != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": errComplete.Error()})
 	}
+	services.TouchTradeActivity(database.DB, tradeID)
 	sendPushToUser(otherUserID, "Meetup completion confirmed", "Your trading partner confirmed the meetup completion step.", tradeDeepLink(tradeID), "trade_update")
 
 	status, _ := meetupService.GetMeetupStatus(tradeID)
@@ -335,6 +339,7 @@ func (h *MeetupHandler) ReportNoShow(c *fiber.Ctx) error {
 	if errNoShow != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": errNoShow.Error()})
 	}
+	services.TouchTradeActivity(database.DB, tradeID)
 
 	// Record a structured trust strike against the absent party.
 	_ = services.RecordTrustStrike(database.DB, services.TrustStrikeInput{

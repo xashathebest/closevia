@@ -210,6 +210,7 @@ export const useOngoingTrades = (options: DashboardQueryOptions = {}) => {
       const response = await api.get('/api/trades', {
         params: {
           include: 'products',
+          status: 'ongoing',
           limit: 100,
         },
       })
@@ -217,7 +218,7 @@ export const useOngoingTrades = (options: DashboardQueryOptions = {}) => {
         return Array.isArray(response?.data?.data) ? response.data.data : (Array.isArray(response?.data) ? response.data : [])
       }
 
-      const ongoingStatuses = new Set(['accepted', 'active', 'ongoing', 'awaiting_confirmation', 'under_review', 'multiway_active'])
+      const ongoingStatuses = new Set(['ongoing'])
       const allTrades = extractData(response).filter((trade: Trade) => ongoingStatuses.has(trade.status))
 
       const uniqueTrades = new Map<string | number, Trade>()
@@ -265,14 +266,16 @@ export const useMultiWayLoops = (userId: number | undefined, options: DashboardQ
   })
 }
 
-// Custom hook for archived (expired) trades with caching
+// Custom hook for archived/expired trades with caching
 export const useArchivedTrades = (options: DashboardQueryOptions = {}) => {
   return useQuery({
     queryKey: DASHBOARD_QUERY_KEYS.archivedTrades,
     queryFn: async (): Promise<Trade[]> => {
-      const [incomingExpired, outgoingExpired] = await Promise.all([
+      const [incomingExpired, outgoingExpired, incomingArchived, outgoingArchived] = await Promise.all([
         api.get('/api/trades', { params: { direction: 'incoming', include: 'products', status: 'expired', limit: 100 } }),
-        api.get('/api/trades', { params: { direction: 'outgoing', include: 'products', status: 'expired', limit: 100 } })
+        api.get('/api/trades', { params: { direction: 'outgoing', include: 'products', status: 'expired', limit: 100 } }),
+        api.get('/api/trades', { params: { direction: 'incoming', include: 'products', status: 'archived', limit: 100 } }),
+        api.get('/api/trades', { params: { direction: 'outgoing', include: 'products', status: 'archived', limit: 100 } })
       ])
 
       const extractData = (response: any) => {
@@ -281,7 +284,9 @@ export const useArchivedTrades = (options: DashboardQueryOptions = {}) => {
 
       const allTrades = [
         ...extractData(incomingExpired),
-        ...extractData(outgoingExpired)
+        ...extractData(outgoingExpired),
+        ...extractData(incomingArchived),
+        ...extractData(outgoingArchived)
       ]
 
       // Deduplicate by trade ID
@@ -310,13 +315,19 @@ export const useTradeHistory = (options: TradeHistoryQueryOptions = {}) => {
   return useQuery({
     queryKey: [...DASHBOARD_QUERY_KEYS.tradeHistory, page, limit, sort],
     queryFn: async (): Promise<TradeHistoryResult> => {
-      const [historyTradesRes, historyLoopsRes] = await Promise.all([
-        api.get('/api/trades', {
-          params: { status: 'history', include: 'products', page: 1, limit: sourceLimit, sort }
-        }),
-        api.get('/api/trades/loops', {
-          params: { status: 'history', page: 1, limit: sourceLimit, sort }
-        }).catch(() => ({ data: { data: { data: [], total: 0, page, limit, total_pages: 0 } } })),
+      const historyStatuses = ['history', 'completed', 'cancelled', 'did_not_push_through', 'archived']
+      const loopHistoryStatuses = ['history', 'completed', 'cancelled', 'did_not_push_through', 'archived']
+      const [historyTradeResponses, historyLoopResponses] = await Promise.all([
+        Promise.all(historyStatuses.map(status =>
+          api.get('/api/trades', {
+            params: { status, include: 'products', page: 1, limit: sourceLimit, sort }
+          }).catch(() => ({ data: { data: { data: [], total: 0, page, limit, total_pages: 0 } } }))
+        )),
+        Promise.all(loopHistoryStatuses.map(status =>
+          api.get('/api/trades/loops', {
+            params: { status, page: 1, limit: sourceLimit, sort }
+          }).catch(() => ({ data: { data: { data: [], total: 0, page, limit, total_pages: 0 } } }))
+        )),
       ])
 
       const extractPage = <T,>(response: any): { items: T[]; total: number; page: number; limit: number; totalPages: number } => {
@@ -345,10 +356,10 @@ export const useTradeHistory = (options: TradeHistoryQueryOptions = {}) => {
         }
       }
 
-      const tradesPage = extractPage<Trade>(historyTradesRes)
-      const loopsPage = extractPage<any>(historyLoopsRes)
-      const trades: Trade[] = tradesPage.items
-      const loops: any[] = loopsPage.items
+      const tradesPages = historyTradeResponses.map(response => extractPage<Trade>(response))
+      const loopsPages = historyLoopResponses.map(response => extractPage<any>(response))
+      const trades: Trade[] = tradesPages.flatMap(page => page.items)
+      const loops: any[] = loopsPages.flatMap(page => page.items)
 
       // Resolve the current user's ID so we can shape each loop from their perspective.
       let storedUserId = Number(localStorage.getItem('userId') || 0)
@@ -364,7 +375,7 @@ export const useTradeHistory = (options: TradeHistoryQueryOptions = {}) => {
         const participants: any[] = Array.isArray(loop?.participants) ? loop.participants : []
         const me = participants.find((p: any) => Number(p?.user_id ?? p?.id) === storedUserId)
         const loopStatus = String(loop?.status || '').toLowerCase()
-        const isClosedIncomplete = ['rejected', 'cancelled', 'cancelled_due_to_conflict', 'broken', 'expired', 'user3_declined'].includes(loopStatus)
+        const isClosedIncomplete = ['rejected', 'cancelled', 'cancelled_due_to_conflict', 'broken', 'expired', 'archived', 'user3_declined'].includes(loopStatus)
         const isDidNotPushThrough = loopStatus === 'did_not_push_through'
         if (!me || (!me?.is_reviewed && !isClosedIncomplete && !isDidNotPushThrough)) return []
         // Partner = who received my offered product (i.e. who wanted it).
@@ -375,7 +386,7 @@ export const useTradeHistory = (options: TradeHistoryQueryOptions = {}) => {
         const offeredTitle = String(me?.product_title || me?.offered_title || 'Item unavailable')
         const wantedTitle = String(me?.wanted_title || partner?.product_title || 'Item unavailable')
         const syntheticStatus = isClosedIncomplete
-          ? (loopStatus === 'expired' || loopStatus === 'broken' ? 'expired' : 'cancelled')
+          ? (loopStatus === 'archived' ? 'archived' : (loopStatus === 'expired' || loopStatus === 'broken' ? 'expired' : 'cancelled'))
           : isDidNotPushThrough
           ? 'did_not_push_through'
           : 'completed'
@@ -427,7 +438,7 @@ export const useTradeHistory = (options: TradeHistoryQueryOptions = {}) => {
         const bt = new Date(b.completed_at || b.updated_at || b.created_at).getTime()
         return sort === 'newest' ? bt - at : at - bt
       }).slice((page - 1) * limit, page * limit)
-      const total = tradesPage.total + loopsPage.total
+      const total = unique.size
       return {
         items,
         total,
