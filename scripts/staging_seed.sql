@@ -229,7 +229,7 @@ SELECT
   FALSE,
   'trade',
   t.id,
-  CONCAT('/offers?trade_id=', t.id),
+  CONCAT('/dashboard?tab=offers&offersTab=inbox&trade_id=', t.id),
   JSON_OBJECT('trade_id', t.id)
 FROM trades t
 WHERE t.message LIKE 'clovia_loadtest_offer_%'

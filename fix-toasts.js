@@ -7,7 +7,6 @@ const files = [
   'client/src/pages/UserProfile.tsx',
   'client/src/delivery_option/rider.tsx',
   'client/src/components/ViewTradeModal.tsx',
-  'client/src/pages/Offers.tsx',
   'client/src/pages/Dashboard.tsx',
   'client/src/pages/AdminDashboard.tsx',
   'client/src/pages/AddProduct.tsx',

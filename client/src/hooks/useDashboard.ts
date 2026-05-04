@@ -207,19 +207,36 @@ export const useOngoingTrades = (options: DashboardQueryOptions = {}) => {
   return useQuery({
     queryKey: DASHBOARD_QUERY_KEYS.ongoingTrades,
     queryFn: async (): Promise<Trade[]> => {
-      const response = await api.get('/api/trades', {
-        params: {
-          include: 'products',
-          status: 'ongoing',
-          limit: 100,
-        },
-      })
+      const activeStatuses = [
+        'accepted',
+        'accepted_by_both',
+        'active',
+        'ongoing',
+        'confirmed',
+        'pending_confirmation',
+        'pickup_pending',
+        'meetup_pending',
+        'awaiting_confirmation',
+        'needs_action',
+        'multiway_active',
+      ]
+      const results = await Promise.allSettled(activeStatuses.map(status =>
+        api.get('/api/trades', {
+          params: {
+            include: 'products',
+            status,
+            limit: 100,
+          },
+        })
+      ))
       const extractData = (response: any) => {
         return Array.isArray(response?.data?.data) ? response.data.data : (Array.isArray(response?.data) ? response.data : [])
       }
 
-      const ongoingStatuses = new Set(['ongoing'])
-      const allTrades = extractData(response).filter((trade: Trade) => ongoingStatuses.has(trade.status))
+      const activeStatusSet = new Set(activeStatuses)
+      const allTrades = results
+        .flatMap((result) => result.status === 'fulfilled' ? extractData(result.value) : [])
+        .filter((trade: Trade) => activeStatusSet.has(String(trade.status || '').toLowerCase()))
 
       const uniqueTrades = new Map<string | number, Trade>()
       allTrades.forEach((tr: Trade) => {
@@ -271,23 +288,17 @@ export const useArchivedTrades = (options: DashboardQueryOptions = {}) => {
   return useQuery({
     queryKey: DASHBOARD_QUERY_KEYS.archivedTrades,
     queryFn: async (): Promise<Trade[]> => {
-      const [incomingExpired, outgoingExpired, incomingArchived, outgoingArchived] = await Promise.all([
-        api.get('/api/trades', { params: { direction: 'incoming', include: 'products', status: 'expired', limit: 100 } }),
-        api.get('/api/trades', { params: { direction: 'outgoing', include: 'products', status: 'expired', limit: 100 } }),
-        api.get('/api/trades', { params: { direction: 'incoming', include: 'products', status: 'archived', limit: 100 } }),
-        api.get('/api/trades', { params: { direction: 'outgoing', include: 'products', status: 'archived', limit: 100 } })
-      ])
+      const archivedStatuses = ['expired', 'archived', 'declined', 'rejected', 'cancelled', 'cancelled_due_to_conflict', 'broken']
+      const results = await Promise.all(archivedStatuses.flatMap(status => [
+        api.get('/api/trades', { params: { direction: 'incoming', include: 'products', status, limit: 100 } }),
+        api.get('/api/trades', { params: { direction: 'outgoing', include: 'products', status, limit: 100 } }),
+      ]))
 
       const extractData = (response: any) => {
         return Array.isArray(response?.data?.data) ? response.data.data : (Array.isArray(response?.data) ? response.data : [])
       }
 
-      const allTrades = [
-        ...extractData(incomingExpired),
-        ...extractData(outgoingExpired),
-        ...extractData(incomingArchived),
-        ...extractData(outgoingArchived)
-      ]
+      const allTrades = results.flatMap(extractData)
 
       // Deduplicate by trade ID
       const uniqueTrades = new Map<number, Trade>()
@@ -315,8 +326,8 @@ export const useTradeHistory = (options: TradeHistoryQueryOptions = {}) => {
   return useQuery({
     queryKey: [...DASHBOARD_QUERY_KEYS.tradeHistory, page, limit, sort],
     queryFn: async (): Promise<TradeHistoryResult> => {
-      const historyStatuses = ['history', 'completed', 'cancelled', 'did_not_push_through', 'archived']
-      const loopHistoryStatuses = ['history', 'completed', 'cancelled', 'did_not_push_through', 'archived']
+      const historyStatuses = ['history', 'completed', 'auto_completed', 'cancelled', 'cancelled_due_to_conflict', 'declined', 'rejected', 'did_not_push_through', 'expired', 'broken', 'archived']
+      const loopHistoryStatuses = ['history', 'completed', 'cancelled', 'cancelled_due_to_conflict', 'did_not_push_through', 'expired', 'broken', 'archived']
       const [historyTradeResponses, historyLoopResponses] = await Promise.all([
         Promise.all(historyStatuses.map(status =>
           api.get('/api/trades', {

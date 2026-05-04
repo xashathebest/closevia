@@ -19,9 +19,9 @@ func tradeDeepLink(tradeID int) string {
 
 func offerDeepLink(tradeID int) string {
 	if tradeID <= 0 {
-		return "/offers"
+		return "/dashboard?tab=offers&offersTab=inbox"
 	}
-	return fmt.Sprintf("/offers?trade_id=%d", tradeID)
+	return fmt.Sprintf("/dashboard?tab=offers&offersTab=inbox&trade_id=%d", tradeID)
 }
 
 func notificationDeepLink(notificationType string, tradeID int) string {

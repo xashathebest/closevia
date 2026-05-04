@@ -112,6 +112,15 @@ const shouldOpenOngoingFromTab = (value: string | null): boolean => {
   return normalized === 'ongoing' || normalized === 'ongoing-trades' || normalized === 'active'
 }
 
+const getOffersSubTabIndex = (value: string | null): number | null => {
+  if (!value) return null
+  const normalized = value.trim().toLowerCase()
+  if (normalized === 'inbox' || normalized === 'received') return 0
+  if (normalized === 'sent' || normalized === 'sent-offers') return 1
+  if (normalized === 'active' || normalized === 'ongoing' || normalized === 'ongoing-trades' || normalized === 'progress') return 2
+  return null
+}
+
 const Dashboard: React.FC = () => {
   const { user, loading, isAuthenticated, restoreAuthentication } = useAuth()
   const { deleteProduct, updateProduct, markProductBoosted } = useProducts()
@@ -124,7 +133,9 @@ const Dashboard: React.FC = () => {
     return getDashboardTabIndex(new URLSearchParams(window.location.search).get('tab')) ?? 0
   })
   const [offersSubTab, setOffersSubTab] = useState(() => (
-    shouldOpenOngoingFromTab(new URLSearchParams(window.location.search).get('tab')) ? 2 : 0
+    getOffersSubTabIndex(new URLSearchParams(window.location.search).get('offersTab')) ??
+    getOffersSubTabIndex(new URLSearchParams(window.location.search).get('subtab')) ??
+    (shouldOpenOngoingFromTab(new URLSearchParams(window.location.search).get('tab')) ? 2 : 0)
   )) // 0: Inbox, 1: Sent, 2: Active
 
   const shouldLoadProducts = activeTab === 0
@@ -197,7 +208,7 @@ const Dashboard: React.FC = () => {
   if (allFetched) hasInitiallyLoaded.current = true
   const initialLoading = !hasInitiallyLoaded.current && !allFetched
 
-  const { invalidateDashboard, invalidateProducts, invalidateOffers, invalidateMultiWay, invalidateHistory, invalidateArchived } = useInvalidateDashboard()
+  const { invalidateDashboard, invalidateProducts, invalidateOffers, invalidateMultiWay, invalidateHistory, invalidateArchived, invalidateCounts } = useInvalidateDashboard()
 
   // Derived state from cached data
   const inventoryProducts = useMemo(
@@ -397,7 +408,12 @@ const Dashboard: React.FC = () => {
     if (tabIndex !== null) {
       setActiveTab(tabIndex)
     }
-    if (shouldOpenOngoingFromTab(tabParam)) {
+    const offersSubTabParam = searchParams.get('offersTab') || searchParams.get('subtab')
+    const offersSubTabIndex = getOffersSubTabIndex(offersSubTabParam)
+    if (offersSubTabIndex !== null) {
+      setActiveTab(1)
+      setOffersSubTab(offersSubTabIndex)
+    } else if (shouldOpenOngoingFromTab(tabParam)) {
       setOffersSubTab(2)
     }
   }, [searchParams])
@@ -793,9 +809,10 @@ const Dashboard: React.FC = () => {
   // Refresh offers data by invalidating cache (React Query will refetch automatically)
   const refreshOffersData = useCallback(() => {
     invalidateOffers()
+    invalidateCounts()
     invalidateHistory()
     invalidateArchived()
-  }, [invalidateArchived, invalidateHistory, invalidateOffers])
+  }, [invalidateArchived, invalidateCounts, invalidateHistory, invalidateOffers])
 
   // React Query automatically manages data fetching and caching
   // No need for manual loading state management
@@ -1287,16 +1304,19 @@ const Dashboard: React.FC = () => {
     })
     setRefreshCallback('sentOffers', () => {
       invalidateOffers()
+      invalidateCounts()
       invalidateHistory()
       invalidateArchived()
     })
     setRefreshCallback('receivedOffers', () => {
       invalidateOffers()
+      invalidateCounts()
       invalidateHistory()
       invalidateArchived()
     })
     setRefreshCallback('ongoingTrades', () => {
       invalidateOffers()
+      invalidateCounts()
       invalidateHistory()
       invalidateArchived()
       void refreshOpenMultiWayTradeDetails()
@@ -1304,6 +1324,7 @@ const Dashboard: React.FC = () => {
     setRefreshCallback('multiway', () => {
       invalidateMultiWay()
       invalidateOffers()
+      invalidateCounts()
       invalidateHistory()
       invalidateArchived()
       void refreshOpenMultiWayTradeDetails()
@@ -1314,6 +1335,7 @@ const Dashboard: React.FC = () => {
     setRefreshCallback('history', () => {
       invalidateHistory()
       invalidateArchived()
+      invalidateCounts()
     })
     setRefreshCallback('multiwayAlert', () => {
       multiwayAlertCountRef.current += 1
@@ -1339,7 +1361,7 @@ const Dashboard: React.FC = () => {
         })
       }, 1500)
     })
-  }, [setRefreshCallback, invalidateProducts, invalidateOffers, invalidateMultiWay, invalidateHistory, invalidateArchived, toast, refreshOpenMultiWayTradeDetails, shouldLoadMultiWay])
+  }, [setRefreshCallback, invalidateProducts, invalidateOffers, invalidateMultiWay, invalidateHistory, invalidateArchived, invalidateCounts, toast, refreshOpenMultiWayTradeDetails, shouldLoadMultiWay])
 
   const handleHopIntoDiscoverable = async (trade: any) => {
     const chainId = String(trade?.chain_id || '')
@@ -1514,15 +1536,23 @@ const Dashboard: React.FC = () => {
 
   const updateTrade = useCallback(async (id: number, action: TradeAction) => {
     try {
-      await api.put(`/api/trades/${id}`, action)
+      const response = await api.put(`/api/trades/${id}`, action)
       toast({ id: 'success-offer-updated', title: 'Success', description: 'Offer updated', status: 'success' })
-      // Invalidate cache to refresh data
-      invalidateOffers()
-      invalidateDashboard()
+      await Promise.all([
+        invalidateOffers(),
+        invalidateDashboard(),
+        invalidateCounts(),
+        invalidateMultiWay(),
+        invalidateHistory(),
+        invalidateArchived(),
+        invalidateProducts(),
+      ])
+      return response.data?.data || response.data
     } catch (e: any) {
       toast({ id: 'error-update-offer', title: 'Error', description: e?.response?.data?.error || 'Failed to update offer', status: 'error' })
+      throw e
     }
-  }, [invalidateOffers, invalidateDashboard])
+  }, [invalidateArchived, invalidateCounts, invalidateDashboard, invalidateHistory, invalidateMultiWay, invalidateOffers, invalidateProducts, toast])
 
   const handleCompleteTradeClick = useCallback((trade: Trade) => {
     // Check if meetup is confirmed before allowing completion
@@ -1681,7 +1711,7 @@ const Dashboard: React.FC = () => {
     }
   }
 
-  const historyStatuses = ['declined', 'cancelled', 'completed', 'did_not_push_through', 'auto_completed', 'expired', 'archived']
+  const historyStatuses = ['declined', 'rejected', 'cancelled', 'cancelled_due_to_conflict', 'completed', 'did_not_push_through', 'auto_completed', 'expired', 'broken', 'archived']
 
   const isBuyoutTrade = useCallback((trade: Trade | any) => {
     const hasCash = Number(trade?.offered_cash_amount || 0) > 0
@@ -1835,19 +1865,23 @@ const Dashboard: React.FC = () => {
 
   const handleAcceptTrade = useCallback(async (trade: Trade) => {
     try {
-      // Accept the offer, then open Trade Details for both parties
-      await updateTrade(trade.id, { action: 'accept' })
+      const updatedTrade = await updateTrade(trade.id, { action: 'accept' })
+      setActiveTab(1)
+      setOffersSubTab(2)
+      setOffersPage(1)
+      setOffersStatusFilter('all')
 
       let freshTrade: Trade | undefined
       try {
         const res = await api.get(`/api/trades/${trade.id}`)
-        freshTrade = res.data?.data
+        freshTrade = res.data?.data || res.data
       } catch {
         // Non-fatal: fall back to existing trade object
       }
 
-      setSelectedTrade(freshTrade || trade)
+      setSelectedTrade(freshTrade || updatedTrade || { ...trade, status: 'active' })
       setCompletionModalOpen(false)
+      setDetailsOpen(false)
       setViewTradeModalOpen(true)
     } catch {
       // updateTrade already toasts on error
@@ -1916,6 +1950,17 @@ const Dashboard: React.FC = () => {
   const visibleOngoingMultiWayTrades = useMemo(() => {
     return offersTypeFilter === 'buyout' ? [] : ongoingMultiWayTrades
   }, [offersTypeFilter, ongoingMultiWayTrades])
+
+  const activeOfferItems = useMemo(() => {
+    return [
+      ...ongoingTrades.map(trade => ({ kind: 'trade' as const, key: `trade-${trade.id}`, trade })),
+      ...visibleOngoingMultiWayTrades.map((trade: any, index: number) => ({
+        kind: 'multiway' as const,
+        key: `multiway-${trade?.chain_id || trade?.loop_id || trade?.id || index}`,
+        trade,
+      })),
+    ]
+  }, [ongoingTrades, visibleOngoingMultiWayTrades])
 
   // Unified search handler - clears tab-specific searches when unified search is used
   const handleUnifiedSearchChange = (value: string) => {
@@ -2299,7 +2344,9 @@ const Dashboard: React.FC = () => {
     }
   }, [offersSubTab, sentOffers, receivedOffers, ongoingTrades])
   const offersPerPage = 9
-  const totalPages = Math.ceil(currentTabTrades.length / offersPerPage)
+  const activeOffersCount = activeOfferItems.length
+  const currentOffersItemCount = offersSubTab === 2 ? activeOffersCount : currentTabTrades.length
+  const totalPages = Math.ceil(currentOffersItemCount / offersPerPage)
   useEffect(() => {
     const safeTotalPages = Math.max(1, totalPages)
     if (offersPage > safeTotalPages) {
@@ -2310,6 +2357,10 @@ const Dashboard: React.FC = () => {
     const start = (offersPage - 1) * offersPerPage
     return currentTabTrades.slice(start, start + offersPerPage)
   }, [currentTabTrades, offersPage])
+  const paginatedActiveOfferItems = useMemo(() => {
+    const start = (offersPage - 1) * offersPerPage
+    return activeOfferItems.slice(start, start + offersPerPage)
+  }, [activeOfferItems, offersPage])
 
   const handleImageZoom = (e: React.MouseEvent, url: string, alt: string) => {
     e.stopPropagation()
@@ -5299,12 +5350,12 @@ const Dashboard: React.FC = () => {
                             <Box display={{ base: 'none', md: 'inline' }}>Active</Box>
                             <Box display={{ base: 'inline', md: 'none' }}>Active</Box>
                           </HStack>
-                          {(ongoingTrades.length + visibleOngoingMultiWayTrades.length) > 0 && (
+                          {activeOffersCount > 0 && (
                             <Badge ml={2} colorScheme="green" borderRadius="full" fontSize="xs">
-                              {ongoingTrades.length + visibleOngoingMultiWayTrades.length}
+                              {activeOffersCount}
                             </Badge>
                           )}
-                          {(ongoingTrades.length + visibleOngoingMultiWayTrades.length) > 0 && (
+                          {activeOffersCount > 0 && (
                             <Badge ml={2} colorScheme="orange" variant="subtle" fontSize="2xs">Needs action</Badge>
                           )}
                         </Tab>
@@ -5574,7 +5625,126 @@ const Dashboard: React.FC = () => {
                           )}
                         </TabPanel>
 
-                        {/* Ongoing Trades */}
+                        {/* Active */}
+                        <TabPanel px={0}>
+                          {offersLoading ? (
+                            <SimpleGrid columns={{ base: 1, sm: 2, md: 2, lg: 3, xl: 4 }} spacing={{ base: 3, md: 4 }}>
+                              {Array.from({ length: 8 }).map((_, i) => (
+                                <ProductCardSkeleton key={i} />
+                              ))}
+                            </SimpleGrid>
+                          ) : activeOfferItems.length === 0 ? (
+                            <Box
+                              textAlign="center"
+                              py={12}
+                              bg="green.50"
+                              borderRadius="lg"
+                              border="2px dashed"
+                              borderColor="green.200"
+                            >
+                              <Icon as={FaClock} boxSize={16} color="green.300" mb={4} />
+                              <Text color="gray.600" fontSize="lg" fontWeight="medium" mb={2}>
+                                {(unifiedSearch || offersSearch) || offersStatusFilter !== 'all' || offersTypeFilter !== 'all'
+                                  ? 'No active offers match your filters.'
+                                  : 'No active offers yet'}
+                              </Text>
+                              <Text color="gray.500" fontSize="sm">
+                                {(unifiedSearch || offersSearch) || offersStatusFilter !== 'all' || offersTypeFilter !== 'all'
+                                  ? 'Try clearing search or filter settings.'
+                                  : 'Accepted offers and ongoing trades will appear here.'}
+                              </Text>
+                            </Box>
+                          ) : offersViewMode === 'list' ? (
+                            <>
+                              <VStack align="stretch" spacing={3}>
+                                {paginatedActiveOfferItems.map((item) => (
+                                  item.kind === 'multiway' ? (
+                                    <OngoingMultiWayCompactCard
+                                      key={item.key}
+                                      trade={item.trade}
+                                      onView={handleViewMultiWayTradeDetails}
+                                    />
+                                  ) : (
+                                    <OngoingTradeCard
+                                      key={item.key}
+                                      trade={item.trade}
+                                      isIncoming={Number(item.trade.seller_id) === Number(user?.id)}
+                                      onView={handleViewOngoingTrade}
+                                      onComplete={handleCompleteTradeClick}
+                                    />
+                                  )
+                                ))}
+                              </VStack>
+                              {totalPages > 1 && (
+                                <HStack justify="center" spacing={2} mt={4}>
+                                  <Button
+                                    size="sm"
+                                    leftIcon={<ChevronLeftIcon />}
+                                    onClick={() => setOffersPage(p => Math.max(1, p - 1))}
+                                    isDisabled={offersPage === 1}
+                                  >
+                                    Previous
+                                  </Button>
+                                  <Text fontSize="sm" color="gray.600">
+                                    Page {offersPage} of {totalPages}
+                                  </Text>
+                                  <Button
+                                    size="sm"
+                                    rightIcon={<ChevronRightIcon />}
+                                    onClick={() => setOffersPage(p => Math.min(totalPages, p + 1))}
+                                    isDisabled={offersPage === totalPages}
+                                  >
+                                    Next
+                                  </Button>
+                                </HStack>
+                              )}
+                            </>
+                          ) : (
+                            <>
+                              <SimpleGrid columns={{ base: 1, sm: 2, md: 2, lg: 3, xl: 4 }} spacing={{ base: 3, md: 4 }} mb={6}>
+                                {paginatedActiveOfferItems.map((item) => (
+                                  item.kind === 'multiway' ? (
+                                    <OngoingMultiWayCompactCard
+                                      key={item.key}
+                                      trade={item.trade}
+                                      onView={handleViewMultiWayTradeDetails}
+                                    />
+                                  ) : (
+                                    <OfferCard
+                                      key={item.key}
+                                      trade={item.trade}
+                                      isIncoming={Number(item.trade.seller_id) === Number(user?.id)}
+                                      onView={handleViewOngoingTrade}
+                                    />
+                                  )
+                                ))}
+                              </SimpleGrid>
+                              {totalPages > 1 && (
+                                <HStack justify="center" spacing={2} mt={4}>
+                                  <Button
+                                    size="sm"
+                                    leftIcon={<ChevronLeftIcon />}
+                                    onClick={() => setOffersPage(p => Math.max(1, p - 1))}
+                                    isDisabled={offersPage === 1}
+                                  >
+                                    Previous
+                                  </Button>
+                                  <Text fontSize="sm" color="gray.600">
+                                    Page {offersPage} of {totalPages}
+                                  </Text>
+                                  <Button
+                                    size="sm"
+                                    rightIcon={<ChevronRightIcon />}
+                                    onClick={() => setOffersPage(p => Math.min(totalPages, p + 1))}
+                                    isDisabled={offersPage === totalPages}
+                                  >
+                                    Next
+                                  </Button>
+                                </HStack>
+                              )}
+                            </>
+                          )}
+                        </TabPanel>
 
                       </TabPanels>
                     </Tabs>

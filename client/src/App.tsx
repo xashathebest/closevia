@@ -1,6 +1,6 @@
 import React, { Suspense, lazy } from 'react'
 import { ChakraProvider, Box, Center, Button, VStack, Text, useColorMode, SkeletonCircle } from '@chakra-ui/react'
-import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom'
+import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { AnimatePresence } from 'framer-motion'
 import { theme } from './theme'
 import Sidebar from './components/Sidebar'
@@ -68,7 +68,6 @@ const AddProduct = lazyWithFallback(() => import('./pages/AddProduct'), 'Add Pro
 const EditProduct = lazyWithFallback(() => import('./pages/EditProduct'), 'Edit Product')
 const Notifications = lazyWithFallback(() => import('./pages/Notifications'), 'Notifications')
 const Settings = lazyWithFallback(() => import('./pages/Settings'), 'Settings')
-const Offers = lazyWithFallback(() => import('./pages/Offers'), 'Offers')
 const Profile = lazyWithFallback(() => import('./pages/Profile'), 'Profile')
 const UserProfile = lazyWithFallback(() => import('./pages/UserProfile'), 'User Profile')
 const CreateOrganization = lazyWithFallback(() => import('./pages/CreateOrganization'), 'Create Organization')
@@ -85,6 +84,26 @@ const BatchStatus = lazyWithFallback(() => import('./delivery_option/BatchStatus
 const RemittanceLedger = lazyWithFallback(() => import('./delivery_option/RemittanceLedger'), 'Remittance Ledger')
 const TaskStepper = lazyWithFallback(() => import('./delivery_option/TaskStepper'), 'Task Stepper')
 const AdminDashboard = lazyWithFallback(() => import('./pages/AdminDashboard'), 'Admin Dashboard')
+
+const LegacyOffersRedirect: React.FC = () => {
+  const location = useLocation()
+  const params = new URLSearchParams(location.search)
+  const legacyTab = (params.get('tab') || '').trim().toLowerCase()
+  const tradeId = params.get('trade_id') || params.get('tradeId') || params.get('openTradeId')
+  const dashboardParams = new URLSearchParams()
+
+  if (legacyTab === 'history' || location.pathname.endsWith('/archive') || location.pathname.endsWith('/history')) {
+    dashboardParams.set('tab', 'history')
+  } else {
+    dashboardParams.set('tab', 'offers')
+    if (legacyTab === 'sent') dashboardParams.set('offersTab', 'sent')
+    if (legacyTab === 'active' || legacyTab === 'ongoing' || legacyTab === 'progress') dashboardParams.set('offersTab', 'active')
+    if (legacyTab === 'inbox' || !legacyTab) dashboardParams.set('offersTab', 'inbox')
+  }
+
+  if (tradeId) dashboardParams.set('trade_id', tradeId)
+  return <Navigate to={`/dashboard?${dashboardParams.toString()}`} replace />
+}
 
 // Loading overlay component
 const LoadingOverlay: React.FC = () => {
@@ -305,18 +324,16 @@ const AppContent: React.FC = () => {
                   </PageTransition>
                 } />
                 <Route path="/trades" element={
-                  <Navigate to="/offers?tab=inbox" replace />
+                  <Navigate to="/dashboard?tab=offers&offersTab=active" replace />
                 } />
                 <Route path="/offers/archive" element={
-                  <Navigate to="/offers?tab=history" replace />
+                  <LegacyOffersRedirect />
                 } />
                 <Route path="/offers/history" element={
-                  <Navigate to="/offers?tab=history" replace />
+                  <LegacyOffersRedirect />
                 } />
                 <Route path="/offers" element={
-                  <PageTransition>
-                    <ProtectedRoute><Suspense fallback={null}><Offers /></Suspense></ProtectedRoute>
-                  </PageTransition>
+                  <LegacyOffersRedirect />
                 } />
                 <Route path="/saved-products" element={
                   <PageTransition>

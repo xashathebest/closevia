@@ -2893,7 +2893,21 @@ func (h *TradeHandler) UpdateTrade(c *fiber.Ctx) error {
 				go h.cancelOtherLoopsForProducts(confirmedPIDsFinal, "")
 			}
 
-			return c.JSON(models.APIResponse{Success: true, Message: "Trade acceptance updated successfully"})
+			finalStatus := "accepted_by_one"
+			if finalized {
+				finalStatus = "active"
+			}
+			return c.JSON(models.APIResponse{
+				Success: true,
+				Message: "Trade acceptance updated successfully",
+				Data: fiber.Map{
+					"id":              tradeID,
+					"trade_id":        tradeID,
+					"status":          finalStatus,
+					"buyer_accepted":  buyerAcceptedState,
+					"seller_accepted": sellerAcceptedState,
+				},
+			})
 		}
 
 		// Get trade option to determine next status
@@ -4348,7 +4362,17 @@ func (h *TradeHandler) UpdateTrade(c *fiber.Ctx) error {
 		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to update trade"})
 	}
 
-	return c.JSON(models.APIResponse{Success: true, Message: "Trade updated"})
+	var updatedStatus string
+	_ = h.db.QueryRow("SELECT status FROM trades WHERE id = ?", tradeID).Scan(&updatedStatus)
+	return c.JSON(models.APIResponse{
+		Success: true,
+		Message: "Trade updated",
+		Data: fiber.Map{
+			"id":       tradeID,
+			"trade_id": tradeID,
+			"status":   updatedStatus,
+		},
+	})
 }
 
 // completeTradeTransaction safely completes a trade and marks all products as traded

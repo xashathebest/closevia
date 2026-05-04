@@ -179,9 +179,9 @@ func publishNotification(userID int, message string, notificationType ...string)
 	publishToUser(userID, sseEvent{Type: "notification", Data: data})
 	switch notifType {
 	case "trade_offer":
-		sendPushToUser(userID, "New trade offer", message, "/offers", notifType)
+		sendPushToUser(userID, "New trade offer", message, "/dashboard?tab=offers&offersTab=inbox", notifType)
 	case "trade_update":
-		sendPushToUser(userID, "Trade update", message, "/trades", notifType)
+		sendPushToUser(userID, "Trade update", message, "/dashboard?tab=offers&offersTab=active", notifType)
 	case "trade_loop":
 		sendPushToUser(userID, "Multiway trade update", message, "/dashboard?tab=2", notifType)
 	}
