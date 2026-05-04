@@ -966,3 +966,11 @@
   "seller_id": 3392,
   "timestamp": "2026-05-03T01:27:17-04:00"
 }
+{
+  "fraud_probability": 0,
+  "is_fraud": false,
+  "product_id": 605,
+  "risk_level": "",
+  "seller_id": 3392,
+  "timestamp": "2026-05-04T01:53:41-04:00"
+}

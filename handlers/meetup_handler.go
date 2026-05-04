@@ -3,6 +3,7 @@ package handlers
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -19,15 +20,40 @@ func NewMeetupHandler(db *sql.DB) *MeetupHandler {
 	return &MeetupHandler{db: db}
 }
 
+func parseMeetupTradeID(c *fiber.Ctx) (int, error) {
+	tradeID, err := c.ParamsInt("id")
+	if err == nil {
+		return tradeID, nil
+	}
+	return c.ParamsInt("tradeID")
+}
+
+func parseMeetupProposalTime(raw string) (time.Time, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return time.Time{}, fmt.Errorf("missing time")
+	}
+	if t, err := time.Parse(time.RFC3339, raw); err == nil {
+		return t, nil
+	}
+	location := collectionScheduleLocation()
+	for _, layout := range []string{"2006-01-02T15:04:05", "2006-01-02T15:04", "2006-01-02 15:04:05", "2006-01-02 15:04"} {
+		if t, err := time.ParseInLocation(layout, raw, location); err == nil {
+			return t, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("invalid time format")
+}
+
 // ProposeMeetupTime handles a user proposing time and location
-// POST /api/trades/:tradeID/meetup/propose
+// POST /api/trades/:id/meetup/propose
 func (h *MeetupHandler) ProposeMeetupTime(c *fiber.Ctx) error {
 	userID, ok := middleware.GetUserIDFromContext(c)
 	if !ok {
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Unauthorized"})
 	}
 
-	tradeID, err := c.ParamsInt("tradeID")
+	tradeID, err := parseMeetupTradeID(c)
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid trade ID"})
 	}
@@ -41,10 +67,12 @@ func (h *MeetupHandler) ProposeMeetupTime(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request body"})
 	}
 
-	// Parse time
-	proposedTime, err := time.Parse(time.RFC3339, req.ProposedTime)
+	proposedTime, err := parseMeetupProposalTime(req.ProposedTime)
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid time format"})
+	}
+	if !proposedTime.After(time.Now().In(proposedTime.Location())) {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Please choose a future pickup or meetup time"})
 	}
 
 	buyerID, sellerID, err := validateTradeParticipant(database.DB, tradeID, userID)
@@ -66,6 +94,7 @@ func (h *MeetupHandler) ProposeMeetupTime(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
 	}
 	services.TouchTradeActivity(database.DB, tradeID)
+	insertTradeNotification(database.DB, otherUserID, "meetup_update", "Your trading partner suggested a new pickup/meetup time.", tradeID)
 	sendPushToUser(otherUserID, "Trade schedule proposed", "Your trading partner proposed meetup details.", tradeDeepLink(tradeID), "meetup_update")
 
 	return c.JSON(fiber.Map{
@@ -83,7 +112,7 @@ func (h *MeetupHandler) MarkHeadingOut(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Unauthorized"})
 	}
 
-	tradeID, err := c.ParamsInt("tradeID")
+	tradeID, err := parseMeetupTradeID(c)
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid trade ID"})
 	}
@@ -120,7 +149,7 @@ func (h *MeetupHandler) MarkArrived(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Unauthorized"})
 	}
 
-	tradeID, err := c.ParamsInt("tradeID")
+	tradeID, err := parseMeetupTradeID(c)
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid trade ID"})
 	}
@@ -221,7 +250,7 @@ func (h *MeetupHandler) ConfirmCompletion(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Unauthorized"})
 	}
 
-	tradeID, err := c.ParamsInt("tradeID")
+	tradeID, err := parseMeetupTradeID(c)
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid trade ID"})
 	}
@@ -269,7 +298,7 @@ func (h *MeetupHandler) ReportNoShow(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Unauthorized"})
 	}
 
-	tradeID, err := c.ParamsInt("tradeID")
+	tradeID, err := parseMeetupTradeID(c)
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid trade ID"})
 	}
@@ -368,7 +397,7 @@ func (h *MeetupHandler) GetMeetupStatus(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Unauthorized"})
 	}
 
-	tradeID, err := c.ParamsInt("tradeID")
+	tradeID, err := parseMeetupTradeID(c)
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid trade ID"})
 	}
@@ -403,7 +432,7 @@ func (h *MeetupHandler) GetSystemMessages(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Unauthorized"})
 	}
 
-	tradeID, err := c.ParamsInt("tradeID")
+	tradeID, err := parseMeetupTradeID(c)
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid trade ID"})
 	}

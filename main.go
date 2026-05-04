@@ -547,6 +547,14 @@ func main() {
 	organizationHandler := handlers.NewOrganizationHandler()
 	meetupHandler := handlers.NewMeetupHandler(database.DB)
 
+	// Pending offer negotiation endpoint used by Dashboard > Offers > Inbox.
+	// Register it directly as well as under the offers group below so this exact
+	// frontend URL is always available and never falls through to trade routes.
+	app.Post("/api/offers/:offerID/time-suggestion", middleware.AuthMiddleware(), tradeHandler.SuggestOfferTime)
+	app.Post("/api/offers/:offerID/time-suggestion/", middleware.AuthMiddleware(), tradeHandler.SuggestOfferTime)
+	app.Post("/api/offers/:offerID/time-suggestion/accept", middleware.AuthMiddleware(), tradeHandler.AcceptOfferTimeSuggestion)
+	app.Post("/api/offers/:offerID/time-suggestion/decline", middleware.AuthMiddleware(), tradeHandler.DeclineOfferTimeSuggestion)
+
 	// Hybrid matcher background refresh (MVP cron-like task).
 	go func() {
 		tradeHandler.RebuildAllLoopCaches()
@@ -716,6 +724,14 @@ func main() {
 	orders.Get("/", middleware.AuthMiddleware(), orderHandler.GetOrders)
 	orders.Get("/:id", middleware.AuthMiddleware(), orderHandler.GetOrder)
 	orders.Put("/:id/status", middleware.AuthMiddleware(), orderHandler.UpdateOrderStatus)
+
+	// Offer routes. Pending offers are stored as trade rows, but these endpoints
+	// keep pre-acceptance offer negotiation separate from active trade reschedules.
+	offers := api.Group("/offers")
+	offers.Post("/:offerID/time-suggestion", middleware.AuthMiddleware(), tradeHandler.SuggestOfferTime)
+	offers.Post("/:offerID/time-suggestion/", middleware.AuthMiddleware(), tradeHandler.SuggestOfferTime)
+	offers.Post("/:offerID/time-suggestion/accept", middleware.AuthMiddleware(), tradeHandler.AcceptOfferTimeSuggestion)
+	offers.Post("/:offerID/time-suggestion/decline", middleware.AuthMiddleware(), tradeHandler.DeclineOfferTimeSuggestion)
 
 	// Chat routes (REST + SSE)
 	chat := api.Group("/chat")

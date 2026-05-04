@@ -27,6 +27,26 @@ interface BuyoutModalProps {
 
 const mobileSteps = ['Your Offer', 'How to Get It']
 
+const getLocalDateInputValue = (date = new Date()) => {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+const parseLocalDateTime = (date: string, time: string) => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !/^\d{2}:\d{2}$/.test(time)) return null
+  const [year, month, day] = date.split('-').map(Number)
+  const [hour, minute] = time.split(':').map(Number)
+  const parsed = new Date(year, month - 1, day, hour, minute, 0, 0)
+  return Number.isNaN(parsed.getTime()) ? null : parsed
+}
+
+const isAvailabilitySlotStillOpen = (slot: any, now = new Date()) => {
+  const windowEnd = parseLocalDateTime(String(slot?.date || ''), String(slot?.end_time || slot?.start_time || ''))
+  return windowEnd ? windowEnd > now : false
+}
+
 const BuyoutModal: React.FC<BuyoutModalProps> = ({ isOpen, onClose, targetProductId }) => {
   const { user, refreshUser } = useAuth()
   const toast = useToast()
@@ -100,8 +120,7 @@ const BuyoutModal: React.FC<BuyoutModalProps> = ({ isOpen, onClose, targetProduc
     if (!raw) return []
     try {
       const slots = typeof raw === 'string' ? JSON.parse(raw) : raw
-      const today = new Date().toISOString().split('T')[0]
-      return Array.isArray(slots) ? slots.filter(slot => slot.date >= today) : []
+      return Array.isArray(slots) ? slots.filter(slot => isAvailabilitySlotStillOpen(slot)) : []
     } catch {
       return []
     }
@@ -665,7 +684,7 @@ const BuyoutModal: React.FC<BuyoutModalProps> = ({ isOpen, onClose, targetProduc
             <Input
               type="date"
               value={meetupDate}
-              min={new Date().toISOString().split('T')[0]}
+              min={getLocalDateInputValue()}
               onChange={(e) => {
                 setMeetupDate(e.target.value)
                 setSelectedSlotId(null)

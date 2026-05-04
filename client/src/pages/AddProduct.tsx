@@ -92,15 +92,19 @@ export interface ProductFormData {
   collection_setup: {
     methods: Array<'pickup' | 'meetup'>
     pickup: {
+      availability_mode?: 'recurring' | 'specific_date'
       days: string[]
+      specific_date?: string
       time_start: string
       time_end: string
       notes: string
     }
     meetup: {
+      availability_mode?: 'recurring' | 'specific_date'
       locations: string[]
       location_points?: Array<{ name: string; address: string; lat: number; lng: number }>
       days: string[]
+      specific_date?: string
       time_start: string
       time_end: string
       distance_km: string
@@ -159,6 +163,14 @@ const formatLocalDate = (date: Date): string => {
   return `${year}-${month}-${day}`
 }
 
+const parseLocalDateTime = (date: string, time: string) => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !/^\d{2}:\d{2}$/.test(time)) return null
+  const [year, month, day] = date.split('-').map(Number)
+  const [hour, minute] = time.split(':').map(Number)
+  const parsed = new Date(year, month - 1, day, hour, minute, 0, 0)
+  return Number.isNaN(parsed.getTime()) ? null : parsed
+}
+
 const expandCollectionDayIndexes = (days: string[] = []): Set<number> => {
   const indexes = new Set<number>()
   days.forEach(day => {
@@ -168,7 +180,7 @@ const expandCollectionDayIndexes = (days: string[] = []): Set<number> => {
 }
 
 const buildAvailabilitySlotsFromCollectionSetup = (setup: ProductFormData['collection_setup']) => {
-  const slots: Array<{ id: string; date: string; start_time: string; end_time: string; method: 'pickup' | 'meetup' }> = []
+  const slots: Array<{ id: string; date: string; start_time: string; end_time: string; method: 'pickup' | 'meetup'; mode: 'recurring' | 'specific_date'; weekdays?: string[] }> = []
   const seen = new Set<string>()
   const today = new Date()
 
@@ -177,14 +189,34 @@ const buildAvailabilitySlotsFromCollectionSetup = (setup: ProductFormData['colle
     const start = config.time_start?.trim()
     const end = config.time_end?.trim()
     if (!start || !end || start >= end) return
+    const mode = config.availability_mode === 'specific_date' ? 'specific_date' : 'recurring'
 
-    const allowedDays = expandCollectionDayIndexes(config.days)
+    if (mode === 'specific_date') {
+      const date = config.specific_date?.trim()
+      if (!date) return
+      const windowEnd = parseLocalDateTime(date, end)
+      if (!windowEnd || windowEnd <= today) return
+      const key = `${method}-${date}-${start}-${end}`
+      slots.push({
+        id: key,
+        date,
+        start_time: start,
+        end_time: end,
+        method,
+        mode,
+      })
+      return
+    }
+
+    const recurringDays = (config.days || []).filter(value => !['weekdays', 'weekends'].includes(value))
+    const allowedDays = expandCollectionDayIndexes(recurringDays)
     if (allowedDays.size === 0) return
-
     for (let offset = 0; offset < 28; offset += 1) {
       const date = new Date(today.getFullYear(), today.getMonth(), today.getDate() + offset)
       if (!allowedDays.has(date.getDay())) continue
       const localDate = formatLocalDate(date)
+      const windowEnd = parseLocalDateTime(localDate, end)
+      if (!windowEnd || windowEnd <= today) continue
       const key = `${method}-${localDate}-${start}-${end}`
       if (seen.has(key)) continue
       seen.add(key)
@@ -194,6 +226,8 @@ const buildAvailabilitySlotsFromCollectionSetup = (setup: ProductFormData['colle
         start_time: start,
         end_time: end,
         method,
+        mode,
+        weekdays: recurringDays,
       })
     }
   })
@@ -209,9 +243,17 @@ const validateCollectionSetup = (setup: ProductFormData['collection_setup']): st
     if (method === 'meetup' && !(setup.meetup.location_points?.length || setup.meetup.locations?.filter(Boolean).length)) {
       return 'Add at least one map-based meetup location'
     }
-    if (!config.days?.length) return `Choose available days for ${method}`
     if (!config.time_start || !config.time_end) return `Choose a time window for ${method}`
     if (config.time_start >= config.time_end) return `Set a valid start and end time for ${method}`
+    if (config.availability_mode === 'specific_date') {
+      if (!config.specific_date) return `Choose a specific date for ${method}`
+      const today = formatLocalDate(new Date())
+      if (config.specific_date < today) return `Choose a future date for ${method}`
+      const windowEnd = parseLocalDateTime(config.specific_date, config.time_end)
+      if (!windowEnd || windowEnd <= new Date()) return `That ${method} availability window has already ended`
+    } else if (!config.days?.filter(value => !['weekdays', 'weekends'].includes(value)).length) {
+      return `Choose at least one recurring day for ${method}`
+    }
   }
 
   return null
@@ -417,8 +459,8 @@ const AddProduct: React.FC = () => {
     desired_product: '',
     collection_setup: {
       methods: ['pickup', 'meetup'],
-      pickup: { days: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'], time_start: '09:00', time_end: '17:00', notes: '' },
-      meetup: { locations: [], location_points: [], days: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'], time_start: '09:00', time_end: '17:00', distance_km: '', notes: '' },
+      pickup: { availability_mode: 'recurring', days: ['saturday', 'sunday'], specific_date: '', time_start: '09:00', time_end: '17:00', notes: '' },
+      meetup: { availability_mode: 'recurring', locations: [], location_points: [], days: ['saturday', 'sunday'], specific_date: '', time_start: '09:00', time_end: '17:00', distance_km: '', notes: '' },
     },
   })
   const [collectionSavedAt, setCollectionSavedAt] = useState<number>(() => Date.now())
@@ -433,8 +475,6 @@ const AddProduct: React.FC = () => {
   })
 
   const dayOptions = [
-    { value: 'weekdays', label: 'Weekdays' },
-    { value: 'weekends', label: 'Weekends' },
     { value: 'monday', label: 'Mon' },
     { value: 'tuesday', label: 'Tue' },
     { value: 'wednesday', label: 'Wed' },
@@ -443,7 +483,7 @@ const AddProduct: React.FC = () => {
     { value: 'saturday', label: 'Sat' },
     { value: 'sunday', label: 'Sun' },
   ]
-  const singleDayOptions = dayOptions.filter(day => !['weekdays', 'weekends'].includes(day.value))
+  const singleDayOptions = dayOptions
 
   const markCollectionSaved = () => setCollectionSavedAt(Date.now())
 
@@ -460,7 +500,9 @@ const AddProduct: React.FC = () => {
   }, [activeCollectionHint])
 
   const getDefaultSchedule = () => ({
-    days: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'],
+    availability_mode: 'recurring' as const,
+    days: ['saturday', 'sunday'],
+    specific_date: '',
     time_start: '09:00',
     time_end: '17:00',
   })
@@ -474,7 +516,9 @@ const AddProduct: React.FC = () => {
       const schedule = formData.collection_setup[method]
       if (schedule.days?.length && schedule.time_start && schedule.time_end) {
         return {
+          availability_mode: schedule.availability_mode || 'recurring',
           days: schedule.days,
+          specific_date: schedule.specific_date || '',
           time_start: schedule.time_start,
           time_end: schedule.time_end,
         }
@@ -498,7 +542,9 @@ const AddProduct: React.FC = () => {
     if (isEnabling && method === 'pickup') {
       nextSetup.pickup = {
         ...nextSetup.pickup,
+        availability_mode: inheritedSchedule.availability_mode,
         days: inheritedSchedule.days,
+        specific_date: inheritedSchedule.specific_date,
         time_start: inheritedSchedule.time_start,
         time_end: inheritedSchedule.time_end,
       }
@@ -506,7 +552,9 @@ const AddProduct: React.FC = () => {
     if (isEnabling && method === 'meetup') {
       nextSetup.meetup = {
         ...nextSetup.meetup,
+        availability_mode: inheritedSchedule.availability_mode,
         days: inheritedSchedule.days,
+        specific_date: inheritedSchedule.specific_date,
         time_start: inheritedSchedule.time_start,
         time_end: inheritedSchedule.time_end,
       }
@@ -520,9 +568,9 @@ const AddProduct: React.FC = () => {
     updateCollectionSchedule(section, { days: next })
   }
 
-  const applyCollectionDayShortcut = (section: 'pickup' | 'meetup', shortcut: 'weekdays' | 'all') => {
-    const days = shortcut === 'weekdays'
-      ? ['monday', 'tuesday', 'wednesday', 'thursday', 'friday']
+  const applyCollectionDayShortcut = (section: 'pickup' | 'meetup', shortcut: 'weekends' | 'all') => {
+    const days = shortcut === 'weekends'
+      ? ['saturday', 'sunday']
       : ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
     updateCollectionSchedule(section, { days })
   }
@@ -552,6 +600,12 @@ const AddProduct: React.FC = () => {
 
   const collectionSummary = (section: 'pickup' | 'meetup') => {
     const config = formData.collection_setup[section]
+    if (config.availability_mode === 'specific_date') {
+      const date = config.specific_date
+        ? new Date(`${config.specific_date}T00:00:00`).toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' })
+        : 'No date set'
+      return `${date} - ${collectionTimeLabel(config.time_start, config.time_end)}`
+    }
     const days = config.days.length ? config.days.map(day => dayOptions.find(option => option.value === day)?.label || day).join(', ') : 'No days set'
     return `${days} • ${collectionTimeLabel(config.time_start, config.time_end)}`
   }
@@ -566,7 +620,9 @@ const AddProduct: React.FC = () => {
     }
     if (formData.collection_setup.methods.includes('pickup') && formData.collection_setup.methods.includes('meetup')) {
       const syncPatch = {
+        availability_mode: patch.availability_mode ?? nextSetup[section].availability_mode ?? 'recurring',
         days: patch.days ?? nextSetup[section].days,
+        specific_date: patch.specific_date ?? nextSetup[section].specific_date ?? '',
         time_start: patch.time_start ?? nextSetup[section].time_start,
         time_end: patch.time_end ?? nextSetup[section].time_end,
       }
@@ -926,48 +982,90 @@ const AddProduct: React.FC = () => {
 
   const renderScheduleInputs = (section: 'pickup' | 'meetup', label: string) => {
     const schedule = formData.collection_setup[section]
+    const mode = schedule.availability_mode === 'specific_date' ? 'specific_date' : 'recurring'
+    const today = formatLocalDate(new Date())
+    const specificWindowEnd = schedule.specific_date ? parseLocalDateTime(schedule.specific_date, schedule.time_end) : null
+    const specificDateError = mode === 'specific_date' && !schedule.specific_date
+      ? 'Choose a date for this one-time availability.'
+      : mode === 'specific_date' && schedule.specific_date && schedule.specific_date < today
+        ? 'Choose today or a future date.'
+        : mode === 'specific_date' && specificWindowEnd && specificWindowEnd <= new Date()
+          ? 'This time window has already ended.'
+          : ''
+    const timeError = schedule.time_start && schedule.time_end && schedule.time_end <= schedule.time_start
+      ? 'End time must be after start time.'
+      : ''
     return (
       <VStack align="stretch" spacing={1.5}>
         <HStack justify="space-between" align="center">
           <Text fontSize="11px" fontWeight="800" color="gray.700">{label}</Text>
           <Text fontSize="10px" color="gray.500">{collectionSummary(section)}</Text>
         </HStack>
-        <Wrap spacing={1} align="center">
-          <WrapItem>
-            <Button size="xs" h="20px" px={1.5} variant="link" fontSize="10px" color="#319795" onClick={() => applyCollectionDayShortcut(section, 'weekdays')}>
-              Weekdays
-            </Button>
-          </WrapItem>
-          <WrapItem>
-            <Button size="xs" h="20px" px={1.5} variant="link" fontSize="10px" color="#319795" onClick={() => applyCollectionDayShortcut(section, 'all')}>
-              All
-            </Button>
-          </WrapItem>
-          {singleDayOptions.map(day => (
-            <WrapItem key={`${section}-${day.value}`}>
-              {(() => {
-                const selected = isCollectionDaySelected(schedule.days, day.value)
-                return (
-                  <Button
-                    size="xs"
-                    fontSize="9px"
-                    h="22px"
-                    minW="34px"
-                    px={2}
-                    variant={selected ? 'solid' : 'outline'}
-                    bg={selected ? '#319795' : 'white'}
-                    color={selected ? 'white' : 'gray.700'}
-                    borderColor={selected ? '#319795' : 'gray.200'}
-                    _hover={{ bg: selected ? '#2C7A7B' : 'gray.50' }}
-                    onClick={() => toggleCollectionDay(section, day.value)}
-                  >
-                    {day.label}
-                  </Button>
-                )
-              })()}
+        <HStack spacing={1} p={0.5} bg="gray.50" borderRadius="md" borderWidth="1px" borderColor="gray.100" alignSelf="start">
+          <Button size="xs" h="24px" fontSize="10px" colorScheme={mode === 'recurring' ? 'teal' : 'gray'} variant={mode === 'recurring' ? 'solid' : 'ghost'} onClick={() => updateCollectionSchedule(section, { availability_mode: 'recurring' })}>
+            Recurring Weekly
+          </Button>
+          <Button size="xs" h="24px" fontSize="10px" colorScheme={mode === 'specific_date' ? 'teal' : 'gray'} variant={mode === 'specific_date' ? 'solid' : 'ghost'} onClick={() => updateCollectionSchedule(section, { availability_mode: 'specific_date' })}>
+            Specific Date
+          </Button>
+        </HStack>
+        <Text fontSize="10px" color="gray.500">
+          {mode === 'specific_date'
+            ? 'Specific date availability sets one pickup/meetup window.'
+            : 'Recurring weekly availability repeats on the selected days.'}
+        </Text>
+        {mode === 'recurring' ? (
+          <Wrap spacing={1} align="center">
+            <WrapItem>
+              <Button size="xs" h="22px" px={2} variant="outline" fontSize="10px" colorScheme="teal" bg="white" onClick={() => applyCollectionDayShortcut(section, 'weekends')}>
+                Weekends
+              </Button>
             </WrapItem>
-          ))}
-        </Wrap>
+            <WrapItem>
+              <Button size="xs" h="22px" px={2} variant="outline" fontSize="10px" colorScheme="teal" bg="white" onClick={() => applyCollectionDayShortcut(section, 'all')}>
+                All
+              </Button>
+            </WrapItem>
+            {singleDayOptions.map(day => (
+              <WrapItem key={`${section}-${day.value}`}>
+                {(() => {
+                  const selected = isCollectionDaySelected(schedule.days, day.value)
+                  return (
+                    <Button
+                      size="xs"
+                      fontSize="9px"
+                      h="22px"
+                      minW="34px"
+                      px={2}
+                      variant={selected ? 'solid' : 'outline'}
+                      bg={selected ? '#319795' : 'white'}
+                      color={selected ? 'white' : 'gray.700'}
+                      borderColor={selected ? '#319795' : 'gray.200'}
+                      _hover={{ bg: selected ? '#2C7A7B' : 'gray.50' }}
+                      onClick={() => toggleCollectionDay(section, day.value)}
+                    >
+                      {day.label}
+                    </Button>
+                  )
+                })()}
+              </WrapItem>
+            ))}
+          </Wrap>
+        ) : (
+          <FormControl isInvalid={Boolean(specificDateError)}>
+            <FormLabel fontSize="10px" mb={1} color="gray.600">Specific date availability</FormLabel>
+            <InputGroup size="sm">
+              <Input type="date" h="32px" bg="white" fontSize="11px" value={schedule.specific_date || ''} min={today} onChange={(e) => updateCollectionSchedule(section, { specific_date: e.target.value })} />
+              <InputRightElement h="32px" pointerEvents="none">
+                <TimeIcon boxSize={3} color="gray.400" />
+              </InputRightElement>
+            </InputGroup>
+            <FormHelperText fontSize="9px">
+              {schedule.specific_date ? `Selected: ${new Date(`${schedule.specific_date}T00:00:00`).toLocaleDateString('en-PH', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}` : 'Choose the calendar date buyers can use.'}
+            </FormHelperText>
+            {specificDateError && <FormErrorMessage fontSize="9px">{specificDateError}</FormErrorMessage>}
+          </FormControl>
+        )}
         <HStack spacing={2}>
           <InputGroup size="sm">
             <Input type="time" h="32px" pr="30px" bg="white" fontSize="11px" value={schedule.time_start} onChange={(e) => updateCollectionSchedule(section, { time_start: e.target.value })} />
@@ -983,6 +1081,7 @@ const AddProduct: React.FC = () => {
             </InputRightElement>
           </InputGroup>
         </HStack>
+        {timeError && <Text fontSize="9px" color="red.500">{timeError}</Text>}
       </VStack>
     )
   }
@@ -2801,7 +2900,7 @@ const AddProduct: React.FC = () => {
                       <Text fontSize="12px" fontWeight="800" color="gray.800">{collectionAvailabilityTitle}</Text>
                     </HStack>
                     <Text fontSize="10px" color="gray.500" mt={0.5}>
-                      Set when buyers can get your item.
+                      Set when buyers can get your item. Choose recurring weekly availability or a specific date.
                     </Text>
                   </Box>
                 </HStack>

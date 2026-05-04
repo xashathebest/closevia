@@ -68,13 +68,10 @@ func collectionMethodEnabled(setup productCollectionSetup, method string) bool {
 	return false
 }
 
-func validateTradeScheduleAgainstAvailability(rawSlots, availabilityType, selectedSlotID, meetupDate, meetupTime, meetingType string) error {
-	if err := validateCollectionDateTime(meetupDate, meetupTime); err != nil {
-		return err
-	}
+func validateTradeScheduleAgainstAvailability(rawSlots, availabilityType, selectedSlotID, meetupDate, meetupTime, meetingType string, collectionSetup productCollectionSetup) error {
 	var slots []tradeAvailabilitySlot
 	if strings.TrimSpace(rawSlots) == "" || json.Unmarshal([]byte(rawSlots), &slots) != nil || len(slots) == 0 {
-		return nil
+		return validateCollectionDateTimeWindow(meetupDate, meetupTime, collectionWindowEndForMethod(collectionSetup, meetingType))
 	}
 	relevantSlots := make([]tradeAvailabilitySlot, 0, len(slots))
 	for _, slot := range slots {
@@ -92,14 +89,15 @@ func validateTradeScheduleAgainstAvailability(rawSlots, availabilityType, select
 		return fmt.Errorf("Please choose one of the product owner's available time slots")
 	}
 	if selectedSlotID == "" {
-		return nil
+		return validateCollectionDateTimeWindow(meetupDate, meetupTime, collectionWindowEndForMethod(collectionSetup, meetingType))
 	}
 
-	selectedDate, err := time.Parse("2006-01-02", meetupDate)
+	location := collectionScheduleLocation()
+	selectedDate, err := time.ParseInLocation("2006-01-02", strings.TrimSpace(meetupDate), location)
 	if err != nil {
 		return fmt.Errorf("Invalid collection date")
 	}
-	selectedTime, err := time.Parse("15:04", meetupTime)
+	selectedTime, err := time.ParseInLocation("15:04", strings.TrimSpace(meetupTime), location)
 	if err != nil {
 		return fmt.Errorf("Invalid collection time")
 	}
@@ -108,17 +106,20 @@ func validateTradeScheduleAgainstAvailability(rawSlots, availabilityType, select
 		if strings.TrimSpace(slot.ID) != selectedSlotID {
 			continue
 		}
-		slotDate, err := time.Parse("2006-01-02", slot.Date)
+		slotDate, err := time.ParseInLocation("2006-01-02", strings.TrimSpace(slot.Date), location)
 		if err != nil || !slotDate.Equal(selectedDate) {
 			return fmt.Errorf("Selected time slot does not match the proposed date")
 		}
-		start, startErr := time.Parse("15:04", slot.StartTime)
-		end, endErr := time.Parse("15:04", slot.EndTime)
+		start, startErr := time.ParseInLocation("15:04", strings.TrimSpace(slot.StartTime), location)
+		end, endErr := time.ParseInLocation("15:04", strings.TrimSpace(slot.EndTime), location)
 		if startErr != nil || endErr != nil || !end.After(start) {
 			return fmt.Errorf("Selected time slot is invalid")
 		}
 		if selectedTime.Before(start) || !selectedTime.Before(end) {
 			return fmt.Errorf("Proposed time must be within the selected availability slot")
+		}
+		if err := validateCollectionDateTimeWindow(meetupDate, meetupTime, slot.EndTime); err != nil {
+			return err
 		}
 		return nil
 	}
@@ -127,10 +128,30 @@ func validateTradeScheduleAgainstAvailability(rawSlots, availabilityType, select
 }
 
 func validateCollectionDateTime(meetupDate, meetupTime string) error {
+	return validateCollectionDateTimeWindow(meetupDate, meetupTime, "")
+}
+
+func collectionScheduleLocation() *time.Location {
 	location, err := time.LoadLocation("Asia/Manila")
 	if err != nil {
 		location = time.Local
 	}
+	return location
+}
+
+func collectionWindowEndForMethod(setup productCollectionSetup, method string) string {
+	switch strings.ToLower(strings.TrimSpace(method)) {
+	case "pickup":
+		return setup.Pickup.TimeEnd
+	case "meetup":
+		return setup.Meetup.TimeEnd
+	default:
+		return ""
+	}
+}
+
+func validateCollectionDateTimeWindow(meetupDate, meetupTime, windowEndTime string) error {
+	location := collectionScheduleLocation()
 	dateValue := strings.TrimSpace(meetupDate)
 	timeValue := strings.TrimSpace(meetupTime)
 	if _, err := time.ParseInLocation("2006-01-02", dateValue, location); err != nil {
@@ -143,8 +164,22 @@ func validateCollectionDateTime(meetupDate, meetupTime string) error {
 	if err != nil {
 		return fmt.Errorf("Invalid collection date")
 	}
-	if collectionAt.Before(time.Now().In(location)) {
-		return fmt.Errorf("Collection date cannot be in the past")
+	compareAt := collectionAt
+	endValue := strings.TrimSpace(windowEndTime)
+	if endValue != "" {
+		if _, err := time.ParseInLocation("15:04", endValue, location); err != nil {
+			return fmt.Errorf("Invalid collection time")
+		}
+		windowEndAt, err := time.ParseInLocation("2006-01-02 15:04", dateValue+" "+endValue, location)
+		if err != nil {
+			return fmt.Errorf("Invalid collection date")
+		}
+		if windowEndAt.After(collectionAt) {
+			compareAt = windowEndAt
+		}
+	}
+	if !compareAt.After(time.Now().In(location)) {
+		return fmt.Errorf("This availability window has already ended. Please choose another date or time.")
 	}
 	return nil
 }
@@ -488,6 +523,12 @@ func (h *TradeHandler) ensureTradeRuntimeColumns() {
 		{"buyer_meetup_time", "VARCHAR(100) NULL"},
 		{"seller_meetup_location", "VARCHAR(500) NULL"},
 		{"seller_meetup_time", "VARCHAR(100) NULL"},
+		{"suggested_date", "VARCHAR(20) NULL"},
+		{"suggested_start_time", "VARCHAR(20) NULL"},
+		{"suggested_end_time", "VARCHAR(20) NULL"},
+		{"suggested_by_user_id", "INT NULL"},
+		{"suggestion_status", "VARCHAR(40) NULL"},
+		{"suggestion_type", "VARCHAR(20) NULL"},
 		{"buyer_arrived_at", "TIMESTAMP NULL"},
 		{"seller_arrived_at", "TIMESTAMP NULL"},
 		{"buyer_was_late", "BOOLEAN DEFAULT FALSE"},
@@ -1643,7 +1684,7 @@ func (h *TradeHandler) CreateTrade(c *fiber.Ctx) error {
 	if meetupDate == "" || meetupTime == "" {
 		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "Collection date and time are required"})
 	}
-	if err := validateTradeScheduleAgainstAvailability(availabilitySlotsRaw, availabilityType, payload.SelectedAvailabilitySlotID, meetupDate, meetupTime, meetingType); err != nil {
+	if err := validateTradeScheduleAgainstAvailability(availabilitySlotsRaw, availabilityType, payload.SelectedAvailabilitySlotID, meetupDate, meetupTime, meetingType, targetCollectionSetup); err != nil {
 		return c.Status(400).JSON(models.APIResponse{Success: false, Error: err.Error()})
 	}
 	var meetupLat, meetupLng sql.NullFloat64
@@ -2426,6 +2467,12 @@ func (h *TradeHandler) GetTrades(c *fiber.Ctx) error {
 		  COALESCE(t.grace_period_minutes, 10) as grace_period_minutes,
 		  COALESCE(t.countered_by, 0) as countered_by,
 		  t.parent_trade_id,
+		  COALESCE(t.suggested_date, '') as suggested_date,
+		  COALESCE(t.suggested_start_time, '') as suggested_start_time,
+		  COALESCE(t.suggested_end_time, '') as suggested_end_time,
+		  COALESCE(t.suggested_by_user_id, 0) as suggested_by_user_id,
+		  COALESCE(t.suggestion_status, '') as suggestion_status,
+		  COALESCE(t.suggestion_type, '') as suggestion_type,
           ub.name AS buyer_name, us.name AS seller_name, COALESCE(p.title, 'Deleted product') AS product_title,
           p.image_url AS product_image_url, p.image_urls AS product_image_urls,
           COALESCE(NULLIF(t.meetup_location, ''), NULLIF(p.location, ''), NULLIF(p.pickup_address, ''), NULLIF(us.home_address, ''), '') AS target_product_pickup_address,
@@ -2473,7 +2520,7 @@ func (h *TradeHandler) GetTrades(c *fiber.Ctx) error {
 		var buyerArrivedAt, sellerArrivedAt, agreedDeadline sql.NullTime
 		var lastActivityAt, archivedAt sql.NullTime
 
-		if err := rows.Scan(&tr.ID, &tr.BuyerID, &tr.SellerID, &tr.TargetProductID, &tr.Status, &tr.Message, &offeredCashNull, &tr.CreatedAt, &tr.UpdatedAt, &lastActivityAt, &archivedAt, &tr.ArchivedReason, &tr.BuyerCompleted, &tr.SellerCompleted, &tr.BuyerAccepted, &tr.SellerAccepted, &tr.CompletedAt, &tr.TradeOption, &tr.MeetingType, &tr.DeliveryAddress, &deliveryType, &paymentMethod, &paymentConfirmed, &deliveryInstructions, &proofOfDelivery, &buyerConfirmedReceipt, &sellerConfirmedDelivery, &tr.MeetupLocation, &tr.MeetupLabel, &tr.MeetupTime, &tr.BuyerMeetupConfirmed, &tr.SellerMeetupConfirmed, &meetupLatNull, &meetupLngNull, &tr.BuyerMeetupLocation, &tr.BuyerMeetupTime, &tr.SellerMeetupLocation, &tr.SellerMeetupTime, &tr.BuyerMet, &tr.SellerMet, &buyerArrivedAt, &sellerArrivedAt, &tr.BuyerWasLate, &tr.SellerWasLate, &tr.LatePenaltyApplied, &tr.BuyerLatePenaltyApplied, &tr.SellerLatePenaltyApplied, &agreedDeadline, &tr.GracePeriodMinutes, &tr.CounteredBy, &tr.ParentTradeID, &tr.BuyerName, &tr.SellerName, &tr.ProductTitle, &pimg, &pimgs, &targetPickupAddr, &targetPickupLat, &targetPickupLng); err == nil {
+		if err := rows.Scan(&tr.ID, &tr.BuyerID, &tr.SellerID, &tr.TargetProductID, &tr.Status, &tr.Message, &offeredCashNull, &tr.CreatedAt, &tr.UpdatedAt, &lastActivityAt, &archivedAt, &tr.ArchivedReason, &tr.BuyerCompleted, &tr.SellerCompleted, &tr.BuyerAccepted, &tr.SellerAccepted, &tr.CompletedAt, &tr.TradeOption, &tr.MeetingType, &tr.DeliveryAddress, &deliveryType, &paymentMethod, &paymentConfirmed, &deliveryInstructions, &proofOfDelivery, &buyerConfirmedReceipt, &sellerConfirmedDelivery, &tr.MeetupLocation, &tr.MeetupLabel, &tr.MeetupTime, &tr.BuyerMeetupConfirmed, &tr.SellerMeetupConfirmed, &meetupLatNull, &meetupLngNull, &tr.BuyerMeetupLocation, &tr.BuyerMeetupTime, &tr.SellerMeetupLocation, &tr.SellerMeetupTime, &tr.BuyerMet, &tr.SellerMet, &buyerArrivedAt, &sellerArrivedAt, &tr.BuyerWasLate, &tr.SellerWasLate, &tr.LatePenaltyApplied, &tr.BuyerLatePenaltyApplied, &tr.SellerLatePenaltyApplied, &agreedDeadline, &tr.GracePeriodMinutes, &tr.CounteredBy, &tr.ParentTradeID, &tr.SuggestedDate, &tr.SuggestedStartTime, &tr.SuggestedEndTime, &tr.SuggestedByUserID, &tr.SuggestionStatus, &tr.SuggestionType, &tr.BuyerName, &tr.SellerName, &tr.ProductTitle, &pimg, &pimgs, &targetPickupAddr, &targetPickupLat, &targetPickupLng); err == nil {
 			if lastActivityAt.Valid {
 				tr.LastActivityAt = &lastActivityAt.Time
 			}
@@ -4754,7 +4801,281 @@ func (h *TradeHandler) GetTradeMessages(c *fiber.Ctx) error {
 }
 
 // GetTrade returns a single trade with detailed items
+// SuggestOfferTime records a pending-offer pickup/meetup time-window suggestion.
+// POST /api/offers/:offerID/time-suggestion
+func (h *TradeHandler) SuggestOfferTime(c *fiber.Ctx) error {
+	h.ensureTradeRuntimeColumns()
+	userID, ok := middleware.GetUserIDFromContext(c)
+	if !ok {
+		return c.Status(401).JSON(models.APIResponse{Success: false, Error: "User not authenticated"})
+	}
+	offerIDParam := strings.TrimSpace(c.Params("offerID"))
+	if offerIDParam == "" {
+		offerIDParam = strings.TrimSpace(c.Params("offerId"))
+	}
+	if offerIDParam == "" {
+		offerIDParam = strings.TrimSpace(c.Params("id"))
+	}
+	offerID, err := strconv.Atoi(offerIDParam)
+	if err != nil || offerID <= 0 {
+		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "Invalid offer ID"})
+	}
+
+	var payload struct {
+		SuggestedDate      string `json:"suggested_date"`
+		SuggestedStartTime string `json:"suggested_start_time"`
+		SuggestedEndTime   string `json:"suggested_end_time"`
+		SuggestionType     string `json:"suggestion_type"`
+	}
+	if err := c.BodyParser(&payload); err != nil {
+		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "Invalid request body"})
+	}
+	payload.SuggestedDate = strings.TrimSpace(payload.SuggestedDate)
+	payload.SuggestedStartTime = strings.TrimSpace(payload.SuggestedStartTime)
+	payload.SuggestedEndTime = strings.TrimSpace(payload.SuggestedEndTime)
+	payload.SuggestionType = strings.ToLower(strings.TrimSpace(payload.SuggestionType))
+	if payload.SuggestionType == "" {
+		payload.SuggestionType = "meetup"
+	}
+	if payload.SuggestionType != "pickup" && payload.SuggestionType != "meetup" {
+		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "Suggestion type must be pickup or meetup"})
+	}
+	if payload.SuggestedDate == "" {
+		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "Choose a suggestion date"})
+	}
+	if payload.SuggestedStartTime == "" || payload.SuggestedEndTime == "" {
+		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "Choose a start and end time"})
+	}
+	if payload.SuggestedStartTime >= payload.SuggestedEndTime {
+		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "End time must be after start time"})
+	}
+	if err := validateCollectionDateTimeWindow(payload.SuggestedDate, payload.SuggestedStartTime, payload.SuggestedEndTime); err != nil {
+		return c.Status(400).JSON(models.APIResponse{Success: false, Error: err.Error()})
+	}
+
+	var buyerID, sellerID int
+	var status, meetingType, meetupLocation string
+	err = h.db.QueryRow(`
+		SELECT buyer_id, seller_id, COALESCE(status, ''), COALESCE(meeting_type, 'meetup'), COALESCE(meetup_location, '')
+		FROM trades WHERE id = ?
+	`, offerID).Scan(&buyerID, &sellerID, &status, &meetingType, &meetupLocation)
+	if err == sql.ErrNoRows {
+		return c.Status(404).JSON(models.APIResponse{Success: false, Error: "Offer not found"})
+	}
+	if err != nil {
+		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to load offer"})
+	}
+	if userID != buyerID && userID != sellerID {
+		return c.Status(403).JSON(models.APIResponse{Success: false, Error: "Not authorized for this offer"})
+	}
+	if status != "pending" && status != "pending_multiway" && status != "countered" && status != "accepted_by_one" {
+		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "Time suggestions are only available for pending offers"})
+	}
+
+	suggestionType := payload.SuggestionType
+	if meetingType == "pickup" {
+		suggestionType = "pickup"
+	}
+	suggestedWindow := payload.SuggestedDate + " " + payload.SuggestedStartTime + "-" + payload.SuggestedEndTime
+	locationColumn := "buyer_meetup_location"
+	timeColumn := "buyer_meetup_time"
+	resetColumn := "seller_meetup_confirmed"
+	if userID == sellerID {
+		locationColumn = "seller_meetup_location"
+		timeColumn = "seller_meetup_time"
+		resetColumn = "buyer_meetup_confirmed"
+	}
+
+	query := fmt.Sprintf(`
+		UPDATE trades
+		SET suggested_date = ?,
+		    suggested_start_time = ?,
+		    suggested_end_time = ?,
+		    suggested_by_user_id = ?,
+		    suggestion_status = 'pending_time_confirmation',
+		    suggestion_type = ?,
+		    %s = COALESCE(NULLIF(?, ''), %s),
+		    %s = ?,
+		    %s = FALSE,
+		    updated_at = CURRENT_TIMESTAMP
+		WHERE id = ?
+	`, locationColumn, locationColumn, timeColumn, resetColumn)
+	if _, err := h.db.Exec(query, payload.SuggestedDate, payload.SuggestedStartTime, payload.SuggestedEndTime, userID, suggestionType, meetupLocation, suggestedWindow, offerID); err != nil {
+		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to save time suggestion"})
+	}
+	services.TouchTradeActivity(h.db, offerID)
+
+	recipientID := sellerID
+	if userID == sellerID {
+		recipientID = buyerID
+	}
+	message := fmt.Sprintf("Your trading partner suggested a new %s window: %s %s-%s.", suggestionType, payload.SuggestedDate, payload.SuggestedStartTime, payload.SuggestedEndTime)
+	insertTradeNotification(h.db, recipientID, "meetup_update", message, offerID)
+	sendPushToUser(recipientID, "New time suggestion", message, offerDeepLink(offerID), "meetup_update")
+	publishToUser(buyerID, sseEvent{Type: "trade_updated", Data: fiber.Map{"trade_id": offerID, "status": status, "time_suggested": true}})
+	publishToUser(sellerID, sseEvent{Type: "trade_updated", Data: fiber.Map{"trade_id": offerID, "status": status, "time_suggested": true}})
+
+	return c.JSON(models.APIResponse{Success: true, Data: fiber.Map{
+		"id":                   offerID,
+		"status":               status,
+		"suggested_date":       payload.SuggestedDate,
+		"suggested_start_time": payload.SuggestedStartTime,
+		"suggested_end_time":   payload.SuggestedEndTime,
+		"suggested_by_user_id": userID,
+		"suggestion_status":    "pending_time_confirmation",
+		"suggestion_type":      suggestionType,
+	}})
+}
+
+// AcceptOfferTimeSuggestion accepts a pending time suggestion on a pending offer.
+// POST /api/offers/:offerID/time-suggestion/accept
+func (h *TradeHandler) AcceptOfferTimeSuggestion(c *fiber.Ctx) error {
+	h.ensureTradeRuntimeColumns()
+	userID, ok := middleware.GetUserIDFromContext(c)
+	if !ok {
+		return c.Status(401).JSON(models.APIResponse{Success: false, Error: "User not authenticated"})
+	}
+	offerIDParam := strings.TrimSpace(c.Params("offerID"))
+	if offerIDParam == "" {
+		offerIDParam = strings.TrimSpace(c.Params("offerId"))
+	}
+	if offerIDParam == "" {
+		offerIDParam = strings.TrimSpace(c.Params("id"))
+	}
+	offerID, err := strconv.Atoi(offerIDParam)
+	if err != nil || offerID <= 0 {
+		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "Invalid offer ID"})
+	}
+
+	var buyerID, sellerID, suggestedBy int
+	var status, suggestedDate, suggestedStartTime, suggestedEndTime, suggestionStatus, suggestionType string
+	err = h.db.QueryRow(`
+		SELECT buyer_id, seller_id, COALESCE(status, ''),
+		       COALESCE(suggested_date, ''), COALESCE(suggested_start_time, ''), COALESCE(suggested_end_time, ''),
+		       COALESCE(suggested_by_user_id, 0), COALESCE(suggestion_status, ''), COALESCE(suggestion_type, 'meetup')
+		FROM trades WHERE id = ?
+	`, offerID).Scan(&buyerID, &sellerID, &status, &suggestedDate, &suggestedStartTime, &suggestedEndTime, &suggestedBy, &suggestionStatus, &suggestionType)
+	if err == sql.ErrNoRows {
+		return c.Status(404).JSON(models.APIResponse{Success: false, Error: "Offer not found"})
+	}
+	if err != nil {
+		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to load offer"})
+	}
+	if userID != buyerID && userID != sellerID {
+		return c.Status(403).JSON(models.APIResponse{Success: false, Error: "Not authorized for this offer"})
+	}
+	if suggestionStatus != "pending_time_confirmation" || suggestedDate == "" {
+		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "No pending time suggestion to accept"})
+	}
+	if suggestedBy == userID {
+		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "You cannot accept your own suggestion"})
+	}
+
+	// Combine into meetup_time format that normalizeTradeMeetupDateTime can split
+	newMeetupTime := suggestedDate + "T" + suggestedStartTime + ":00"
+	if _, err := h.db.Exec(`
+		UPDATE trades
+		SET suggestion_status = 'accepted',
+		    meetup_time = ?,
+		    updated_at = CURRENT_TIMESTAMP
+		WHERE id = ?
+	`, newMeetupTime, offerID); err != nil {
+		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to accept time suggestion"})
+	}
+	services.TouchTradeActivity(h.db, offerID)
+
+	msg := fmt.Sprintf("Your suggested %s time has been accepted: %s %s–%s.", suggestionType, suggestedDate, suggestedStartTime, suggestedEndTime)
+	insertTradeNotification(h.db, suggestedBy, "meetup_update", msg, offerID)
+	sendPushToUser(suggestedBy, "Time suggestion accepted", msg, offerDeepLink(offerID), "meetup_update")
+	publishToUser(buyerID, sseEvent{Type: "trade_updated", Data: fiber.Map{"trade_id": offerID, "status": status, "time_suggestion_accepted": true}})
+	publishToUser(sellerID, sseEvent{Type: "trade_updated", Data: fiber.Map{"trade_id": offerID, "status": status, "time_suggestion_accepted": true}})
+
+	return c.JSON(models.APIResponse{Success: true, Data: fiber.Map{
+		"id":                   offerID,
+		"status":               status,
+		"meetup_date":          suggestedDate,
+		"meetup_time":          suggestedStartTime,
+		"suggestion_status":    "accepted",
+		"suggested_date":       suggestedDate,
+		"suggested_start_time": suggestedStartTime,
+		"suggested_end_time":   suggestedEndTime,
+		"suggested_by_user_id": suggestedBy,
+	}})
+}
+
+// DeclineOfferTimeSuggestion declines a pending time suggestion, reverting to the original schedule.
+// POST /api/offers/:offerID/time-suggestion/decline
+func (h *TradeHandler) DeclineOfferTimeSuggestion(c *fiber.Ctx) error {
+	h.ensureTradeRuntimeColumns()
+	userID, ok := middleware.GetUserIDFromContext(c)
+	if !ok {
+		return c.Status(401).JSON(models.APIResponse{Success: false, Error: "User not authenticated"})
+	}
+	offerIDParam := strings.TrimSpace(c.Params("offerID"))
+	if offerIDParam == "" {
+		offerIDParam = strings.TrimSpace(c.Params("offerId"))
+	}
+	if offerIDParam == "" {
+		offerIDParam = strings.TrimSpace(c.Params("id"))
+	}
+	offerID, err := strconv.Atoi(offerIDParam)
+	if err != nil || offerID <= 0 {
+		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "Invalid offer ID"})
+	}
+
+	var buyerID, sellerID, suggestedBy int
+	var status, suggestedDate, suggestedStartTime, suggestedEndTime, suggestionStatus, suggestionType string
+	err = h.db.QueryRow(`
+		SELECT buyer_id, seller_id, COALESCE(status, ''),
+		       COALESCE(suggested_date, ''), COALESCE(suggested_start_time, ''), COALESCE(suggested_end_time, ''),
+		       COALESCE(suggested_by_user_id, 0), COALESCE(suggestion_status, ''), COALESCE(suggestion_type, 'meetup')
+		FROM trades WHERE id = ?
+	`, offerID).Scan(&buyerID, &sellerID, &status, &suggestedDate, &suggestedStartTime, &suggestedEndTime, &suggestedBy, &suggestionStatus, &suggestionType)
+	if err == sql.ErrNoRows {
+		return c.Status(404).JSON(models.APIResponse{Success: false, Error: "Offer not found"})
+	}
+	if err != nil {
+		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to load offer"})
+	}
+	if userID != buyerID && userID != sellerID {
+		return c.Status(403).JSON(models.APIResponse{Success: false, Error: "Not authorized for this offer"})
+	}
+	if suggestionStatus != "pending_time_confirmation" || suggestedDate == "" {
+		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "No pending time suggestion to decline"})
+	}
+	if suggestedBy == userID {
+		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "You cannot decline your own suggestion"})
+	}
+
+	if _, err := h.db.Exec(`
+		UPDATE trades
+		SET suggestion_status = 'declined',
+		    suggested_date = NULL,
+		    suggested_start_time = NULL,
+		    suggested_end_time = NULL,
+		    suggested_by_user_id = NULL,
+		    updated_at = CURRENT_TIMESTAMP
+		WHERE id = ?
+	`, offerID); err != nil {
+		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to decline time suggestion"})
+	}
+	services.TouchTradeActivity(h.db, offerID)
+
+	msg := fmt.Sprintf("Your suggested %s time was declined. The original schedule is still in effect.", suggestionType)
+	insertTradeNotification(h.db, suggestedBy, "meetup_update", msg, offerID)
+	sendPushToUser(suggestedBy, "Time suggestion declined", msg, offerDeepLink(offerID), "meetup_update")
+	publishToUser(buyerID, sseEvent{Type: "trade_updated", Data: fiber.Map{"trade_id": offerID, "status": status, "time_suggestion_declined": true}})
+	publishToUser(sellerID, sseEvent{Type: "trade_updated", Data: fiber.Map{"trade_id": offerID, "status": status, "time_suggestion_declined": true}})
+
+	return c.JSON(models.APIResponse{Success: true, Data: fiber.Map{
+		"id":                offerID,
+		"status":            status,
+		"suggestion_status": "declined",
+	}})
+}
+
 func (h *TradeHandler) GetTrade(c *fiber.Ctx) error {
+	h.ensureTradeRuntimeColumns()
 	userID, ok := middleware.GetUserIDFromContext(c)
 	if !ok {
 		return c.Status(401).JSON(models.APIResponse{Success: false, Error: "User not authenticated"})
@@ -4839,6 +5160,12 @@ func (h *TradeHandler) GetTrade(c *fiber.Ctx) error {
 					COALESCE(t.grace_period_minutes, 10) as grace_period_minutes,
 					COALESCE(t.countered_by, 0) as countered_by,
 					t.parent_trade_id,
+					COALESCE(t.suggested_date, '') as suggested_date,
+					COALESCE(t.suggested_start_time, '') as suggested_start_time,
+					COALESCE(t.suggested_end_time, '') as suggested_end_time,
+					COALESCE(t.suggested_by_user_id, 0) as suggested_by_user_id,
+					COALESCE(t.suggestion_status, '') as suggestion_status,
+					COALESCE(t.suggestion_type, '') as suggestion_type,
           ub.name AS buyer_name, us.name AS seller_name, COALESCE(p.title, 'Deleted product') AS product_title,
           COALESCE(NULLIF(t.meetup_location, ''), NULLIF(p.location, ''), NULLIF(p.pickup_address, ''), NULLIF(us.home_address, ''), '') AS target_product_pickup_address,
           COALESCE(t.meetup_lat, p.latitude, p.pickup_latitude) AS target_product_pickup_latitude,
@@ -4857,7 +5184,7 @@ func (h *TradeHandler) GetTrade(c *fiber.Ctx) error {
 	var targetPickupLat, targetPickupLng sql.NullFloat64
 	var meetupLatNull, meetupLngNull sql.NullFloat64
 	var buyerArrivedAt, sellerArrivedAt, agreedDeadline sql.NullTime
-	err = h.db.QueryRow(query, tradeID).Scan(&tr.ID, &tr.BuyerID, &tr.SellerID, &tr.TargetProductID, &tr.Status, &tr.Message, &offeredCashNull, &tr.CreatedAt, &tr.UpdatedAt, &tr.BuyerCompleted, &tr.SellerCompleted, &tr.BuyerAccepted, &tr.SellerAccepted, &tr.CompletedAt, &tr.TradeOption, &tr.MeetingType, &tr.DeliveryAddress, &deliveryType, &paymentMethod, &paymentConfirmed, &deliveryInstructions, &proofOfDelivery, &buyerConfirmedReceipt, &sellerConfirmedDelivery, &tr.MeetupLocation, &tr.MeetupLabel, &tr.MeetupTime, &meetupLatNull, &meetupLngNull, &tr.BuyerMeetupConfirmed, &tr.SellerMeetupConfirmed, &tr.BuyerMeetupLocation, &tr.BuyerMeetupTime, &tr.SellerMeetupLocation, &tr.SellerMeetupTime, &tr.BuyerMet, &tr.SellerMet, &buyerArrivedAt, &sellerArrivedAt, &tr.BuyerWasLate, &tr.SellerWasLate, &tr.LatePenaltyApplied, &tr.BuyerLatePenaltyApplied, &tr.SellerLatePenaltyApplied, &agreedDeadline, &tr.GracePeriodMinutes, &tr.CounteredBy, &tr.ParentTradeID, &tr.BuyerName, &tr.SellerName, &tr.ProductTitle, &targetPickupAddr, &targetPickupLat, &targetPickupLng)
+	err = h.db.QueryRow(query, tradeID).Scan(&tr.ID, &tr.BuyerID, &tr.SellerID, &tr.TargetProductID, &tr.Status, &tr.Message, &offeredCashNull, &tr.CreatedAt, &tr.UpdatedAt, &tr.BuyerCompleted, &tr.SellerCompleted, &tr.BuyerAccepted, &tr.SellerAccepted, &tr.CompletedAt, &tr.TradeOption, &tr.MeetingType, &tr.DeliveryAddress, &deliveryType, &paymentMethod, &paymentConfirmed, &deliveryInstructions, &proofOfDelivery, &buyerConfirmedReceipt, &sellerConfirmedDelivery, &tr.MeetupLocation, &tr.MeetupLabel, &tr.MeetupTime, &meetupLatNull, &meetupLngNull, &tr.BuyerMeetupConfirmed, &tr.SellerMeetupConfirmed, &tr.BuyerMeetupLocation, &tr.BuyerMeetupTime, &tr.SellerMeetupLocation, &tr.SellerMeetupTime, &tr.BuyerMet, &tr.SellerMet, &buyerArrivedAt, &sellerArrivedAt, &tr.BuyerWasLate, &tr.SellerWasLate, &tr.LatePenaltyApplied, &tr.BuyerLatePenaltyApplied, &tr.SellerLatePenaltyApplied, &agreedDeadline, &tr.GracePeriodMinutes, &tr.CounteredBy, &tr.ParentTradeID, &tr.SuggestedDate, &tr.SuggestedStartTime, &tr.SuggestedEndTime, &tr.SuggestedByUserID, &tr.SuggestionStatus, &tr.SuggestionType, &tr.BuyerName, &tr.SellerName, &tr.ProductTitle, &targetPickupAddr, &targetPickupLat, &targetPickupLng)
 	if err != nil {
 		return c.Status(404).JSON(models.APIResponse{Success: false, Error: "Trade not found"})
 	}

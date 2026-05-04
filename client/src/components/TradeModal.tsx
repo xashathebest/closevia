@@ -49,6 +49,26 @@ const formatDistance = (meters: number | null) => {
   return `${(meters / 1000).toFixed(1)}km away`
 }
 
+const getLocalDateInputValue = (date = new Date()) => {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+const parseLocalDateTime = (date: string, time: string) => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !/^\d{2}:\d{2}$/.test(time)) return null
+  const [year, month, day] = date.split('-').map(Number)
+  const [hour, minute] = time.split(':').map(Number)
+  const parsed = new Date(year, month - 1, day, hour, minute, 0, 0)
+  return Number.isNaN(parsed.getTime()) ? null : parsed
+}
+
+const isAvailabilitySlotStillOpen = (slot: AvailabilitySlot, now = new Date()) => {
+  const windowEnd = parseLocalDateTime(slot.date, slot.end_time || slot.start_time)
+  return windowEnd ? windowEnd > now : false
+}
+
 const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductId, editTrade = null }) => {
   const { user, refreshUser } = useAuth()
   const navigate = useNavigate()
@@ -395,8 +415,7 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
     if (!raw) return []
     try {
       const slots: AvailabilitySlot[] = typeof raw === 'string' ? JSON.parse(raw) : raw
-      const today = new Date().toISOString().split('T')[0]
-      return Array.isArray(slots) ? slots.filter(s => s.date >= today) : []
+      return Array.isArray(slots) ? slots.filter(s => isAvailabilitySlotStillOpen(s)) : []
     } catch {
       return []
     }
@@ -1436,7 +1455,7 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
                       type="date" value={meetupDate}
                       onChange={(e) => { setMeetupDate(e.target.value); setSelectedSlotId(null) }}
                       fontSize="11px" size="sm" flex={1}
-                      min={new Date().toISOString().split('T')[0]}
+                      min={getLocalDateInputValue()}
                     />
                     <Input
                       type="time" value={meetupTime}
@@ -1532,7 +1551,7 @@ const TradeModal: React.FC<TradeModalProps> = ({ isOpen, onClose, targetProductI
 
                 {(sellerAvailabilityType !== 'strict' || currentAvailabilitySlots.length === 0) && (
                   <HStack spacing={2} mt={currentAvailabilitySlots.length > 0 ? 2 : 0}>
-                    <Input type="date" value={meetupDate} onChange={(e) => { setMeetupDate(e.target.value); setSelectedSlotId(null) }} fontSize="11px" size="sm" bg="white" min={new Date().toISOString().split('T')[0]} />
+                    <Input type="date" value={meetupDate} onChange={(e) => { setMeetupDate(e.target.value); setSelectedSlotId(null) }} fontSize="11px" size="sm" bg="white" min={getLocalDateInputValue()} />
                     <Input type="time" value={meetupTime} onChange={(e) => { setMeetupTime(e.target.value); setSelectedSlotId(null) }} fontSize="11px" size="sm" bg="white" />
                   </HStack>
                 )}

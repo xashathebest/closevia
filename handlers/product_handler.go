@@ -100,14 +100,29 @@ func filterFutureAvailabilitySlots(raw string) string {
 	if strings.TrimSpace(raw) == "" {
 		return raw
 	}
-	today := time.Now().Format("2006-01-02")
-	var slots []map[string]string
+	now := time.Now()
+	var slots []map[string]interface{}
 	if err := json.Unmarshal([]byte(raw), &slots); err != nil {
 		return raw
 	}
-	active := make([]map[string]string, 0, len(slots))
+	active := make([]map[string]interface{}, 0, len(slots))
 	for _, slot := range slots {
-		if date, ok := slot["date"]; ok && date >= today {
+		date, _ := slot["date"].(string)
+		endTime, _ := slot["end_time"].(string)
+		if endTime == "" {
+			endTime, _ = slot["start_time"].(string)
+		}
+		if date == "" {
+			continue
+		}
+		windowEnd, err := time.ParseInLocation("2006-01-02 15:04", strings.TrimSpace(date)+" "+strings.TrimSpace(endTime), collectionScheduleLocation())
+		if err != nil {
+			if date >= now.Format("2006-01-02") {
+				active = append(active, slot)
+			}
+			continue
+		}
+		if windowEnd.After(now.In(windowEnd.Location())) {
 			active = append(active, slot)
 		}
 	}

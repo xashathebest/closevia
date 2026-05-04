@@ -10,8 +10,20 @@ interface Props {
 }
 
 function formatSlot(slot: AvailabilitySlot): string {
+  const dayLabels: Record<string, string> = {
+    monday: 'Mon',
+    tuesday: 'Tue',
+    wednesday: 'Wed',
+    thursday: 'Thu',
+    friday: 'Fri',
+    saturday: 'Sat',
+    sunday: 'Sun',
+  }
   const date = new Date(`${slot.date}T00:00:00`)
-  const dateStr = date.toLocaleDateString('en-PH', { month: 'short', day: 'numeric', weekday: 'short' })
+  const recurringDays = slot.mode === 'recurring' && Array.isArray(slot.weekdays)
+    ? slot.weekdays.map(day => dayLabels[day] || day).join(', ')
+    : ''
+  const dateStr = recurringDays || date.toLocaleDateString('en-PH', { month: 'short', day: 'numeric', weekday: 'short' })
   const fmt = (t: string) => {
     const [h, m] = t.split(':').map(Number)
     const ampm = h >= 12 ? 'PM' : 'AM'
@@ -21,11 +33,23 @@ function formatSlot(slot: AvailabilitySlot): string {
   return `${dateStr}, ${fmt(slot.start_time)}–${fmt(slot.end_time)}`
 }
 
+const parseLocalDateTime = (date: string, time: string) => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !/^\d{2}:\d{2}$/.test(time)) return null
+  const [year, month, day] = date.split('-').map(Number)
+  const [hour, minute] = time.split(':').map(Number)
+  const parsed = new Date(year, month - 1, day, hour, minute, 0, 0)
+  return Number.isNaN(parsed.getTime()) ? null : parsed
+}
+
+const isSlotStillOpen = (slot: AvailabilitySlot, now = new Date()) => {
+  const end = parseLocalDateTime(slot.date, slot.end_time || slot.start_time)
+  return end ? end > now : false
+}
+
 const AvailabilitySlots: React.FC<Props> = ({ slots, availabilityType, compact }) => {
   if (!slots || slots.length === 0) return null
 
-  const today = new Date().toISOString().split('T')[0]
-  const upcoming = slots.filter(s => s.date >= today).slice(0, compact ? 2 : slots.length)
+  const upcoming = slots.filter(s => isSlotStillOpen(s)).slice(0, compact ? 2 : slots.length)
 
   if (upcoming.length === 0) return null
 

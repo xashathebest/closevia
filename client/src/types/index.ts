@@ -3,6 +3,9 @@ export interface AvailabilitySlot {
   date: string        // "YYYY-MM-DD"
   start_time: string  // "HH:MM"
   end_time: string    // "HH:MM"
+  method?: CollectionMethod
+  mode?: 'recurring' | 'specific_date'
+  weekdays?: string[]
 }
 
 export interface User {
@@ -127,15 +130,19 @@ export interface CollectionLocationPoint {
 export interface CollectionSetup {
   methods: CollectionMethod[]
   pickup?: {
+    availability_mode?: 'recurring' | 'specific_date'
     days: string[]
+    specific_date?: string
     time_start: string
     time_end: string
     notes?: string
   }
   meetup?: {
+    availability_mode?: 'recurring' | 'specific_date'
     locations: string[]
     location_points?: CollectionLocationPoint[]
     days: string[]
+    specific_date?: string
     time_start: string
     time_end: string
     distance_km?: string
@@ -335,6 +342,12 @@ export interface Trade {
   seller_rating?: number // Rating given by seller (1-5)
   countered_by?: number
   parent_trade_id?: number | null
+  suggested_date?: string
+  suggested_start_time?: string
+  suggested_end_time?: string
+  suggested_by_user_id?: number
+  suggestion_status?: string
+  suggestion_type?: 'pickup' | 'meetup' | string
 }
 
 // Multi-way/Three-way Trading Types

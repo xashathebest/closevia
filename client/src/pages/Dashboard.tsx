@@ -1773,9 +1773,17 @@ const Dashboard: React.FC = () => {
 
   // Computed stats for offers (excluding completed - those go to Trade History)
   const offersStats = useMemo(() => {
-    const receivedBuyout = (incoming || []).filter(t => isBuyoutTrade(t) && (t.status === 'pending' || t.status === 'pending_multiway' || t.status === 'accepted_by_one' || t.status === 'countered')).length
-    const sentPending = (outgoing || []).filter(t => t.status === 'pending' || t.status === 'pending_multiway' || t.status === 'accepted_by_one' || t.status === 'countered').length
-    const receivedPending = (incoming || []).filter(t => t.status === 'pending' || t.status === 'pending_multiway' || t.status === 'accepted_by_one' || t.status === 'countered').length
+    const pendingStatuses = ['pending', 'pending_multiway', 'accepted_by_one', 'countered']
+    const receivedBuyout = (incoming || []).filter(t => isBuyoutTrade(t) && pendingStatuses.includes(t.status)).length
+    const sentPending = (outgoing || []).filter(t => pendingStatuses.includes(t.status)).length
+    // receivedPending = incoming pending + outgoing offers where the other party suggested a time and current user must respond
+    const timeSuggestionNeedsResponse = (outgoing || []).filter(t =>
+      pendingStatuses.includes(t.status) &&
+      t.suggestion_status === 'pending_time_confirmation' &&
+      Boolean(t.suggested_date) &&
+      t.suggested_by_user_id !== user?.id
+    ).length
+    const receivedPending = (incoming || []).filter(t => pendingStatuses.includes(t.status)).length + timeSuggestionNeedsResponse
     const ongoingMultiway = (multiWayTrades || []).filter((t: any) =>
       t?.status === 'active' || t?.status === 'multiway_active' || t?.status === 'confirmed' || t?.status === 'ongoing'
     ).length
@@ -1889,9 +1897,21 @@ const Dashboard: React.FC = () => {
   }, [updateTrade])
 
   const receivedOffers = useMemo(() => {
-    const active = (incoming || []).filter(t => t.status === 'pending' || t.status === 'pending_multiway' || t.status === 'accepted_by_one' || t.status === 'countered') // Include multiway matches and counter-offers
-    const filtered = filterTrades(active, offersSearch, offersStatusFilter)
-    // Sort inline to avoid extra function call
+    const pendingStatuses = ['pending', 'pending_multiway', 'accepted_by_one', 'countered']
+    const active = (incoming || []).filter(t => pendingStatuses.includes(t.status))
+    // Also include outgoing offers where the other party suggested a new time and current user needs to respond.
+    // These are the buyer's own sent offers where the seller suggested a time — they need inbox placement.
+    const sentNeedingTimeSuggestionResponse = (outgoing || []).filter(t =>
+      pendingStatuses.includes(t.status) &&
+      t.suggestion_status === 'pending_time_confirmation' &&
+      Boolean(t.suggested_date) &&
+      t.suggested_by_user_id !== user?.id
+    )
+    const combined = [...active, ...sentNeedingTimeSuggestionResponse]
+    // Deduplicate by id (shouldn't happen but safety measure)
+    const seen = new Set<number>()
+    const deduped = combined.filter(t => { if (seen.has(t.id)) return false; seen.add(t.id); return true })
+    const filtered = filterTrades(deduped, offersSearch, offersStatusFilter)
     if (filtered.length > 1) {
       filtered.sort((a, b) => {
         const at = new Date(a.created_at).getTime()
@@ -1900,7 +1920,7 @@ const Dashboard: React.FC = () => {
       })
     }
     return filtered
-  }, [incoming, offersSearch, offersStatusFilter, offersSort, filterTrades])
+  }, [incoming, outgoing, user, offersSearch, offersStatusFilter, offersSort, filterTrades])
 
 
   const ongoingTrades = useMemo(() => {

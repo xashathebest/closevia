@@ -416,6 +416,13 @@ type Trade struct {
 	// Counter offer fields
 	CounteredBy   int  `json:"countered_by,omitempty"`
 	ParentTradeID *int `json:"parent_trade_id,omitempty"`
+	// Pending offer time suggestion fields
+	SuggestedDate      string `json:"suggested_date,omitempty"`
+	SuggestedStartTime string `json:"suggested_start_time,omitempty"`
+	SuggestedEndTime   string `json:"suggested_end_time,omitempty"`
+	SuggestedByUserID  int    `json:"suggested_by_user_id,omitempty"`
+	SuggestionStatus   string `json:"suggestion_status,omitempty"`
+	SuggestionType     string `json:"suggestion_type,omitempty"`
 }
 
 // TradeItem represents an item offered in a trade

@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/xashathebest/clovia/models"
@@ -52,12 +53,61 @@ func (s *MeetupService) GetMeetupStatus(tradeID int) (*models.MeetupStatus, erro
 	return status, nil
 }
 
+func meetupStorageLocation() *time.Location {
+	location, err := time.LoadLocation("Asia/Manila")
+	if err != nil {
+		location = time.Local
+	}
+	return location
+}
+
+func parseStoredMeetupTime(raw string) (time.Time, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return time.Time{}, false
+	}
+	location := meetupStorageLocation()
+	for _, layout := range []string{time.RFC3339, "2006-01-02T15:04:05", "2006-01-02T15:04", "2006-01-02 15:04:05", "2006-01-02 15:04"} {
+		var t time.Time
+		var parseErr error
+		if layout == time.RFC3339 {
+			t, parseErr = time.Parse(layout, raw)
+		} else {
+			t, parseErr = time.ParseInLocation(layout, raw, location)
+		}
+		if parseErr == nil {
+			return t, true
+		}
+	}
+	return time.Time{}, false
+}
+
 // createMeetupStatus creates a new meetup status record
 func (s *MeetupService) createMeetupStatus(tradeID int) (*models.MeetupStatus, error) {
+	var buyerTimeRaw, buyerLocation, sellerTimeRaw, sellerLocation string
+	_ = s.db.QueryRow(`
+		SELECT COALESCE(buyer_meetup_time, ''), COALESCE(buyer_meetup_location, ''),
+		       COALESCE(seller_meetup_time, ''), COALESCE(seller_meetup_location, '')
+		FROM trades WHERE id = ?
+	`, tradeID).Scan(&buyerTimeRaw, &buyerLocation, &sellerTimeRaw, &sellerLocation)
+
+	var buyerTime, sellerTime interface{}
+	if t, ok := parseStoredMeetupTime(buyerTimeRaw); ok {
+		buyerTime = t
+	}
+	if t, ok := parseStoredMeetupTime(sellerTimeRaw); ok {
+		sellerTime = t
+	}
+
 	_, err := s.db.Exec(`
-		INSERT INTO meetup_status (trade_id, stage, created_at, updated_at)
-		VALUES (?, 'negotiating', NOW(), NOW())
-	`, tradeID)
+		INSERT INTO meetup_status (
+			trade_id, stage,
+			buyer_proposed_time, buyer_proposed_location,
+			seller_proposed_time, seller_proposed_location,
+			created_at, updated_at
+		)
+		VALUES (?, 'negotiating', ?, NULLIF(?, ''), ?, NULLIF(?, ''), NOW(), NOW())
+	`, tradeID, buyerTime, buyerLocation, sellerTime, sellerLocation)
 	if err != nil {
 		return nil, err
 	}
@@ -80,6 +130,10 @@ func (s *MeetupService) ProposeMeetupDetails(tradeID, userID int, proposedTime t
 	}
 
 	isBuyer := userID == buyerID
+	if _, err := s.GetMeetupStatus(tradeID); err != nil {
+		return nil, nil, err
+	}
+	storedTime := proposedTime.In(meetupStorageLocation()).Format("2006-01-02 15:04")
 
 	// Update proposal in meetup_status
 	if isBuyer {
@@ -88,12 +142,32 @@ func (s *MeetupService) ProposeMeetupDetails(tradeID, userID int, proposedTime t
 			SET buyer_proposed_time = ?, buyer_proposed_location = ?, updated_at = NOW()
 			WHERE trade_id = ?
 		`, proposedTime, proposedLocation, tradeID)
+		if err == nil {
+			_, _ = s.db.Exec(`
+				UPDATE trades
+				SET buyer_meetup_time = ?, buyer_meetup_location = ?, buyer_meetup_confirmed = TRUE,
+				    seller_meetup_confirmed = FALSE,
+				    meetup_time = ?, meetup_location = COALESCE(NULLIF(?, ''), meetup_location),
+				    updated_at = CURRENT_TIMESTAMP
+				WHERE id = ?
+			`, storedTime, proposedLocation, storedTime, proposedLocation, tradeID)
+		}
 	} else {
 		_, err = s.db.Exec(`
 			UPDATE meetup_status 
 			SET seller_proposed_time = ?, seller_proposed_location = ?, updated_at = NOW()
 			WHERE trade_id = ?
 		`, proposedTime, proposedLocation, tradeID)
+		if err == nil {
+			_, _ = s.db.Exec(`
+				UPDATE trades
+				SET seller_meetup_time = ?, seller_meetup_location = ?, seller_meetup_confirmed = TRUE,
+				    buyer_meetup_confirmed = FALSE,
+				    meetup_time = ?, meetup_location = COALESCE(NULLIF(?, ''), meetup_location),
+				    updated_at = CURRENT_TIMESTAMP
+				WHERE id = ?
+			`, storedTime, proposedLocation, storedTime, proposedLocation, tradeID)
+		}
 	}
 
 	if err != nil {
@@ -184,9 +258,26 @@ func (s *MeetupService) confirmMeetupSchedule(tradeID int) (*models.SystemMessag
 	if err != nil {
 		return nil, err
 	}
+	agreedTime := ""
+	if status.BuyerProposedTime != nil {
+		agreedTime = status.BuyerProposedTime.In(meetupStorageLocation()).Format("2006-01-02 15:04")
+	}
+	_, _ = s.db.Exec(`
+		UPDATE trades
+		SET meetup_time = ?, meetup_location = ?, buyer_meetup_confirmed = TRUE,
+		    seller_meetup_confirmed = TRUE, updated_at = CURRENT_TIMESTAMP
+		WHERE id = ?
+	`, agreedTime, status.BuyerProposedLocation, tradeID)
 
-	// Update trade status
-	s.db.Exec("UPDATE trades SET status = 'active' WHERE id = ?", tradeID)
+	var tradeStatus string
+	_ = s.db.QueryRow("SELECT COALESCE(status, '') FROM trades WHERE id = ?", tradeID).Scan(&tradeStatus)
+	switch tradeStatus {
+	case "pending", "pending_multiway", "countered":
+		// Schedule agreement can happen while an offer is still being negotiated.
+		// The offer itself stays pending until the normal accept action succeeds.
+	default:
+		s.db.Exec("UPDATE trades SET status = 'active' WHERE id = ?", tradeID)
+	}
 
 	systemMsg := &models.SystemMessage{
 		MessageType: "scheduled_confirmation",
