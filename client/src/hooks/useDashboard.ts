@@ -22,6 +22,20 @@ type DashboardQueryOptions = {
   refetchInterval?: number | false
 }
 
+type TradeHistoryQueryOptions = DashboardQueryOptions & {
+  page?: number
+  limit?: number
+  sort?: 'newest' | 'oldest'
+}
+
+export type TradeHistoryResult = {
+  items: Trade[]
+  total: number
+  page: number
+  limit: number
+  totalPages: number
+}
+
 const buildReciprocalOngoingKey = (trade: Trade): string | null => {
   if (trade.status !== 'active') return null
 
@@ -193,18 +207,36 @@ export const useOngoingTrades = (options: DashboardQueryOptions = {}) => {
   return useQuery({
     queryKey: DASHBOARD_QUERY_KEYS.ongoingTrades,
     queryFn: async (): Promise<Trade[]> => {
-      const response = await api.get('/api/trades', {
-        params: {
-          include: 'products',
-          limit: 100,
-        },
-      })
+      const activeStatuses = [
+        'accepted',
+        'accepted_by_both',
+        'active',
+        'ongoing',
+        'confirmed',
+        'pending_confirmation',
+        'pickup_pending',
+        'meetup_pending',
+        'awaiting_confirmation',
+        'needs_action',
+        'multiway_active',
+      ]
+      const results = await Promise.allSettled(activeStatuses.map(status =>
+        api.get('/api/trades', {
+          params: {
+            include: 'products',
+            status,
+            limit: 100,
+          },
+        })
+      ))
       const extractData = (response: any) => {
         return Array.isArray(response?.data?.data) ? response.data.data : (Array.isArray(response?.data) ? response.data : [])
       }
 
-      const ongoingStatuses = new Set(['accepted', 'active', 'ongoing', 'awaiting_confirmation', 'multiway_active'])
-      const allTrades = extractData(response).filter((trade: Trade) => ongoingStatuses.has(trade.status))
+      const activeStatusSet = new Set(activeStatuses)
+      const allTrades = results
+        .flatMap((result) => result.status === 'fulfilled' ? extractData(result.value) : [])
+        .filter((trade: Trade) => activeStatusSet.has(String(trade.status || '').toLowerCase()))
 
       const uniqueTrades = new Map<string | number, Trade>()
       allTrades.forEach((tr: Trade) => {
@@ -251,24 +283,22 @@ export const useMultiWayLoops = (userId: number | undefined, options: DashboardQ
   })
 }
 
-// Custom hook for archived (expired) trades with caching
+// Custom hook for archived/expired trades with caching
 export const useArchivedTrades = (options: DashboardQueryOptions = {}) => {
   return useQuery({
     queryKey: DASHBOARD_QUERY_KEYS.archivedTrades,
     queryFn: async (): Promise<Trade[]> => {
-      const [incomingExpired, outgoingExpired] = await Promise.all([
-        api.get('/api/trades', { params: { direction: 'incoming', include: 'products', status: 'expired', limit: 100 } }),
-        api.get('/api/trades', { params: { direction: 'outgoing', include: 'products', status: 'expired', limit: 100 } })
-      ])
+      const archivedStatuses = ['expired', 'archived', 'declined', 'rejected', 'cancelled', 'cancelled_due_to_conflict', 'broken']
+      const results = await Promise.all(archivedStatuses.flatMap(status => [
+        api.get('/api/trades', { params: { direction: 'incoming', include: 'products', status, limit: 100 } }),
+        api.get('/api/trades', { params: { direction: 'outgoing', include: 'products', status, limit: 100 } }),
+      ]))
 
       const extractData = (response: any) => {
         return Array.isArray(response?.data?.data) ? response.data.data : (Array.isArray(response?.data) ? response.data : [])
       }
 
-      const allTrades = [
-        ...extractData(incomingExpired),
-        ...extractData(outgoingExpired)
-      ]
+      const allTrades = results.flatMap(extractData)
 
       // Deduplicate by trade ID
       const uniqueTrades = new Map<number, Trade>()
@@ -287,29 +317,60 @@ export const useArchivedTrades = (options: DashboardQueryOptions = {}) => {
 // Custom hook for trade history with caching
 // Merges completed one-to-one trades with completed trade-match / multi-way loops
 // so both show up in the Dashboard history tab.
-export const useTradeHistory = (options: DashboardQueryOptions = {}) => {
+export const useTradeHistory = (options: TradeHistoryQueryOptions = {}) => {
+  const page = options.page ?? 1
+  const limit = options.limit ?? 6
+  const sort = options.sort ?? 'newest'
+  const sourceLimit = page * limit
+
   return useQuery({
-    queryKey: DASHBOARD_QUERY_KEYS.tradeHistory,
-    queryFn: async (): Promise<Trade[]> => {
-      const [tradesRes, completedLoopsRes, cancelledLoopsRes] = await Promise.all([
-        api.get('/api/trades', {
-          params: { status: 'history', include: 'products', limit: 100 }
-        }),
-        api.get('/api/trades/loops', { params: { status: 'completed' } }).catch(() => ({ data: { data: [] } })),
-        api.get('/api/trades/loops', { params: { status: 'cancelled' } }).catch(() => ({ data: { data: [] } })),
+    queryKey: [...DASHBOARD_QUERY_KEYS.tradeHistory, page, limit, sort],
+    queryFn: async (): Promise<TradeHistoryResult> => {
+      const historyStatuses = ['history', 'completed', 'auto_completed', 'cancelled', 'cancelled_due_to_conflict', 'declined', 'rejected', 'did_not_push_through', 'expired', 'broken', 'archived']
+      const loopHistoryStatuses = ['history', 'completed', 'cancelled', 'cancelled_due_to_conflict', 'did_not_push_through', 'expired', 'broken', 'archived']
+      const [historyTradeResponses, historyLoopResponses] = await Promise.all([
+        Promise.all(historyStatuses.map(status =>
+          api.get('/api/trades', {
+            params: { status, include: 'products', page: 1, limit: sourceLimit, sort }
+          }).catch(() => ({ data: { data: { data: [], total: 0, page, limit, total_pages: 0 } } }))
+        )),
+        Promise.all(loopHistoryStatuses.map(status =>
+          api.get('/api/trades/loops', {
+            params: { status, page: 1, limit: sourceLimit, sort }
+          }).catch(() => ({ data: { data: { data: [], total: 0, page, limit, total_pages: 0 } } }))
+        )),
       ])
 
-      const trades: Trade[] = Array.isArray(tradesRes.data?.data)
-        ? tradesRes.data.data
-        : (Array.isArray(tradesRes.data) ? tradesRes.data : [])
+      const extractPage = <T,>(response: any): { items: T[]; total: number; page: number; limit: number; totalPages: number } => {
+        const payload = response?.data?.data
+        if (payload && Array.isArray(payload.data)) {
+          const total = Number(payload.total ?? payload.count ?? payload.data.length)
+          const responseLimit = Number(payload.limit ?? limit)
+          const totalPages = Number(payload.total_pages ?? payload.totalPages ?? (responseLimit > 0 ? Math.ceil(total / responseLimit) : 0))
+          return {
+            items: payload.data,
+            total,
+            page: Number(payload.page ?? page),
+            limit: responseLimit,
+            totalPages,
+          }
+        }
+        const items = Array.isArray(payload)
+          ? payload
+          : (Array.isArray(response?.data) ? response.data : [])
+        return {
+          items,
+          total: items.length,
+          page,
+          limit,
+          totalPages: items.length > 0 ? 1 : 0,
+        }
+      }
 
-      const completedLoops: any[] = Array.isArray(completedLoopsRes.data?.data)
-        ? completedLoopsRes.data.data
-        : (Array.isArray(completedLoopsRes.data) ? completedLoopsRes.data : [])
-      const cancelledLoops: any[] = Array.isArray(cancelledLoopsRes.data?.data)
-        ? cancelledLoopsRes.data.data
-        : (Array.isArray(cancelledLoopsRes.data) ? cancelledLoopsRes.data : [])
-      const loops: any[] = [...completedLoops, ...cancelledLoops]
+      const tradesPages = historyTradeResponses.map(response => extractPage<Trade>(response))
+      const loopsPages = historyLoopResponses.map(response => extractPage<any>(response))
+      const trades: Trade[] = tradesPages.flatMap(page => page.items)
+      const loops: any[] = loopsPages.flatMap(page => page.items)
 
       // Resolve the current user's ID so we can shape each loop from their perspective.
       let storedUserId = Number(localStorage.getItem('userId') || 0)
@@ -325,13 +386,20 @@ export const useTradeHistory = (options: DashboardQueryOptions = {}) => {
         const participants: any[] = Array.isArray(loop?.participants) ? loop.participants : []
         const me = participants.find((p: any) => Number(p?.user_id ?? p?.id) === storedUserId)
         const loopStatus = String(loop?.status || '').toLowerCase()
-        const isClosedIncomplete = ['rejected', 'cancelled', 'cancelled_due_to_conflict', 'broken', 'expired', 'user3_declined'].includes(loopStatus)
-        if (!me || (!me?.is_reviewed && !isClosedIncomplete)) return []
+        const isClosedIncomplete = ['rejected', 'cancelled', 'cancelled_due_to_conflict', 'broken', 'expired', 'archived', 'user3_declined'].includes(loopStatus)
+        const isDidNotPushThrough = loopStatus === 'did_not_push_through'
+        if (!me || (!me?.is_reviewed && !isClosedIncomplete && !isDidNotPushThrough)) return []
         // Partner = who received my offered product (i.e. who wanted it).
         const partner = participants.find((p: any) => Number(p?.wanted_product_id) === Number(me?.product_id)) || participants.find((p: any) => Number(p?.user_id ?? p?.id) !== storedUserId) || {}
         const completedAt: string = loop?.completed_at || loop?.updated_at || new Date().toISOString()
+        const offeredProductId = Number(me?.product_id || me?.offered_product_id || 0)
+        const wantedProductId = Number(me?.wanted_product_id || partner?.product_id || 0)
+        const offeredTitle = String(me?.product_title || me?.offered_title || 'Item unavailable')
+        const wantedTitle = String(me?.wanted_title || partner?.product_title || 'Item unavailable')
         const syntheticStatus = isClosedIncomplete
-          ? (loopStatus === 'expired' || loopStatus === 'broken' ? 'expired' : 'cancelled')
+          ? (loopStatus === 'archived' ? 'archived' : (loopStatus === 'expired' || loopStatus === 'broken' ? 'expired' : 'cancelled'))
+          : isDidNotPushThrough
+          ? 'did_not_push_through'
           : 'completed'
 
         return [{
@@ -339,10 +407,9 @@ export const useTradeHistory = (options: DashboardQueryOptions = {}) => {
           id: -Number(loop?.id || 0),
           buyer_id: Number(me?.user_id || storedUserId),
           seller_id: Number(partner?.user_id || 0),
-          // "You received" = the product you wanted (and got)
-          target_product_id: Number(me?.wanted_product_id || 0),
-          product_title: String(me?.wanted_title || ''),
-          product_image_url: String(partner?.product_image_url || ''),
+          target_product_id: offeredProductId || wantedProductId,
+          product_title: offeredTitle,
+          product_image_url: String(me?.product_image_url || partner?.product_image_url || ''),
           status: syntheticStatus,
           created_at: completedAt,
           updated_at: completedAt,
@@ -359,6 +426,8 @@ export const useTradeHistory = (options: DashboardQueryOptions = {}) => {
             chain_id: loop?.chain_id,
             loop_type: loop?.loop_type,
             loop_length: loop?.loop_length,
+            received_product_id: wantedProductId,
+            received_title: wantedTitle,
             is_trade_loop: true,
             is_multiway: true,
             participants,
@@ -375,10 +444,25 @@ export const useTradeHistory = (options: DashboardQueryOptions = {}) => {
       for (const t of [...trades, ...loopTrades]) {
         if (t && typeof t.id === 'number') unique.set(t.id, t)
       }
-      return Array.from(unique.values())
+      const items = Array.from(unique.values()).sort((a, b) => {
+        const at = new Date(a.completed_at || a.updated_at || a.created_at).getTime()
+        const bt = new Date(b.completed_at || b.updated_at || b.created_at).getTime()
+        return sort === 'newest' ? bt - at : at - bt
+      }).slice((page - 1) * limit, page * limit)
+      const total = unique.size
+      return {
+        items,
+        total,
+        page,
+        limit,
+        totalPages: total > 0 ? Math.ceil(total / limit) : 0,
+      }
     },
     enabled: options.enabled ?? true,
-    staleTime: 1000 * 60 * 5, // 5 minutes (completed trades don't change)
+    staleTime: 1000 * 60 * 5,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
+    refetchInterval: options.refetchInterval ?? false,
     placeholderData: keepPreviousData,
   })
 }

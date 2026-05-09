@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(PowerShell -Command \"Select-String -Path 'c:\\\\Clovia\\\\client\\\\src\\\\pages\\\\Settings.tsx' -Pattern 'const.*Tab\\\\s*=' | Select-Object -ExpandProperty Line\")"
+    ]
+  }
+}

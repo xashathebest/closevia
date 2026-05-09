@@ -170,7 +170,7 @@ const Notifications: React.FC = () => {
   const { user } = useAuth()
   const prefersReducedMotion = useReducedMotion()
   const { products } = useProducts()
-  const { adjustNotificationCount, refreshCounts } = useRealtime()
+  const { adjustNotificationCount, setNotificationCountImmediate, refreshCounts } = useRealtime()
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const [notifications, setNotifications] = useState<Notification[]>([])
@@ -224,6 +224,8 @@ const Notifications: React.FC = () => {
       const list: Notification[] = Array.isArray(response.data?.data) ? response.data.data : []
       setNotifications(list)
       try { localStorage.setItem(cacheKey, JSON.stringify(list)) } catch {}
+      const visibleUnread = list.filter((n) => n.type !== 'trade_loop' && !n.read && isNotificationAllowed((user as any)?.notification_preferences, n)).length
+      setNotificationCountImmediate(visibleUnread)
     } catch (error: any) {
       setError(error.message || "We couldn't load your notifications right now.")
       toast({ id: 'notifications-error', title: "Couldn't load notifications", description: "Something went wrong. Pull down to try again.", status: 'error', duration: 3000, isClosable: true })
@@ -370,9 +372,9 @@ const Notifications: React.FC = () => {
     if (notification.type === 'trade_offer' || notification.type === 'trade_update') {
       const tradeId = asPositiveNumber(data.trade_id ?? data.target_id)
       if (tradeId) {
-        return `/offers?tab=inbox&trade_id=${tradeId}`
+        return `/dashboard?tab=offers&offersTab=inbox&trade_id=${tradeId}`
       }
-      return '/offers?tab=inbox'
+      return '/dashboard?tab=offers&offersTab=inbox'
     }
 
     if (typeof data.target_url === 'string' && data.target_url.trim()) {
@@ -438,7 +440,7 @@ const Notifications: React.FC = () => {
               duration: 4500,
               isClosable: true,
             })
-            navigate(isRejectedOffer ? '/offers?tab=inbox' : '/offers?tab=history')
+            navigate(isRejectedOffer ? '/dashboard?tab=offers&offersTab=inbox' : '/dashboard?tab=history')
             return
           }
         }
@@ -446,7 +448,7 @@ const Notifications: React.FC = () => {
     } catch {
       if (notification.type === 'trade_offer') {
         toast({ id: `notif-offer-stale-${notification.id}`, title: 'Offer no longer available', description: 'This offer may have been declined, canceled, or removed.', status: 'info', duration: 4500, isClosable: true })
-        navigate('/offers?tab=inbox')
+        navigate('/dashboard?tab=offers&offersTab=inbox')
         return
       }
     }

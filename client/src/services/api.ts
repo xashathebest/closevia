@@ -1,6 +1,6 @@
 import axios, { AxiosError, AxiosRequestConfig } from 'axios'
 import { isAuthInvalid, markAuthInvalidIfAuthenticated } from '../utils/authEvents'
-import { clearStoredAuth, hasStoredAuthenticatedSession } from '../utils/authStorage'
+import { hasStoredAuthenticatedSession } from '../utils/authStorage'
 
 function normalizeLoopbackBaseUrl(raw: string): string {
   try {
@@ -83,6 +83,13 @@ export const api = axios.create({
 })
 
 const SLOW_API_THRESHOLD_MS = 500
+const OLD_LOCATION_ACCURACY_ERROR = 'Location accuracy is too low. Please move to an open area and try again.'
+const LOCATION_DISTANCE_ERROR = 'Move closer to the pickup/meetup location.'
+
+const normalizeApiErrorMessage = (value: unknown): string | null => {
+  if (typeof value !== 'string') return null
+  return value.trim() === OLD_LOCATION_ACCURACY_ERROR ? LOCATION_DISTANCE_ERROR : value
+}
 
 // Request interceptor to add auth token and log
 api.interceptors.request.use(
@@ -187,20 +194,22 @@ api.interceptors.response.use(
       } catch { }
     }
     ;(error as any).requestId = requestId
+    const responseData = error.response?.data as any
+    if (responseData && typeof responseData === 'object') {
+      const normalizedError = normalizeApiErrorMessage(responseData.error)
+      if (normalizedError) responseData.error = normalizedError
+      const normalizedMessage = normalizeApiErrorMessage(responseData.message)
+      if (normalizedMessage) responseData.message = normalizedMessage
+    }
     if (requestId && (status ?? 0) >= 400) {
       // eslint-disable-next-line no-console
       console.warn(`[API ERROR] request_id=${requestId} status=${status ?? 'ERR'} url=${url}`)
     }
 
-    // On 401 after retry failed, let route guards and component-level handlers decide UX.
-    // Do NOT hard-redirect here, because some pages are intentionally browsable by guests.
     if (status === 401) {
-      const shouldInvalidateAuthenticatedSession = !isReviewEndpoint
-        && !isAuthRecoveryApiUrl(url)
-        && hasStoredAuthenticatedSession()
+      const shouldInvalidateAuthenticatedSession = !isAuthRecoveryApiUrl(url) && hasStoredAuthenticatedSession()
 
       if (shouldInvalidateAuthenticatedSession) {
-        clearStoredAuth()
         markAuthInvalidIfAuthenticated(typeof url === 'string' && url.includes('/api/auth/refresh-session') ? 'refresh_failed' : 'unauthorized')
       }
       if (isReviewEndpoint) {

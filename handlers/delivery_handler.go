@@ -15,8 +15,8 @@ import (
 	"github.com/xashathebest/clovia/database"
 	"github.com/xashathebest/clovia/middleware"
 	"github.com/xashathebest/clovia/models"
+	"github.com/xashathebest/clovia/services"
 )
-
 
 func haversine(lat1, lon1, lat2, lon2 float64) float64 {
 	const R = 6371.0 // Earth radius in km
@@ -260,15 +260,15 @@ func (h *DeliveryHandler) ApplyAsRider(c *fiber.Ctx) error {
 	}
 
 	var payload struct {
-		FullName             string `json:"full_name"`
-		ContactNumber        string `json:"contact_number"`
-		VehicleType          string `json:"vehicle_type"`
-		VehiclePlate         string `json:"vehicle_plate"`
-		VehicleColor         string `json:"vehicle_color"`
-		LicenseImageURL      string `json:"license_image_url"`
-		SelfieImageURL       string `json:"selfie_image_url"`
-		OrcrImageURL         string `json:"orcr_image_url"`
-		MotorOwnerImageURL   string `json:"motor_owner_image_url"`
+		FullName           string `json:"full_name"`
+		ContactNumber      string `json:"contact_number"`
+		VehicleType        string `json:"vehicle_type"`
+		VehiclePlate       string `json:"vehicle_plate"`
+		VehicleColor       string `json:"vehicle_color"`
+		LicenseImageURL    string `json:"license_image_url"`
+		SelfieImageURL     string `json:"selfie_image_url"`
+		OrcrImageURL       string `json:"orcr_image_url"`
+		MotorOwnerImageURL string `json:"motor_owner_image_url"`
 	}
 	if err := c.BodyParser(&payload); err != nil {
 		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "Invalid request body"})
@@ -1387,6 +1387,11 @@ func (h *DeliveryHandler) UpdateDeliveryStatus(c *fiber.Ctx) error {
 	_, err = h.db.Exec(query, args...)
 	if err != nil {
 		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to update delivery"})
+	}
+	var activityTradeID sql.NullInt64
+	_ = h.db.QueryRow("SELECT trade_id FROM deliveries WHERE id = ?", deliveryID).Scan(&activityTradeID)
+	if activityTradeID.Valid {
+		services.TouchTradeActivity(h.db, int(activityTradeID.Int64))
 	}
 
 	// Keep rider remittance ledger aligned with the rider's actual job flow.
@@ -2749,12 +2754,12 @@ func (h *DeliveryHandler) UpdateStopStatus(c *fiber.Ctx) error {
 		var prevStopStatus string
 		err := h.db.QueryRow("SELECT status FROM delivery_stops WHERE delivery_id = ? AND stop_number = ?",
 			deliveryID, stopNumber-1).Scan(&prevStopStatus)
-		
+
 		// Only enforce if the previous stop actually exists
 		if err == nil && prevStopStatus != "completed" {
-			log.Printf("Order Enforcement: Delivery %d Stop %d blocked. Prev Stop %d is '%s'", 
+			log.Printf("Order Enforcement: Delivery %d Stop %d blocked. Prev Stop %d is '%s'",
 				deliveryID, stopNumber, stopNumber-1, prevStopStatus)
-			
+
 			return c.Status(400).JSON(models.APIResponse{
 				Success: false,
 				Error:   "You must complete the previous stop first",

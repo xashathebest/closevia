@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -64,6 +65,9 @@ func StructuredRequestLogger(logger *slog.Logger) fiber.Handler {
 		logger = slog.Default()
 	}
 	return func(c *fiber.Ctx) error {
+		if isQuietHealthPath(c.Path()) {
+			return c.Next()
+		}
 		start := time.Now()
 		err := c.Next()
 		attrs := []any{
@@ -85,6 +89,15 @@ func StructuredRequestLogger(logger *slog.Logger) fiber.Handler {
 		}
 		logger.Info("request completed", attrs...)
 		return nil
+	}
+}
+
+func isQuietHealthPath(path string) bool {
+	switch strings.TrimRight(path, "/") {
+	case "/health":
+		return true
+	default:
+		return false
 	}
 }
 

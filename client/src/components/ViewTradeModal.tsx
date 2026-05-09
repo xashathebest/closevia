@@ -27,6 +27,7 @@ import {
   Card,
   CardBody,
   useColorModeValue,
+  useBreakpointValue,
   Tabs,
   TabList,
   TabPanels,
@@ -121,10 +122,12 @@ const FitBounds: React.FC<{ points: Array<[number, number]> }> = ({ points }) =>
   return null
 }
 
-const MEETUP_CONFIRM_RADIUS_M = 10
-const MAX_GPS_ACCURACY_M = 10
+const PICKUP_CONFIRM_RADIUS_M = 200
+const MEETUP_CONFIRM_RADIUS_M = 100
+const LOW_GPS_ACCURACY_WARNING_M = 100
 const MEETUP_GRACE_PERIOD_MINUTES = 10
 const ARRIVAL_CONFIRM_EARLY_WINDOW_MINUTES = 60
+const SCHEDULE_EXPIRATION_GRACE_HOURS = 2
 
 const calculateDistanceMeters = (lat1: number, lng1: number, lat2: number, lng2: number) => {
   const toRad = (value: number) => value * Math.PI / 180
@@ -138,11 +141,28 @@ const calculateDistanceMeters = (lat1: number, lng1: number, lat2: number, lng2:
   return earthRadiusM * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
 }
 
-const getDistanceStatusMessage = (distanceM: number, pointLabel: string) => {
-  if (distanceM <= MEETUP_CONFIRM_RADIUS_M) return "You're at the location. You can now confirm."
-  if (distanceM <= 15) return 'Walk a little more to confirm.'
-  if (distanceM <= 50) return "You're almost there."
-  return `You are ${Math.round(distanceM)}m away from the ${pointLabel}.`
+const getArrivalStatusMessage = (distanceM: number | null, accuracy: number | null | undefined, baseRadiusM: number, pointLabel: string) => {
+  if (distanceM === null) return 'Check your GPS location before confirming.'
+  if (distanceM <= baseRadiusM) {
+    return (accuracy || 0) > LOW_GPS_ACCURACY_WARNING_M
+      ? 'You appear nearby, confirmation allowed. GPS may be inaccurate, but you are within the pickup area.'
+      : 'You appear nearby, confirmation allowed.'
+  }
+  return `Move closer to the ${pointLabel}.`
+}
+
+const getArrivalEligibility = (
+  distanceM: number | null,
+  accuracy: number | null | undefined,
+  baseRadiusM: number,
+  pointLabel: string
+) => {
+  const insideBase = distanceM !== null && distanceM <= baseRadiusM
+  return {
+    canConfirm: insideBase,
+    circleRadiusM: baseRadiusM,
+    status: getArrivalStatusMessage(distanceM, accuracy, baseRadiusM, pointLabel),
+  }
 }
 
 const parseLatLngString = (value?: string | null): { lat: number; lng: number } | null => {
@@ -209,6 +229,7 @@ const getArrivalWindowState = (deadline: Date | null, nowMs: number, gracePeriod
 
   const startsAt = new Date(deadline.getTime() - ARRIVAL_CONFIRM_EARLY_WINDOW_MINUTES * 60000)
   const endsAt = new Date(deadline.getTime() + Math.max(1, gracePeriodMinutes) * 60000)
+  const expiresAt = new Date(deadline.getTime() + SCHEDULE_EXPIRATION_GRACE_HOURS * 60 * 60000)
   if (nowMs < startsAt.getTime()) {
     return {
       startsAt,
@@ -219,14 +240,14 @@ const getArrivalWindowState = (deadline: Date | null, nowMs: number, gracePeriod
       message: 'You can confirm starting 1 hour before the scheduled time.',
     }
   }
-  if (nowMs > endsAt.getTime() + 60 * 60000) {
+  if (nowMs > expiresAt.getTime()) {
     return {
       startsAt,
       endsAt,
-      isOpen: true,
+      isOpen: false,
       isTooEarly: false,
-      isExpired: false,
-      message: 'No-show has a much bigger trust score impact.',
+      isExpired: true,
+      message: 'Scheduled time has passed. This trade will move to history.',
     }
   }
   if (nowMs > endsAt.getTime()) {
@@ -236,7 +257,7 @@ const getArrivalWindowState = (deadline: Date | null, nowMs: number, gracePeriod
       isOpen: true,
       isTooEarly: false,
       isExpired: false,
-      message: 'If you are late, you can still confirm, but your trust score may be slightly affected.',
+      message: 'Scheduled time has passed. You can still confirm during the grace period.',
     }
   }
   return {
@@ -824,6 +845,11 @@ const DeliveryTab: React.FC<DeliveryTabProps> = ({
                 loadingText="Completing..."
                 leftIcon={<FaCheckCircle />}
                 w="full"
+                minH="52px"
+                borderRadius="xl"
+                position="sticky"
+                bottom="calc(env(safe-area-inset-bottom, 0px) + 12px)"
+                zIndex={2}
                 transition="all 0.2s"
                 _hover={{ transform: 'translateY(-2px)', shadow: 'lg' }}
               >
@@ -860,6 +886,7 @@ const ReviewTab: React.FC<ReviewTabProps> = ({
   const [submitting, setSubmitting] = useState(false)
   const [completionStatus, setCompletionStatus] = useState<any>(null)
   const [loadingStatus, setLoadingStatus] = useState(false)
+  const hasEditedReviewRef = useRef(false)
 
   const cardBg = useColorModeValue('white', 'gray.800')
   const borderColor = useColorModeValue('gray.200', 'gray.700')
@@ -869,20 +896,31 @@ const ReviewTab: React.FC<ReviewTabProps> = ({
   const proofRequired = tradeOption === 'meetup' || tradeOption === 'delivery'
 
   useEffect(() => {
+    hasEditedReviewRef.current = false
+  }, [trade?.id])
+
+  useEffect(() => {
     if (!trade) return
 
     const fetchStatus = async () => {
       try {
         setLoadingStatus(true)
-        const response = await api.get(`/api/trades/${trade.id}`)
+        const response = await api.get(`/api/trades/${trade.id}/completion-status`)
         const tradeData = response.data?.data
         setCompletionStatus({
           buyer_completed: !!tradeData?.buyer_completed,
           seller_completed: !!tradeData?.seller_completed,
+          status: tradeData?.status,
           buyer_rating: tradeData?.buyer_rating,
           seller_rating: tradeData?.seller_rating,
           buyer_feedback: tradeData?.buyer_feedback,
           seller_feedback: tradeData?.seller_feedback,
+          buyer_completion_outcome: tradeData?.buyer_completion_outcome,
+          seller_completion_outcome: tradeData?.seller_completion_outcome,
+          buyer_completion_confirmed: tradeData?.buyer_completion_confirmed,
+          seller_completion_confirmed: tradeData?.seller_completion_confirmed,
+          requires_outcome_confirmation: tradeData?.requires_outcome_confirmation,
+          outcome_mismatch: tradeData?.outcome_mismatch,
         })
       } catch (error) {
         console.error('Failed to fetch completion status:', error)
@@ -901,10 +939,11 @@ const ReviewTab: React.FC<ReviewTabProps> = ({
     }
 
     fetchStatus()
-  }, [trade])
+  }, [trade?.id])
 
   const handleProofUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files?.[0]) {
+      hasEditedReviewRef.current = true
       const file = e.target.files[0]
       setProofFile(file)
       const reader = new FileReader()
@@ -915,7 +954,7 @@ const ReviewTab: React.FC<ReviewTabProps> = ({
     }
   }
 
-  const submitReview = async () => {
+  const submitReview = async (completionOutcome: 'complete' | 'did_not_push_through' = 'complete') => {
     if (!trade || !rating || !feedback.trim()) {
       toast({
         id: "viewtrademodal-missing-information",
@@ -926,7 +965,7 @@ const ReviewTab: React.FC<ReviewTabProps> = ({
       return
     }
 
-    if (proofRequired && !proofFile) {
+    if (completionOutcome === 'complete' && proofRequired && !proofFile) {
       toast({
         id: 'viewtrademodal-proof-required',
         title: 'Proof image required',
@@ -960,40 +999,55 @@ const ReviewTab: React.FC<ReviewTabProps> = ({
         }
       }
 
-      await api.put(`/api/trades/${trade.id}/complete`, {
+      const submitRes = await api.put(`/api/trades/${trade.id}/complete`, {
         rating,
         feedback: feedback.trim(),
         transaction_proof_url: uploadedProofUrl || '',
         is_camera_photo: !!uploadedProofUrl,
+        completion_outcome: completionOutcome,
       })
-
-      toast({
-        id: "viewtrademodal-review-submitted",
-        title: 'Review submitted',
-        description: 'Your review has been submitted ✅',
-        status: 'success',
-      })
-
-      // Reset form
-      setRating(5)
-      setFeedback('')
-      setProofImage(null)
-      setProofFile(null)
 
       // Refresh completion status by fetching updated trade data
+      let needsConfirmation = !!submitRes.data?.data?.requires_outcome_confirmation
       try {
         const response = await api.get(`/api/trades/${trade.id}/completion-status`)
         const tradeData = response.data?.data
+        needsConfirmation = needsConfirmation || !!tradeData?.requires_outcome_confirmation
         setCompletionStatus({
           buyer_completed: !!tradeData?.buyer_completed,
           seller_completed: !!tradeData?.seller_completed,
+          status: tradeData?.status,
           buyer_rating: tradeData?.buyer_rating,
           seller_rating: tradeData?.seller_rating,
           buyer_feedback: tradeData?.buyer_feedback,
           seller_feedback: tradeData?.seller_feedback,
+          buyer_completion_outcome: tradeData?.buyer_completion_outcome,
+          seller_completion_outcome: tradeData?.seller_completion_outcome,
+          buyer_completion_confirmed: tradeData?.buyer_completion_confirmed,
+          seller_completion_confirmed: tradeData?.seller_completion_confirmed,
+          requires_outcome_confirmation: tradeData?.requires_outcome_confirmation,
+          outcome_mismatch: tradeData?.outcome_mismatch,
         })
       } catch (error) {
         console.error('Failed to refresh completion status:', error)
+      }
+
+      toast({
+        id: "viewtrademodal-review-submitted",
+        title: needsConfirmation ? 'Confirm final outcome' : completionOutcome === 'did_not_push_through' ? "Trade didn't push through" : 'Review submitted',
+        description: needsConfirmation
+          ? 'Your trade partner selected a different outcome. Please confirm your final decision.'
+          : completionOutcome === 'did_not_push_through'
+          ? 'You met or reviewed the trade, but decided not to continue. No penalty was applied.'
+          : 'Your review has been submitted.',
+        status: needsConfirmation ? 'warning' : completionOutcome === 'did_not_push_through' ? 'info' : 'success',
+      })
+
+      if (!needsConfirmation) {
+        setRating(5)
+        setFeedback('')
+        setProofImage(null)
+        setProofFile(null)
       }
       onStatusUpdate()
     } catch (error: any) {
@@ -1009,18 +1063,13 @@ const ReviewTab: React.FC<ReviewTabProps> = ({
     }
   }
 
-  // Determine if this is a buyout (no items, only cash) vs regular trade
-  const isBuyout = useMemo(() => {
-    return (!trade?.items || trade.items.length === 0) &&
-      (trade?.offered_cash_amount && trade.offered_cash_amount > 0)
-  }, [trade])
-
-  // Get role labels based on transaction type
-  const buyerLabel = isBuyout ? 'Buyer' : 'Trader 1'
-  const sellerLabel = isBuyout ? 'Seller' : 'Trader 2'
-
+  const requiresOutcomeConfirmation = !!completionStatus?.requires_outcome_confirmation
+  const isDidNotPushThrough = completionStatus?.status === 'did_not_push_through'
+  const isUnderReview = completionStatus?.status === 'under_review'
+  const isCompleted = completionStatus?.status === 'completed'
   const userHasCompleted = isUserBuyer ? completionStatus?.buyer_completed : completionStatus?.seller_completed
   const otherPartyCompleted = isUserBuyer ? completionStatus?.seller_completed : completionStatus?.buyer_completed
+  const canSubmitOutcome = !userHasCompleted || requiresOutcomeConfirmation
 
   if (loadingStatus) {
     return <Spinner />
@@ -1034,85 +1083,17 @@ const ReviewTab: React.FC<ReviewTabProps> = ({
         </Center>
       ) : (
         <>
-          {/* Review Status Cards - Compact Layout */}
-          {completionStatus && (
-            <SimpleGrid columns={2} spacing={3}>
-              <Box p={3} bg={completionStatus.buyer_completed ? 'green.50' : 'gray.50'} borderRadius="md" borderWidth="1px" borderColor={borderColor}>
-                <VStack spacing={2}>
-                  <HStack justify="space-between" w="full">
-                    <Text fontWeight="semibold" fontSize="sm">{buyerLabel} Review</Text>
-                    <Icon
-                      as={completionStatus.buyer_completed ? FaCheck : FaClock}
-                      color={completionStatus.buyer_completed ? 'green.500' : 'gray.400'}
-                      boxSize={4}
-                    />
-                  </HStack>
-                  {completionStatus.buyer_rating && (
-                    <HStack spacing={1} w="full" justify="space-between">
-                      <HStack spacing={0.5}>
-                        {[1, 2, 3, 4, 5].map((star) => (
-                          <Icon
-                            key={`buyer-star-${star}`}
-                            as={FaStar}
-                            color={star <= completionStatus.buyer_rating ? 'yellow.400' : 'gray.300'}
-                            boxSize={3}
-                          />
-                        ))}
-                      </HStack>
-                      <Text fontSize="xs" color="gray.600" fontWeight="semibold">
-                        {completionStatus.buyer_rating}/5
-                      </Text>
-                    </HStack>
-                  )}
-                  {completionStatus.buyer_feedback && (
-                    <Text fontSize="xs" color="gray.600" noOfLines={1} fontStyle="italic" w="full">
-                      "{completionStatus.buyer_feedback}"
-                    </Text>
-                  )}
-                </VStack>
-              </Box>
-
-              <Box p={3} bg={completionStatus.seller_completed ? 'green.50' : 'gray.50'} borderRadius="md" borderWidth="1px" borderColor={borderColor}>
-                <VStack spacing={2}>
-                  <HStack justify="space-between" w="full">
-                    <Text fontWeight="semibold" fontSize="sm">{sellerLabel} Review</Text>
-                    <Icon
-                      as={completionStatus.seller_completed ? FaCheck : FaClock}
-                      color={completionStatus.seller_completed ? 'green.500' : 'gray.400'}
-                      boxSize={4}
-                    />
-                  </HStack>
-                  {completionStatus.seller_rating && (
-                    <HStack spacing={1} w="full" justify="space-between">
-                      <HStack spacing={0.5}>
-                        {[1, 2, 3, 4, 5].map((star) => (
-                          <Icon
-                            key={`seller-star-${star}`}
-                            as={FaStar}
-                            color={star <= completionStatus.seller_rating ? 'yellow.400' : 'gray.300'}
-                            boxSize={3}
-                          />
-                        ))}
-                      </HStack>
-                      <Text fontSize="xs" color="gray.600" fontWeight="semibold">
-                        {completionStatus.seller_rating}/5
-                      </Text>
-                    </HStack>
-                  )}
-                  {completionStatus.seller_feedback && (
-                    <Text fontSize="xs" color="gray.600" noOfLines={1} fontStyle="italic" w="full">
-                      "{completionStatus.seller_feedback}"
-                    </Text>
-                  )}
-                </VStack>
-              </Box>
-            </SimpleGrid>
-          )}
-
           {/* Review Form - Only show if current user hasn't completed */}
-          {!userHasCompleted && (
+          {canSubmitOutcome && (
             <Box borderWidth="1px" borderColor="gray.200" bg={meetupInfoBg} p={4} borderRadius="md">
               <VStack spacing={4} align="stretch">
+                {requiresOutcomeConfirmation && (
+                  <Box p={3} bg="orange.50" borderRadius="md" borderWidth="1px" borderColor="orange.200">
+                    <Text fontSize="sm" fontWeight="semibold" color="orange.800">
+                      Your trade partner selected a different outcome. Please confirm your final decision.
+                    </Text>
+                  </Box>
+                )}
                 <Text fontWeight="semibold" fontSize="sm">
                   Your Review
                 </Text>
@@ -1127,7 +1108,10 @@ const ReviewTab: React.FC<ReviewTabProps> = ({
                         as={FaStar}
                         color={star <= rating ? 'yellow.400' : 'gray.300'}
                         cursor="pointer"
-                        onClick={() => setRating(star)}
+                        onClick={() => {
+                          hasEditedReviewRef.current = true
+                          setRating(star)
+                        }}
                         boxSize={6}
                         transition="all 0.1s"
                         _hover={{ transform: 'scale(1.1)' }}
@@ -1145,7 +1129,10 @@ const ReviewTab: React.FC<ReviewTabProps> = ({
                   <Textarea
                     autoFocus
                     value={feedback}
-                    onChange={(e) => setFeedback(e.target.value)}
+                    onChange={(e) => {
+                      hasEditedReviewRef.current = true
+                      setFeedback(e.target.value)
+                    }}
                     placeholder="Share your experience with this trade..."
                     rows={3}
                     fontSize="sm"
@@ -1217,24 +1204,43 @@ const ReviewTab: React.FC<ReviewTabProps> = ({
                   />
                 </FormControl>
 
-                {/* Submit Button */}
+                <Text fontSize="xs" color="gray.600">
+                  After meeting, check each other's items first. If everything looks good, complete the trade. If not, you can mark it as didn't push through and still leave feedback.
+                </Text>
+
                 <Button
                   colorScheme="green"
-                  size="md"
-                  onClick={submitReview}
+                  size="lg"
+                  onClick={() => submitReview('complete')}
                   isLoading={submitting}
                   w="full"
+                  minH="52px"
+                  borderRadius="xl"
+                  position="sticky"
+                  bottom="calc(env(safe-area-inset-bottom, 0px) + 12px)"
+                  zIndex={2}
                   transition="all 0.2s"
                   _hover={{ transform: 'translateY(-2px)', shadow: 'lg' }}
                 >
-                  Leave a Review and Complete Trade
+                  {requiresOutcomeConfirmation ? 'Confirm Complete Trade' : 'Leave a Review and Complete Trade'}
+                </Button>
+                <Button
+                  colorScheme="gray"
+                  variant="outline"
+                  size="md"
+                  onClick={() => submitReview('did_not_push_through')}
+                  isLoading={submitting}
+                  w="full"
+                  borderRadius="xl"
+                >
+                  {requiresOutcomeConfirmation ? "Confirm Didn't Push Through" : "Trade didn't push through"}
                 </Button>
               </VStack>
             </Box>
           )}
 
           {/* Both Completed Message */}
-          {completionStatus?.buyer_completed && completionStatus?.seller_completed && (
+          {isCompleted && (
             <Box p={3} bg="green.50" borderRadius="md" borderWidth="2px" borderColor="green.300" textAlign="center">
               <Icon as={FiCheck} boxSize={6} color="green.500" mb={2} mx="auto" display="block" />
               <Text fontWeight="bold" color="green.700" mb={1} fontSize="sm">
@@ -1246,8 +1252,30 @@ const ReviewTab: React.FC<ReviewTabProps> = ({
             </Box>
           )}
 
+          {isDidNotPushThrough && (
+            <Box p={3} bg="gray.50" borderRadius="md" borderWidth="1px" borderColor="gray.200" textAlign="center">
+              <Text fontWeight="bold" color="gray.700" mb={1} fontSize="sm">
+                Trade didn't push through
+              </Text>
+              <Text fontSize="xs" color="gray.600">
+                You met or reviewed the trade, but decided not to continue. No penalty was applied.
+              </Text>
+            </Box>
+          )}
+
+          {isUnderReview && (
+            <Box p={3} bg="orange.50" borderRadius="md" borderWidth="1px" borderColor="orange.200" textAlign="center">
+              <Text fontWeight="bold" color="orange.700" mb={1} fontSize="sm">
+                Under Review
+              </Text>
+              <Text fontSize="xs" color="orange.600">
+                Outcomes still do not match. The trade is locked for admin review.
+              </Text>
+            </Box>
+          )}
+
           {/* One Party Completed Message */}
-          {userHasCompleted && !otherPartyCompleted && (
+          {userHasCompleted && !otherPartyCompleted && !requiresOutcomeConfirmation && !isDidNotPushThrough && !isUnderReview && !isCompleted && (
             <Box p={4} bg="gray.50" borderRadius="lg" borderWidth="1px" borderColor="gray.200" textAlign="center">
               <Icon as={FaCheckCircle} boxSize={6} color="green.500" mb={2} mx="auto" display="block" />
               <Text fontWeight="semibold" color="gray.700" mb={1}>
@@ -1408,7 +1436,11 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
     return calculateDistanceMeters(userGeoPoint.lat, userGeoPoint.lng, meetupPoint.lat, meetupPoint.lng)
   }, [meetupPoint, userGeoPoint])
 
-  const meetupLocationVerified = !!userGeoPoint && !!meetupPoint && userGeoPoint.accuracy <= MAX_GPS_ACCURACY_M && meetupDistanceM !== null && meetupDistanceM <= MEETUP_CONFIRM_RADIUS_M
+  const baseArrivalRadiusM = trade?.meeting_type === 'pickup' ? PICKUP_CONFIRM_RADIUS_M : MEETUP_CONFIRM_RADIUS_M
+  const arrivalPointLabel = trade?.meeting_type === 'pickup' ? 'pickup point' : 'meetup point'
+  const arrivalEligibility = getArrivalEligibility(meetupDistanceM, userGeoPoint?.accuracy, baseArrivalRadiusM, arrivalPointLabel)
+  const arrivalCircleRadiusM = arrivalEligibility.circleRadiusM
+  const meetupLocationVerified = !!userGeoPoint && !!meetupPoint && arrivalEligibility.canConfirm
   const meetupDisplayLabel = (trade as any)?.meetup_label || trade?.meetup_location || buyerMeetupLocation || sellerMeetupLocation || 'Agreed meetup point'
   const refreshCurrentTrade = useCallback(async () => {
     if (!trade?.id) return
@@ -1428,7 +1460,31 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
   const resolveMeetupPointFromLabel = async () => {
     if (meetupPoint) return meetupPoint
     if (trade?.meeting_type === 'pickup') {
-      setGeoMessage('No pickup location set yet. Ask the owner to add a map pin before you can confirm arrival.')
+      const pickupLabel = String(
+        (trade as any)?.target_product_pickup_address ||
+        requestedProduct?.location ||
+        requestedProduct?.pickup_address ||
+        ''
+      ).trim()
+      if (!pickupLabel) {
+        setGeoMessage('Pickup location not available. The seller needs to set a location for this item.')
+        return null
+      }
+      try {
+        const response = await api.get('/api/places/search', { params: { q: pickupLabel } })
+        const places = response.data?.data || []
+        const first = Array.isArray(places) ? places[0] : null
+        const lat = Number(first?.latitude)
+        const lng = Number(first?.longitude)
+        if (Number.isFinite(lat) && Number.isFinite(lng)) {
+          const point = { lat, lng }
+          setMeetupPoint(point)
+          return point
+        }
+      } catch (error) {
+        console.warn('Failed to resolve pickup location from label:', error)
+      }
+      setGeoMessage('Pickup location not available. The seller needs to set a location for this item.')
       return null
     }
     const label = meetupDisplayLabel === 'Agreed meetup point' ? '' : meetupDisplayLabel.trim()
@@ -1482,14 +1538,9 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
       }
       setUserGeoPoint(point)
       const distance = calculateDistanceMeters(point.lat, point.lng, activeMeetupPoint.lat, activeMeetupPoint.lng)
-      const pointLabel = trade?.meeting_type === 'pickup' ? 'pickup point' : 'meetup point'
-      if (point.accuracy > MAX_GPS_ACCURACY_M) {
-        setGeoMessage('Waiting for a more accurate location...')
-      } else if (distance > MEETUP_CONFIRM_RADIUS_M) {
-        setGeoMessage(getDistanceStatusMessage(distance, pointLabel))
-      } else {
-        setGeoMessage("You're at the location. You can now confirm.")
-      }
+      const pointLabel = trade?.meeting_type === 'pickup' ? "seller's location" : 'meetup point'
+      const baseRadiusM = trade?.meeting_type === 'pickup' ? PICKUP_CONFIRM_RADIUS_M : MEETUP_CONFIRM_RADIUS_M
+      setGeoMessage(getArrivalEligibility(distance, point.accuracy, baseRadiusM, pointLabel).status)
       return point
     } catch (error: any) {
       if (error?.code === 1) {
@@ -1650,20 +1701,20 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
     sellerMeetupTime,
   ])
 
-  // Pickup trade: location is locked to User B's product pickup address.
+  // Pickup trade: location is locked to User B's product location.
   // User A (the buyer/initiator) is the traveler; distance and ETA are always
   // calculated from User A's current location to this product-owner location.
-  // The target product's pickup address is surfaced at the trade level
-  // (target_product_pickup_address). Fall back to a seller trade_item only
-  // if older payloads still carry it there.
-  const pickupLat = Number((trade as any)?.target_product_pickup_latitude ?? requestedProduct?.pickup_latitude)
-  const pickupLng = Number((trade as any)?.target_product_pickup_longitude ?? requestedProduct?.pickup_longitude)
+  // The target product's resolved pickup location is surfaced at the trade
+  // level. Fall back to older item/product payloads when needed.
+  const pickupLat = Number((trade as any)?.target_product_pickup_latitude ?? trade?.meetup_lat ?? requestedProduct?.pickup_latitude)
+  const pickupLng = Number((trade as any)?.target_product_pickup_longitude ?? trade?.meetup_lng ?? requestedProduct?.pickup_longitude)
   const pickupPoint = isPickupTrade && Number.isFinite(pickupLat) && Number.isFinite(pickupLng)
     ? { lat: pickupLat, lng: pickupLng }
     : null
   const pickupAddress =
     trade?.target_product_pickup_address ||
     (trade?.items || []).find((it) => it.offered_by === 'seller')?.product_pickup_address ||
+    requestedProduct?.location ||
     requestedProduct?.pickup_address ||
     ''
   const pickupAddressRevealed = !!trade && !['pending', 'pending_multiway', 'countered'].includes(trade.status)
@@ -1674,7 +1725,9 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
     return parts.slice(1).join(', ')
   }
   const pickupDisplayAddress = pickupAddressRevealed ? pickupAddress : maskToNeighborhood(pickupAddress)
-  const pickupMapMissing = isPickupTrade && !pickupPoint
+  const resolvedPickupPoint = pickupPoint || (isPickupTrade ? meetupPoint : null)
+  const pickupLocationMissing = isPickupTrade && !pickupAddress
+  const pickupMapMissing = isPickupTrade && !resolvedPickupPoint
 
   useEffect(() => {
     if (!isPickupTrade) return
@@ -1683,16 +1736,21 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
       setGeoMessage(null)
     } else {
       setMeetupPoint(null)
-      setGeoMessage('No pickup location set yet. Ask the owner to add a map pin before you can confirm arrival.')
+      if (pickupLocationMissing) {
+        setGeoMessage('Pickup location not available. The seller needs to set a location for this item.')
+      } else {
+        setGeoMessage(null)
+        void resolveMeetupPointFromLabel()
+      }
     }
-  }, [isPickupTrade, pickupPoint?.lat, pickupPoint?.lng])
+  }, [isPickupTrade, pickupPoint?.lat, pickupPoint?.lng, pickupLocationMissing, pickupAddress])
 
-  const pickupTrackingActive = isOpen && isPickupTraveler && meetupAgreed && !bothMetConfirmed && !buyerMetConfirmed && !!pickupPoint && trade?.status !== 'cancelled'
+  const pickupTrackingActive = isOpen && isPickupTraveler && meetupAgreed && !bothMetConfirmed && !buyerMetConfirmed && !!resolvedPickupPoint && trade?.status !== 'cancelled'
 
   useEffect(() => {
-    if (!isOpen || !isPickupTraveler || !meetupAgreed || !pickupPoint || userGeoPoint) return
+    if (!isOpen || !isPickupTraveler || !meetupAgreed || !resolvedPickupPoint || userGeoPoint) return
     void checkMeetupLocation()
-  }, [isOpen, isPickupTraveler, meetupAgreed, pickupPoint?.lat, pickupPoint?.lng, userGeoPoint?.lat, userGeoPoint?.lng])
+  }, [isOpen, isPickupTraveler, meetupAgreed, resolvedPickupPoint?.lat, resolvedPickupPoint?.lng, userGeoPoint?.lat, userGeoPoint?.lng])
 
   useEffect(() => {
     if (!pickupTrackingActive) {
@@ -1719,16 +1777,10 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
         }
         setUserGeoPoint(point)
         setGeoChecking(false)
-        const distance = pickupPoint
-          ? calculateDistanceMeters(point.lat, point.lng, pickupPoint.lat, pickupPoint.lng)
+        const distance = resolvedPickupPoint
+          ? calculateDistanceMeters(point.lat, point.lng, resolvedPickupPoint.lat, resolvedPickupPoint.lng)
           : null
-        if (point.accuracy > MAX_GPS_ACCURACY_M) {
-          setGeoMessage('Waiting for a more accurate location...')
-        } else if (distance !== null && distance <= MEETUP_CONFIRM_RADIUS_M) {
-          setGeoMessage("You're at the location. You can now confirm.")
-        } else if (distance !== null) {
-          setGeoMessage(getDistanceStatusMessage(distance, 'pickup point'))
-        }
+        setGeoMessage(getArrivalEligibility(distance, point.accuracy, PICKUP_CONFIRM_RADIUS_M, "seller's location").status)
       },
       (error) => {
         setGeoChecking(false)
@@ -1744,10 +1796,10 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
         pickupWatchIdRef.current = null
       }
     }
-  }, [pickupTrackingActive, pickupPoint?.lat, pickupPoint?.lng])
+  }, [pickupTrackingActive, resolvedPickupPoint?.lat, resolvedPickupPoint?.lng])
 
   useEffect(() => {
-    if (!isPickupTraveler || !pickupPoint || !userGeoPoint) {
+    if (!isPickupTraveler || !resolvedPickupPoint || !userGeoPoint) {
       setPickupRouteCoords([])
       setPickupRouteMetrics(null)
       setPickupRouteLoading(false)
@@ -1755,11 +1807,11 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
     }
 
     let cancelled = false
-    const fallbackRoute: Array<[number, number]> = [[userGeoPoint.lat, userGeoPoint.lng], [pickupPoint.lat, pickupPoint.lng]]
+    const fallbackRoute: Array<[number, number]> = [[userGeoPoint.lat, userGeoPoint.lng], [resolvedPickupPoint.lat, resolvedPickupPoint.lng]]
     const fetchRoute = async () => {
       setPickupRouteLoading(true)
       try {
-        const url = `https://router.project-osrm.org/route/v1/driving/${userGeoPoint.lng},${userGeoPoint.lat};${pickupPoint.lng},${pickupPoint.lat}?overview=full&geometries=geojson`
+        const url = `https://router.project-osrm.org/route/v1/driving/${userGeoPoint.lng},${userGeoPoint.lat};${resolvedPickupPoint.lng},${resolvedPickupPoint.lat}?overview=full&geometries=geojson`
         const res = await fetch(url)
         const data = await res.json()
         const routeData = data?.routes?.[0]
@@ -1785,11 +1837,11 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
     return () => {
       cancelled = true
     }
-  }, [isPickupTraveler, pickupPoint?.lat, pickupPoint?.lng, userGeoPoint?.lat, userGeoPoint?.lng])
+  }, [isPickupTraveler, resolvedPickupPoint?.lat, resolvedPickupPoint?.lng, userGeoPoint?.lat, userGeoPoint?.lng])
 
-  // Auto-select the pickup address for pickup trades so the existing
+  // Auto-select the pickup location for pickup trades so the existing
   // date/time confirm flow still works without the meetup location picker.
-  // If the seller hasn't set a pickup_address and has no home_address,
+  // If the seller hasn't set a product location,
   // use a descriptive placeholder so the Confirm button can still enable —
   // the parties will coordinate the exact spot via chat.
   const effectivePickupLocation = pickupAddress || "Pickup location (coordinate via chat)"
@@ -1912,7 +1964,7 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
   const currentExactPoint = userGeoPoint ? { lat: userGeoPoint.lat, lng: userGeoPoint.lng } : null
   const currentApproxPoint = approximatePoint(currentExactPoint)
   const trackingCurrentPoint = isPickupTrade ? (isPickupTraveler ? currentExactPoint : null) : currentApproxPoint
-  const meetupTrackingPoint = isPickupTrade ? pickupPoint : meetupPoint
+  const meetupTrackingPoint = isPickupTrade ? resolvedPickupPoint : meetupPoint
   const trackingCenter = meetupTrackingPoint || currentApproxPoint || buyerApproxPoint || sellerApproxPoint || { lat: 6.9214, lng: 122.0790 }
   const trackingRoute = (pickupRouteCoords.length > 1 && isPickupTrade)
     ? pickupRouteCoords
@@ -1938,11 +1990,14 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
     : pickupRouteLoading
       ? 'Calculating distance...'
       : formatTrackingDistance(trackingDistanceM)
+  const trackingSheetFullHeight = useBreakpointValue({ base: '94%', md: '86%', lg: '78%' }) || '94%'
+  const trackingSheetHalfHeight = useBreakpointValue({ base: '55%', md: '44%', lg: '36%' }) || '55%'
+  const trackingSheetCollapsedHeight = useBreakpointValue({ base: '25%', md: '19%', lg: '16%' }) || '25%'
   const trackingSheetHeight = trackingSheetSnap === 'full'
-    ? '94%'
+    ? trackingSheetFullHeight
     : trackingSheetSnap === 'half'
-      ? '55%'
-      : '25%'
+      ? trackingSheetHalfHeight
+      : trackingSheetCollapsedHeight
   const trackingSheetIsFull = trackingSheetSnap === 'full'
   const snapTrackingSheet = (offsetY: number, velocityY: number) => {
     const snaps: Array<'collapsed' | 'half' | 'full'> = ['collapsed', 'half', 'full']
@@ -1961,14 +2016,15 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
   }
 
   const showTrackingActionBar = meetupAgreed && meetupSelectionMatches && !bothMetConfirmed
+  const pickupArrivalMissingMap = pickupMapMissing && !meetupTrackingPoint
   const pickupConfirmDisabled = isPickupTrade
     ? (isPickupTraveler
-      ? buyerMetConfirmed || pickupMapMissing || geoPermissionDenied || !meetupLocationVerified || arrivalWindowState.isTooEarly
-      : sellerMetConfirmed || !buyerMetConfirmed || pickupMapMissing || geoPermissionDenied || !meetupLocationVerified || arrivalWindowState.isTooEarly)
-    : userMetConfirmed || !meetupLocationVerified || arrivalWindowState.isTooEarly
+      ? buyerMetConfirmed || pickupArrivalMissingMap || !meetupLocationVerified || arrivalWindowState.isTooEarly || arrivalWindowState.isExpired
+      : sellerMetConfirmed || !buyerMetConfirmed || arrivalWindowState.isTooEarly || arrivalWindowState.isExpired)
+    : userMetConfirmed || !meetupLocationVerified || arrivalWindowState.isTooEarly || arrivalWindowState.isExpired
   const trackingConfirmLabel = isPickupTrade
     ? (isUserBuyer
-      ? (buyerMetConfirmed ? 'Arrival Confirmed' : 'Confirm Pickup')
+      ? (buyerMetConfirmed ? 'Arrival Confirmed' : 'Confirm Pickup Arrival')
       : (sellerMetConfirmed ? 'Confirmed' : 'Confirm Pickup'))
     : (userMetConfirmed ? 'Confirmed' : 'Confirm Meetup')
 
@@ -2210,14 +2266,14 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
 
   // Polling to keep delivery and trade status in sync while modal is open
   useEffect(() => {
-    if (!isOpen || !trade?.id) return
+    if (!isOpen || isReviewModalOpen || !trade?.id) return
 
     const pollInterval = setInterval(() => {
       void refreshCurrentTrade()
     }, 6000) // Poll every 6 seconds
 
     return () => clearInterval(pollInterval)
-  }, [isOpen, trade?.id, refreshCurrentTrade])
+  }, [isOpen, isReviewModalOpen, trade?.id, refreshCurrentTrade])
 
   // Load delivery state from trade data when trade changes
   useEffect(() => {
@@ -3037,21 +3093,52 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
 
     try {
       setConfirmingMeetupDone(true)
-      let point: { lat: number; lng: number; accuracy: number } | null = null
+      if (trade.meeting_type === 'pickup' && isPickupOwner) {
+        if (!buyerMetConfirmed) {
+          setGeoMessage('Waiting for the picker to arrive.')
+          return
+        }
+        await api.put(`/api/trades/${trade.id}`, {
+          action: 'confirm_meetup_done',
+        })
+        setSellerMetConfirmed(true)
+        toast({
+          id: 'viewtrademodal-pickup-owner-confirmed',
+          title: 'Confirmed',
+          description: 'Pickup confirmed. You can now complete the trade.',
+          status: 'success',
+          duration: 3000,
+        })
+        await fetchMeetupStatus()
+        onStatusUpdate()
+        return
+      }
 
-      point = await checkMeetupLocation()
+      const activeMeetupPoint = meetupPoint || await resolveMeetupPointFromLabel()
+      if (!activeMeetupPoint) return
+
+      const currentEligibility = userGeoPoint
+        ? getArrivalEligibility(
+          calculateDistanceMeters(userGeoPoint.lat, userGeoPoint.lng, activeMeetupPoint.lat, activeMeetupPoint.lng),
+          userGeoPoint.accuracy,
+          trade.meeting_type === 'pickup' ? PICKUP_CONFIRM_RADIUS_M : MEETUP_CONFIRM_RADIUS_M,
+          trade.meeting_type === 'pickup' ? 'pickup point' : 'meetup point'
+        )
+        : null
+      const point = currentEligibility?.canConfirm ? userGeoPoint : await checkMeetupLocation()
       if (!point) return
-      const distance = meetupPoint ? calculateDistanceMeters(point.lat, point.lng, meetupPoint.lat, meetupPoint.lng) : Number.POSITIVE_INFINITY
-      if (!meetupPoint || point.accuracy > MAX_GPS_ACCURACY_M || distance > MEETUP_CONFIRM_RADIUS_M) {
+      const distance = calculateDistanceMeters(point.lat, point.lng, activeMeetupPoint.lat, activeMeetupPoint.lng)
+      const baseRadiusM = trade.meeting_type === 'pickup' ? PICKUP_CONFIRM_RADIUS_M : MEETUP_CONFIRM_RADIUS_M
+      const eligibility = getArrivalEligibility(distance, point.accuracy, baseRadiusM, trade.meeting_type === 'pickup' ? 'pickup point' : 'meetup point')
+      if (!eligibility.canConfirm) {
+        setGeoMessage(eligibility.status)
         return
       }
       await api.put(`/api/trades/${trade.id}`, {
         action: 'confirm_meetup_done',
-        ...(point ? {
-          user_lat: point.lat,
-          user_lng: point.lng,
-          location_accuracy_m: point.accuracy,
-        } : {}),
+        user_lat: point.lat,
+        user_lng: point.lng,
+        location_accuracy_m: point.accuracy,
       })
 
       if (isUserBuyer) {
@@ -4055,11 +4142,11 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
                             <>
                               <Circle
                                 center={[meetupTrackingPoint.lat, meetupTrackingPoint.lng]}
-                                radius={MEETUP_CONFIRM_RADIUS_M}
+                                radius={arrivalCircleRadiusM}
                                 pathOptions={{ color: '#16A34A', fillColor: '#BBF7D0', fillOpacity: 0.28, weight: 3 }}
                               />
                               <Marker position={[meetupTrackingPoint.lat, meetupTrackingPoint.lng]}>
-                                <Popup>{isPickupTrade ? 'Pickup point' : 'Meetup point'}</Popup>
+                                <Popup>{isPickupTrade ? "Pickup Location - Seller's Location" : 'Meetup point'}</Popup>
                               </Marker>
                             </>
                           )}
@@ -4100,14 +4187,14 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
                         <HStack justify="space-between" align="start" spacing={3}>
                           <Box bg="whiteAlpha.950" borderRadius="xl" px={3} py={2} shadow="lg" maxW="70%">
                             <Text fontSize="xs" fontWeight="900" color="gray.500" textTransform="uppercase">
-                              {isPickupTrade ? 'Pickup tracking' : 'Meetup tracking'}
+                              {isPickupTrade ? "Pickup Location - Seller's Location" : 'Meetup tracking'}
                             </Text>
                             <Text fontSize="sm" fontWeight="800" color="gray.800" noOfLines={1}>{meetupDisplayLabel}</Text>
                             <Text fontSize="xs" color="gray.600">
                               {isPickupTrade
                                 ? (isPickupTraveler
                                   ? (!userGeoPoint ? 'Enable location to view ETA and route.' : 'Route from your location to User B.')
-                                  : 'User A travels to this pickup point.')
+                                  : "User A travels to the seller's location.")
                                 : 'Approximate locations only'}
                             </Text>
                           </Box>
@@ -4176,20 +4263,99 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
                               <Text fontSize="xs" color="gray.500" noOfLines={1}>
                                 {geoMessage || (isPickupTrade
                                   ? (isPickupTraveler
-                                    ? (!userGeoPoint ? 'Enable location to view ETA and route.' : 'Confirmation unlocks when you arrive at User B.')
-                                    : 'Waiting for User A to arrive at your pickup location.')
-                                  : 'Meetup confirmation unlocks near the meetup location.')}
+                                    ? 'Confirm your arrival at the pickup location.'
+                                    : buyerMetConfirmed
+                                      ? 'Picker has arrived. You can now confirm.'
+                                      : 'Waiting for the picker to arrive.')
+                                  : 'Confirm when you arrive at the meetup location.')}
                               </Text>
                             </Box>
+                            <IconButton
+                              aria-label="Collapse tracking panel"
+                              icon={<FaTimesCircle />}
+                              size="sm"
+                              variant="ghost"
+                              color="gray.500"
+                              flexShrink={0}
+                              onPointerDown={(event) => event.stopPropagation()}
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                setTrackingSheetSnap('collapsed')
+                              }}
+                            />
                           </HStack>
                         </VStack>
+
+                        {showTrackingActionBar && (
+                          <Box
+                            px={{ base: 3, md: 5 }}
+                            pt={2.5}
+                            pb={{ base: 'calc(env(safe-area-inset-bottom, 0px) + 12px)', md: 3 }}
+                            flexShrink={0}
+                            bg={useColorModeValue('whiteAlpha.950', 'gray.900')}
+                            borderBottomWidth="1px"
+                            borderColor={useColorModeValue('gray.100', 'gray.700')}
+                            shadow="0 10px 28px rgba(15, 23, 42, 0.08)"
+                            position="relative"
+                            zIndex={3}
+                          >
+                            <Text fontSize="xs" color="gray.600" mb={2}>
+                              You can confirm starting 1 hour before the scheduled time. If you are late, you can still confirm, but your trust score may be slightly affected. No-show has a much bigger trust score impact.
+                            </Text>
+                            <Button
+                              colorScheme="green"
+                              size="lg"
+                              onClick={confirmMeetupDone}
+                              isLoading={confirmingMeetupDone || geoChecking}
+                              leftIcon={<FaCheckCircle />}
+                              w="full"
+                              minH="52px"
+                              borderRadius="xl"
+                              isDisabled={pickupConfirmDisabled}
+                            >
+                              {trackingConfirmLabel}
+                            </Button>
+                          </Box>
+                        )}
+
+                        {meetupAgreed && meetupSelectionMatches && bothMetConfirmed && (
+                          <Box
+                            px={{ base: 3, md: 5 }}
+                            pt={2.5}
+                            pb={{ base: 'calc(env(safe-area-inset-bottom, 0px) + 12px)', md: 3 }}
+                            flexShrink={0}
+                            bg={useColorModeValue('whiteAlpha.950', 'gray.900')}
+                            borderBottomWidth="1px"
+                            borderColor={useColorModeValue('gray.100', 'gray.700')}
+                            shadow="0 10px 28px rgba(15, 23, 42, 0.08)"
+                            position="relative"
+                            zIndex={3}
+                          >
+                            <Text fontSize="xs" color="gray.600" mb={2}>
+                              No-show has a much bigger trust score impact.
+                            </Text>
+                            <Button
+                              colorScheme="green"
+                              size="lg"
+                              onClick={handleInstantComplete}
+                              isLoading={completingTrade}
+                              loadingText="Completing..."
+                              leftIcon={<FaCheckCircle />}
+                              w="full"
+                              minH="52px"
+                              borderRadius="xl"
+                            >
+                              Leave a Review and Complete Trade
+                            </Button>
+                          </Box>
+                        )}
 
                         <Box
                           overflowY={trackingSheetIsFull ? 'auto' : 'hidden'}
                           overscrollBehavior="contain"
                           px={{ base: 3, md: 5 }}
                           pt={3}
-                          pb={showTrackingActionBar ? '92px' : 4}
+                          pb={{ base: 'calc(env(safe-area-inset-bottom, 0px) + 16px)', md: 4 }}
                           flex={1}
                           minH={0}
                         >
@@ -4417,7 +4583,7 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
 
                       {/* Meetup Location Selection */}
                       {showMeetupEditor && (isPickupTrade ? (
-                        // Pickup trade: location is locked to the seller's pickup_address.
+                        // Pickup trade: location is locked to the seller's product location.
                         // Before the trade is accepted we mask to the neighborhood only; the
                         // full address reveals once the trade moves to active.
                         <Card variant="outline" borderColor="orange.300" bg="orange.50">
@@ -5127,15 +5293,20 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
                                   const pickupStatusText = bothMetConfirmed || sellerMetConfirmed
                                     ? 'Pickup completed'
                                     : buyerMetConfirmed
-                                      ? (isPickupOwner ? 'User A has arrived. Confirm after handoff.' : 'Arrival confirmed. Meet User B to finish pickup.')
+                                      ? (isPickupOwner ? 'Picker has arrived. You can now confirm.' : 'Arrival confirmed. Meet the owner to finish pickup.')
+                                      : pickupLocationMissing
+                                        ? 'Pickup location not available. The seller needs to set a location for this item.'
                                       : pickupMapMissing
-                                        ? 'No pickup location set yet. Ask the owner to add a map pin before you can confirm arrival.'
+                                        ? 'Resolving the seller location before confirmation.'
                                         : isPickupTraveler
-                                          ? (geoMessage || 'On the way to User B pickup location.')
-                                          : 'Waiting for User A to arrive.'
-                                  const showPoorGpsAccuracy = Boolean(userGeoPoint && userGeoPoint.accuracy > MAX_GPS_ACCURACY_M)
-                                  const pickupMessage = pickupMapMissing
-                                    ? 'No pickup location set yet. Ask the owner to add a map pin before you can confirm arrival.'
+                                          ? (geoMessage || 'Confirm your arrival at the pickup location.')
+                                          : 'Waiting for the picker to arrive.'
+                                  const showPoorGpsAccuracy = Boolean(userGeoPoint && userGeoPoint.accuracy > LOW_GPS_ACCURACY_WARNING_M)
+                                  const pickupArrivalStatusMessage = getArrivalEligibility(meetupDistanceM, userGeoPoint?.accuracy, PICKUP_CONFIRM_RADIUS_M, 'pickup point').status
+                                  const pickupMessage = pickupLocationMissing
+                                    ? 'Pickup location not available. The seller needs to set a location for this item.'
+                                    : pickupMapMissing
+                                      ? 'Resolving the seller location before confirmation.'
                                     : (arrivalWindowState.isTooEarly || userIsPastGrace)
                                       ? arrivalWindowState.message
                                     : isPickupTraveler && (geoPermissionDenied || !userGeoPoint)
@@ -5143,9 +5314,9 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
                                     : pickupTrustWarning
                                       ? pickupTrustWarning
                                       : !pickupWithinRadius && isPickupTraveler
-                                        ? 'Confirmation unlocks when you are at the pickup location.'
+                                        ? pickupArrivalStatusMessage
                                         : isPickupOwner && !buyerMetConfirmed
-                                          ? 'User A confirms arrival when they reach your pickup location.'
+                                          ? 'Waiting for the picker to arrive.'
                                           : null
                                   const pickupMessageColor = pickupMapMissing || geoPermissionDenied
                                     ? 'orange'
@@ -5194,7 +5365,7 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
                                           <HStack justify="space-between" align="center">
                                             <Text fontSize="2xs" fontWeight="900" color="gray.500" textTransform="uppercase">Arrival Status</Text>
                                             <Text fontSize="xs" fontWeight="800" color="gray.700">Stage {pickupStage} of 5</Text>
-                                            {buyerMetConfirmed && <Badge colorScheme="green" borderRadius="full">User B confirmed</Badge>}
+                                            {buyerMetConfirmed && <Badge colorScheme="green" borderRadius="full">Picker arrived</Badge>}
                                           </HStack>
                                           <Progress value={(pickupStage / 5) * 100} colorScheme="green" borderRadius="full" size="sm" />
                                           <Text fontSize="md" fontWeight="900" color={pickupWithinRadius || buyerMetConfirmed ? 'green.800' : 'gray.800'}>{pickupStageLabel}</Text>
@@ -5213,7 +5384,7 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
                                             )}
                                           </HStack>
                                           {!pickupMessage && (
-                                            <Text fontSize="sm" fontWeight="700" color={pickupWithinRadius || buyerMetConfirmed ? 'green.700' : 'gray.700'}>{pickupStatusText}</Text>
+                                            <Text fontSize="sm" fontWeight="700" color={pickupWithinRadius || buyerMetConfirmed ? 'green.700' : 'gray.700'}>{isPickupTraveler ? pickupArrivalStatusMessage : pickupStatusText}</Text>
                                           )}
                                           {pickupMessage && (
                                             <HStack spacing={2} align="start" p={2.5} borderRadius="lg" bg={`${pickupMessageColor}.50`} borderWidth="1px" borderColor={`${pickupMessageColor}.200`}>
@@ -5236,12 +5407,14 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
                                       {showHalfDetails && bothMetConfirmed && (
                                         <Button
                                           colorScheme="green"
-                                          size={["sm", "md"]}
+                                          size="lg"
                                           onClick={handleInstantComplete}
                                           isLoading={completingTrade}
                                           loadingText="Completing..."
                                           leftIcon={<FaCheckCircle />}
                                           w="full"
+                                          minH="52px"
+                                          borderRadius="xl"
                                         >
                                           Leave a Review and Complete Trade
                                         </Button>
@@ -5337,7 +5510,7 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
                                             <MapContainer center={[meetupPoint.lat, meetupPoint.lng]} zoom={17} style={{ height: '100%', width: '100%' }} scrollWheelZoom={false}>
                                               <ModalMapFix />
                                               <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-                                              <Circle center={[meetupPoint.lat, meetupPoint.lng]} radius={MEETUP_CONFIRM_RADIUS_M} pathOptions={{ color: '#16A34A', fillColor: '#BBF7D0', fillOpacity: 0.25 }} />
+                                              <Circle center={[meetupPoint.lat, meetupPoint.lng]} radius={arrivalCircleRadiusM} pathOptions={{ color: '#16A34A', fillColor: '#BBF7D0', fillOpacity: 0.25 }} />
                                               {userGeoPoint && (
                                                 <Polyline positions={[[userGeoPoint.lat, userGeoPoint.lng], [meetupPoint.lat, meetupPoint.lng]]} pathOptions={{ color: '#2563EB', weight: 4, opacity: 0.8 }} />
                                               )}
@@ -5364,7 +5537,7 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
                                               <Badge colorScheme={userIsPastGrace || userWasLate ? 'red' : 'green'} borderRadius="full">
                                                 {formatArrivalCountdown(agreedArrivalDeadline, arrivalClockNow, 'Meetup')}
                                               </Badge>
-                                              {userGeoPoint && userGeoPoint.accuracy > MAX_GPS_ACCURACY_M && (
+                                              {userGeoPoint && userGeoPoint.accuracy > LOW_GPS_ACCURACY_WARNING_M && (
                                                 <Badge colorScheme="orange" borderRadius="full">
                                                   GPS +/-{Math.round(userGeoPoint.accuracy)}m
                                                 </Badge>
@@ -5373,10 +5546,8 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
                                             <Text fontSize="xs" color={meetupLocationVerified ? 'green.700' : 'gray.700'} fontWeight="700">
                                               {arrivalWindowState.isTooEarly || userIsPastGrace
                                                 ? arrivalWindowState.message
-                                                : userGeoPoint?.accuracy && userGeoPoint.accuracy > MAX_GPS_ACCURACY_M
-                                                ? 'Waiting for a more accurate location...'
                                                 : meetupDistanceM !== null
-                                                  ? getDistanceStatusMessage(meetupDistanceM, 'meetup point')
+                                                  ? getArrivalEligibility(meetupDistanceM, userGeoPoint?.accuracy, MEETUP_CONFIRM_RADIUS_M, 'meetup point').status
                                                   : 'Check your GPS location before confirming.'}
                                             </Text>
                                             {userArrivedAt && (
@@ -5402,12 +5573,14 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
                                   ) : (
                                     <Button
                                       colorScheme="green"
-                                      size={["sm", "md"]}
+                                      size="lg"
                                       onClick={handleInstantComplete}
                                       isLoading={completingTrade}
                                       loadingText="Completing..."
                                       leftIcon={<FaCheckCircle />}
                                       w="full"
+                                      minH="52px"
+                                      borderRadius="xl"
                                       transition="all 0.2s"
                                       _hover={{ transform: 'translateY(-2px)', shadow: 'lg' }}
                                     >
@@ -5486,39 +5659,6 @@ const ViewTradeModal: React.FC<ViewTradeModalProps> = ({
                         )}
                           </VStack>
                         </Box>
-                        {showTrackingActionBar && (
-                          <Box
-                            position="absolute"
-                            left={0}
-                            right={0}
-                            bottom={0}
-                            zIndex={5}
-                            px={{ base: 3, md: 5 }}
-                            pt={2.5}
-                            pb="calc(env(safe-area-inset-bottom, 0px) + 12px)"
-                            bg={useColorModeValue('whiteAlpha.950', 'gray.900')}
-                            borderTopWidth="1px"
-                            borderColor={useColorModeValue('gray.100', 'gray.700')}
-                            shadow="0 -10px 28px rgba(15, 23, 42, 0.10)"
-                          >
-                            <Text fontSize="xs" color="gray.600" mb={2}>
-                              You can confirm starting 1 hour before the scheduled time. If you are late, you can still confirm, but your trust score may be slightly affected. No-show has a much bigger trust score impact.
-                            </Text>
-                            <Button
-                              colorScheme="green"
-                              size="lg"
-                              onClick={confirmMeetupDone}
-                              isLoading={confirmingMeetupDone || geoChecking}
-                              leftIcon={<FaCheckCircle />}
-                              w="full"
-                              minH="52px"
-                              borderRadius="xl"
-                              isDisabled={pickupConfirmDisabled}
-                            >
-                              {trackingConfirmLabel}
-                            </Button>
-                          </Box>
-                        )}
                       </MotionBox>
                     </Box>
                   )}

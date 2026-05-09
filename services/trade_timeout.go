@@ -261,12 +261,10 @@ func autoExpireTrade(db *sql.DB, tradeID int) error {
 	// Lock trade and fetch participants and current status
 	var targetProductID, buyerID, sellerID int
 	var currentStatus string
-	var buyerMet, sellerMet bool
 	err = tx.QueryRow(`
-		SELECT target_product_id, buyer_id, seller_id, status,
-		       COALESCE(buyer_met, FALSE), COALESCE(seller_met, FALSE)
+		SELECT target_product_id, buyer_id, seller_id, status
 		FROM trades WHERE id = ? FOR UPDATE
-	`, tradeID).Scan(&targetProductID, &buyerID, &sellerID, &currentStatus, &buyerMet, &sellerMet)
+	`, tradeID).Scan(&targetProductID, &buyerID, &sellerID, &currentStatus)
 	if err != nil {
 		return err
 	}
@@ -319,16 +317,6 @@ func autoExpireTrade(db *sql.DB, tradeID int) error {
 		buyerID, "A trade has expired due to 3 days of inactivity.")
 	_, _ = db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)",
 		sellerID, "A trade has expired due to 3 days of inactivity.")
-	if currentStatus == "active" {
-		if !buyerMet {
-			tradeIDForStrike := tradeID
-			recordNoShowPenalty(db, buyerID, "normal", fmt.Sprintf("trade #%d", tradeID), "buyer", &tradeIDForStrike)
-		}
-		if !sellerMet {
-			tradeIDForStrike := tradeID
-			recordNoShowPenalty(db, sellerID, "normal", fmt.Sprintf("trade #%d", tradeID), "seller", &tradeIDForStrike)
-		}
-	}
 
 	// Record trade event (system action, no actor)
 	_, _ = db.Exec("INSERT INTO trade_events (trade_id, from_status, to_status, note) VALUES (?, ?, 'expired', 'Auto-expired after 3 days of inactivity')",
@@ -536,36 +524,20 @@ func expireOngoingMultiwayChains(db *sql.DB) error {
 	}
 
 	for _, c := range chains {
-		// Cancel the chain
-		_, _ = db.Exec("UPDATE multiway_trades SET status = 'cancelled', cancelled_at = NOW(), updated_at = NOW() WHERE id = ?", c.id)
+		// Expire the chain without treating it as a user cancellation/no-show.
+		_, _ = db.Exec("UPDATE multiway_trades SET status = 'expired', cancelled_at = NOW(), updated_at = NOW() WHERE id = ?", c.id)
 
-		// Cancel any pending legs
-		_, _ = db.Exec("UPDATE multiway_trade_legs SET status = 'cancelled', updated_at = NOW() WHERE chain_id = ? AND status IN ('pending','in_progress')", c.chainID)
+		// Expire any pending legs
+		_, _ = db.Exec("UPDATE multiway_trade_legs SET status = 'expired', updated_at = NOW() WHERE chain_id = ? AND status IN ('pending','in_progress')", c.chainID)
 
-		// Restore the original trade
-		_, _ = db.Exec("UPDATE trades SET status = 'pending', updated_at = NOW() WHERE id = ? AND status IN ('pending_multiway','multiway_active')", c.tradeID)
+		// Move the original trade out of active/ongoing views.
+		_, _ = db.Exec("UPDATE trades SET status = 'expired', updated_at = NOW() WHERE id = ? AND status IN ('pending_multiway','multiway_active')", c.tradeID)
 
 		// Notify all parties
-		msg := "A multi-way trade has expired because not all legs were completed within 7 days. Your items are available again."
+		msg := "A multi-way trade expired because the scheduled time passed. You can report a no-show separately if needed."
 		for _, uid := range c.userIDs {
 			if uid > 0 {
 				_, _ = db.Exec("INSERT INTO notifications (user_id, type, message, is_read) VALUES (?, 'trade_update', ?, FALSE)", uid, msg)
-			}
-		}
-
-		for _, uid := range c.userIDs {
-			var metConfirmed bool
-			err := db.QueryRow(`
-				SELECT COALESCE(met_confirmed, FALSE)
-				FROM trade_loop_meetup_selections
-				WHERE loop_id = ? AND user_id = ?
-			`, c.chainID, uid).Scan(&metConfirmed)
-			if err != nil && err != sql.ErrNoRows {
-				log.Printf("expireOngoingMultiwayChains: failed to check met_confirmed for chain %s user %d: %v", c.chainID, uid, err)
-				continue
-			}
-			if !metConfirmed {
-				recordNoShowPenalty(db, uid, "multiway", fmt.Sprintf("trade loop %s", c.chainID), "participant", nil)
 			}
 		}
 

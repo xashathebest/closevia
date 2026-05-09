@@ -1413,6 +1413,7 @@ func (h *PaymentHandler) SyncTradePayment(c *fiber.Ctx) error {
 		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to update trade payment status"})
 	}
 	_, _ = h.db.Exec("UPDATE trades SET xendit_external_id = ? WHERE id = ?", xExternalID, id)
+	services.TouchTradeActivity(h.db, id)
 
 	// Record earnings once (guard against duplicates)
 	_, _ = h.db.Exec(`
@@ -1581,6 +1582,8 @@ func (h *PaymentHandler) XenditWebhook(c *fiber.Ctx) error {
 		if err = tx.Commit(); err != nil {
 			services.RecordBackendError()
 			services.Logger().Error("xendit webhook trade tx commit failed", "service", "payments", "request_id", requestID, "trade_id", tradeID, "error", err)
+		} else {
+			services.TouchTradeActivity(h.db, tradeID)
 		}
 
 	case strings.HasPrefix(externalID, "premium_"):

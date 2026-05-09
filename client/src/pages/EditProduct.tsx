@@ -82,6 +82,64 @@ const formatEstimatedValueRange = (min?: number, max?: number) => {
   return min === max ? formatter.format(min) : `${formatter.format(min)} - ${formatter.format(max)}`
 }
 
+const editAvailabilityDays = [
+  { value: 'monday', label: 'Mon' },
+  { value: 'tuesday', label: 'Tue' },
+  { value: 'wednesday', label: 'Wed' },
+  { value: 'thursday', label: 'Thu' },
+  { value: 'friday', label: 'Fri' },
+  { value: 'saturday', label: 'Sat' },
+  { value: 'sunday', label: 'Sun' },
+]
+
+const editDayIndexes: Record<string, number> = {
+  sunday: 0,
+  monday: 1,
+  tuesday: 2,
+  wednesday: 3,
+  thursday: 4,
+  friday: 5,
+  saturday: 6,
+}
+
+const formatLocalDateInput = (date = new Date()) => {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+const parseLocalAvailabilityDateTime = (date: string, time: string) => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !/^\d{2}:\d{2}$/.test(time)) return null
+  const [year, month, day] = date.split('-').map(Number)
+  const [hour, minute] = time.split(':').map(Number)
+  const parsed = new Date(year, month - 1, day, hour, minute, 0, 0)
+  return Number.isNaN(parsed.getTime()) ? null : parsed
+}
+
+const buildRecurringEditAvailabilitySlots = (days: string[], start: string, end: string): AvailabilitySlot[] => {
+  const allowed = new Set(days.map(day => editDayIndexes[day]).filter(index => index !== undefined))
+  const slots: AvailabilitySlot[] = []
+  const now = new Date()
+  if (!allowed.size || !start || !end || end <= start) return slots
+  for (let offset = 0; offset < 28; offset += 1) {
+    const date = new Date(now.getFullYear(), now.getMonth(), now.getDate() + offset)
+    if (!allowed.has(date.getDay())) continue
+    const localDate = formatLocalDateInput(date)
+    const windowEnd = parseLocalAvailabilityDateTime(localDate, end)
+    if (!windowEnd || windowEnd <= now) continue
+    slots.push({
+      id: `recurring-${localDate}-${start}-${end}`,
+      date: localDate,
+      start_time: start,
+      end_time: end,
+      mode: 'recurring',
+      weekdays: days,
+    })
+  }
+  return slots
+}
+
 const EditProduct: React.FC = () => {
   const { id } = useParams<{ id: string }>()
   const queryClient = useQueryClient()
@@ -107,6 +165,8 @@ const EditProduct: React.FC = () => {
   const [avNewDate, setAvNewDate] = useState('')
   const [avNewStart, setAvNewStart] = useState('')
   const [avNewEnd, setAvNewEnd] = useState('')
+  const [avMode, setAvMode] = useState<'recurring' | 'specific_date'>('specific_date')
+  const [avRecurringDays, setAvRecurringDays] = useState<string[]>(['saturday', 'sunday'])
 
   const useCurrentLocation = () => {
     if (!navigator.geolocation) {
@@ -243,6 +303,13 @@ const EditProduct: React.FC = () => {
           parsedAvailabilitySlots = JSON.parse(product.availability_slots)
         }
       } catch { /* ignore parse errors */ }
+      const recurringSlot = parsedAvailabilitySlots.find((slot: any) => slot?.mode === 'recurring' && Array.isArray(slot.weekdays))
+      if (recurringSlot) {
+        setAvMode('recurring')
+        setAvRecurringDays((recurringSlot as any).weekdays.filter((day: string) => editDayIndexes[day] !== undefined))
+        setAvNewStart(recurringSlot.start_time || '')
+        setAvNewEnd(recurringSlot.end_time || '')
+      }
 
       setFormData({
         title: product.title || '',
@@ -680,10 +747,13 @@ const EditProduct: React.FC = () => {
                       {(formData.availability_slots || []).map((slot) => {
                         const d = new Date(`${slot.date}T00:00:00`)
                         const dateStr = Number.isNaN(d.getTime()) ? slot.date : d.toLocaleDateString('en-PH', { weekday: 'short', month: 'short', day: 'numeric' })
+                        const recurringDays = (slot as any).mode === 'recurring' && Array.isArray((slot as any).weekdays)
+                          ? (slot as any).weekdays.map((day: string) => editAvailabilityDays.find(option => option.value === day)?.label || day).join(', ')
+                          : ''
                         return (
                           <HStack key={slot.id} p={2} bg="white" borderRadius="md" borderLeft="3px solid" borderLeftColor="teal.400" justify="space-between">
                             <Text fontSize="11px" color="teal.900" fontWeight="600">
-                              {dateStr} - {slot.start_time}-{slot.end_time}
+                              {recurringDays || dateStr} - {slot.start_time}-{slot.end_time}
                             </Text>
                             <IconButton
                               aria-label="Remove slot"
@@ -700,9 +770,58 @@ const EditProduct: React.FC = () => {
                   )}
 
                   <VStack align="stretch" spacing={2} p={2} bg="white" borderRadius="md" borderWidth="1px" borderColor="teal.100">
-                    <Text fontSize="10px" fontWeight="semibold" color="gray.600">Add a time slot</Text>
+                    <HStack justify="space-between" align="start" flexWrap="wrap" gap={2}>
+                      <Box>
+                        <Text fontSize="10px" fontWeight="semibold" color="gray.700">Add availability</Text>
+                        <Text fontSize="9px" color="gray.500">Choose recurring weekly availability or set a specific date.</Text>
+                      </Box>
+                      <HStack spacing={1} p={0.5} bg="gray.50" borderRadius="md" borderWidth="1px" borderColor="gray.100">
+                        <Button size="xs" h="24px" fontSize="10px" colorScheme={avMode === 'recurring' ? 'teal' : 'gray'} variant={avMode === 'recurring' ? 'solid' : 'ghost'} onClick={() => setAvMode('recurring')}>
+                          Recurring Weekly
+                        </Button>
+                        <Button size="xs" h="24px" fontSize="10px" colorScheme={avMode === 'specific_date' ? 'teal' : 'gray'} variant={avMode === 'specific_date' ? 'solid' : 'ghost'} onClick={() => setAvMode('specific_date')}>
+                          Specific Date
+                        </Button>
+                      </HStack>
+                    </HStack>
+                    {avMode === 'recurring' ? (
+                      <>
+                        <Text fontSize="9px" color="gray.500">Recurring weekly availability repeats on selected days.</Text>
+                        <Wrap spacing={1}>
+                          <WrapItem>
+                            <Button size="xs" h="22px" px={2} fontSize="10px" colorScheme="teal" variant="outline" onClick={() => setAvRecurringDays(['saturday', 'sunday'])}>Weekends</Button>
+                          </WrapItem>
+                          <WrapItem>
+                            <Button size="xs" h="22px" px={2} fontSize="10px" colorScheme="teal" variant="outline" onClick={() => setAvRecurringDays(editAvailabilityDays.map(day => day.value))}>All</Button>
+                          </WrapItem>
+                          {editAvailabilityDays.map(day => {
+                            const selected = avRecurringDays.includes(day.value)
+                            return (
+                              <WrapItem key={day.value}>
+                                <Button
+                                  size="xs"
+                                  h="22px"
+                                  minW="34px"
+                                  fontSize="9px"
+                                  colorScheme={selected ? 'teal' : 'gray'}
+                                  variant={selected ? 'solid' : 'outline'}
+                                  onClick={() => setAvRecurringDays(prev => selected ? prev.filter(value => value !== day.value) : [...prev, day.value])}
+                                >
+                                  {day.label}
+                                </Button>
+                              </WrapItem>
+                            )
+                          })}
+                        </Wrap>
+                      </>
+                    ) : (
+                      <Box>
+                        <Text fontSize="9px" color="gray.500" mb={1}>Specific date availability sets one pickup/meetup window.</Text>
+                        <Input type="date" value={avNewDate} onChange={(e) => setAvNewDate(e.target.value)} min={formatLocalDateInput()} size="sm" fontSize="11px" bg="white" />
+                        {!avNewDate && <Text fontSize="9px" color="gray.500" mt={1}>Choose the calendar date buyers can use.</Text>}
+                      </Box>
+                    )}
                     <HStack spacing={1.5} align="center" flexWrap={{ base: 'wrap', sm: 'nowrap' }}>
-                      <Input type="date" value={avNewDate} onChange={(e) => setAvNewDate(e.target.value)} min={new Date().toISOString().split('T')[0]} size="sm" fontSize="11px" bg="white" flex={{ base: '1 1 100%', sm: 1.5 }} />
                       <Input type="time" value={avNewStart} onChange={(e) => setAvNewStart(e.target.value)} size="sm" fontSize="11px" bg="white" flex={1} />
                       <Text fontSize="10px" color="gray.400">to</Text>
                       <Input type="time" value={avNewEnd} onChange={(e) => setAvNewEnd(e.target.value)} size="sm" fontSize="11px" bg="white" flex={1} />
@@ -711,22 +830,42 @@ const EditProduct: React.FC = () => {
                         icon={<AddIcon boxSize={2.5} />}
                         size="sm"
                         colorScheme="teal"
-                        isDisabled={!avNewDate || !avNewStart || !avNewEnd || avNewEnd <= avNewStart}
+                        isDisabled={(avMode === 'specific_date' && !avNewDate) || (avMode === 'recurring' && avRecurringDays.length === 0) || !avNewStart || !avNewEnd || avNewEnd <= avNewStart}
                         onClick={() => {
-                          if (!avNewDate || !avNewStart || !avNewEnd || avNewEnd <= avNewStart) return
-                          const newSlot: AvailabilitySlot = {
-                            id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-                            date: avNewDate,
-                            start_time: avNewStart,
-                            end_time: avNewEnd,
+                          if (!avNewStart || !avNewEnd || avNewEnd <= avNewStart) return
+                          if (avMode === 'specific_date') {
+                            if (!avNewDate) return
+                            const windowEnd = parseLocalAvailabilityDateTime(avNewDate, avNewEnd)
+                            if (!windowEnd || windowEnd <= new Date()) return
+                            const newSlot: AvailabilitySlot = {
+                              id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+                              date: avNewDate,
+                              start_time: avNewStart,
+                              end_time: avNewEnd,
+                              mode: 'specific_date',
+                            }
+                            handleInputChange('availability_slots', [...(formData.availability_slots || []), newSlot])
+                            setAvNewDate('')
+                          } else {
+                            const nextSlots = buildRecurringEditAvailabilitySlots(avRecurringDays, avNewStart, avNewEnd)
+                            if (!nextSlots.length) return
+                            const nonRecurring = (formData.availability_slots || []).filter((slot: any) => slot?.mode !== 'recurring')
+                            handleInputChange('availability_slots', [...nonRecurring, ...nextSlots])
                           }
-                          handleInputChange('availability_slots', [...(formData.availability_slots || []), newSlot])
-                          setAvNewDate('')
                           setAvNewStart('')
                           setAvNewEnd('')
                         }}
                       />
                     </HStack>
+                    {avMode === 'specific_date' && avNewDate && parseLocalAvailabilityDateTime(avNewDate, avNewEnd || avNewStart || '00:00') && parseLocalAvailabilityDateTime(avNewDate, avNewEnd || avNewStart || '00:00')! <= new Date() && (
+                      <Text fontSize="9px" color="red.500">This date/time window has already ended.</Text>
+                    )}
+                    {avMode === 'specific_date' && !avNewDate && (
+                      <Text fontSize="9px" color="red.500">Choose a specific date before adding this availability.</Text>
+                    )}
+                    {avMode === 'recurring' && avRecurringDays.length === 0 && (
+                      <Text fontSize="9px" color="red.500">Choose at least one recurring day.</Text>
+                    )}
                     {avNewEnd && avNewStart && avNewEnd <= avNewStart && (
                       <Text fontSize="9px" color="red.500">End time must be after start time.</Text>
                     )}

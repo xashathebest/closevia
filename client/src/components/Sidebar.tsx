@@ -364,7 +364,12 @@ const Sidebar: React.FC = () => {
                             >
                               <Flex align="center" w="full" gap={4}>
                                 <NavIcon size={22} color={isActive ? 'var(--chakra-colors-brand-500)' : 'var(--chakra-colors-gray-400)'} />
-                                <Text fontSize="md">{item.label}</Text>
+                                <Text fontSize="md" flex={1} textAlign="left">{item.label}</Text>
+                                {item.path === '/notifications' && notificationCount > 0 && (
+                                  <CBadge colorScheme="red" borderRadius="full" px={2} minW="22px" textAlign="center">
+                                    {notificationCount}
+                                  </CBadge>
+                                )}
                               </Flex>
                             </Button>
                           </React.Fragment>

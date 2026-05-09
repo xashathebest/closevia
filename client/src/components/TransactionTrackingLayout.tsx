@@ -180,14 +180,36 @@ const TransactionTrackingLayout: React.FC<TransactionTrackingLayoutProps> = ({
           </HStack>
         </VStack>
 
-        <Box overflowY="auto" px={{ base: 3, md: 5 }} py={4} flex={1}>
+        <Box
+          overflowY="auto"
+          px={{ base: 3, md: 5 }}
+          pt={4}
+          pb={actions && showHalf ? 4 : 'calc(env(safe-area-inset-bottom, 0px) + 16px)'}
+          flex={1}
+          minH={0}
+        >
           <VStack spacing={3} align="stretch">
             {fallbackMessage && <Text fontSize="xs" color="gray.600">{fallbackMessage}</Text>}
             {showHalf && halfContent}
             {showFull && fullContent}
-            {showHalf && actions}
           </VStack>
         </Box>
+
+        {showHalf && actions && (
+          <Box
+            px={{ base: 3, md: 5 }}
+            pt={2.5}
+            pb={{ base: 'calc(env(safe-area-inset-bottom, 0px) + 12px)', md: 4 }}
+            flexShrink={0}
+            bg={sheetBg}
+            borderTopWidth="1px"
+            borderColor="gray.100"
+            shadow="0 -10px 28px rgba(15, 23, 42, 0.08)"
+            zIndex={2}
+          >
+            {actions}
+          </Box>
+        )}
       </MotionBox>
     </Box>
   )

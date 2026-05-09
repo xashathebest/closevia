@@ -204,6 +204,7 @@ const TradeLoopsDisplay: React.FC = () => {
               case 'history': return 'History'
               case 'broken': return 'Broken'
               case 'expired': return 'Expired'
+              case 'archived': return 'Archived due to inactivity'
               case 'cancelled_due_to_conflict': return 'Cancelled by Conflict'
               case 'rejected': return 'Rejected'
               default: return loopStatus
@@ -219,6 +220,7 @@ const TradeLoopsDisplay: React.FC = () => {
               case 'pending_initiator_upgrade': return 'yellow'
               case 'broken':
               case 'expired':
+              case 'archived':
               case 'cancelled':
               case 'cancelled_due_to_conflict':
               case 'rejected': return 'red'

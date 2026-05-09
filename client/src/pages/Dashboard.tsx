@@ -63,7 +63,7 @@ import FloatingTab from '../components/FloatingTab'
 import { api } from '../services/api'
 import { getStoredToken } from '../utils/authStorage'
 import { FaCrown, FaHandshake, FaTimes, FaCheckCircle, FaClock, FaHistory, FaShoppingBag, FaExchangeAlt, FaComments, FaMapMarkerAlt, FaTruck, FaMoneyBillWave, FaArrowUp, FaRegLightbulb, FaRocket, FaCalendarAlt } from 'react-icons/fa'
-import { FiShoppingBag, FiRefreshCw, FiMessageCircle, FiGrid, FiList, FiSend, FiInbox, FiArchive, FiSliders, FiMoreVertical } from 'react-icons/fi'
+import { FiShoppingBag, FiRefreshCw, FiMessageCircle, FiGrid, FiList, FiSend, FiInbox, FiSliders, FiMoreVertical } from 'react-icons/fi'
 import { formatPHP } from '../utils/currency'
 import { getFirstImage, getImageUrl } from '../utils/imageUtils'
 import { getProductUrl } from '../utils/productUtils'
@@ -88,7 +88,6 @@ import {
   useReceivedOffers,
   useOngoingTrades,
   useMultiWayLoops,
-  useArchivedTrades,
   useTradeHistory,
   useInvalidateDashboard,
 } from '../hooks/useDashboard'
@@ -101,7 +100,7 @@ const getDashboardTabIndex = (value: string | null): number | null => {
   if (normalized === 'ongoing' || normalized === 'ongoing-trades' || normalized === 'active') return 1
   if (normalized === 'trade-connect' || normalized === 'matches') return 2
   if (normalized === 'multiway' || normalized === 'multi-way') return 3
-  if (normalized === 'history' || normalized === 'trade-history') return 4
+  if (normalized === 'history' || normalized === 'trade-history' || normalized === 'archive' || normalized === 'archived') return 4
 
   const numeric = parseInt(normalized, 10)
   return Number.isNaN(numeric) ? null : numeric
@@ -111,6 +110,15 @@ const shouldOpenOngoingFromTab = (value: string | null): boolean => {
   if (!value) return false
   const normalized = value.trim().toLowerCase()
   return normalized === 'ongoing' || normalized === 'ongoing-trades' || normalized === 'active'
+}
+
+const getOffersSubTabIndex = (value: string | null): number | null => {
+  if (!value) return null
+  const normalized = value.trim().toLowerCase()
+  if (normalized === 'inbox' || normalized === 'received') return 0
+  if (normalized === 'sent' || normalized === 'sent-offers') return 1
+  if (normalized === 'active' || normalized === 'ongoing' || normalized === 'ongoing-trades' || normalized === 'progress') return 2
+  return null
 }
 
 const Dashboard: React.FC = () => {
@@ -125,27 +133,31 @@ const Dashboard: React.FC = () => {
     return getDashboardTabIndex(new URLSearchParams(window.location.search).get('tab')) ?? 0
   })
   const [offersSubTab, setOffersSubTab] = useState(() => (
-    shouldOpenOngoingFromTab(new URLSearchParams(window.location.search).get('tab')) ? 2 : 0
-  )) // 0: Inbox, 1: Sent, 2: Active, 3: Archive
+    getOffersSubTabIndex(new URLSearchParams(window.location.search).get('offersTab')) ??
+    getOffersSubTabIndex(new URLSearchParams(window.location.search).get('subtab')) ??
+    (shouldOpenOngoingFromTab(new URLSearchParams(window.location.search).get('tab')) ? 2 : 0)
+  )) // 0: Inbox, 1: Sent, 2: Active
 
   const shouldLoadProducts = activeTab === 0
   const shouldLoadOffersTab = activeTab === 1
   const shouldLoadSentOffers = shouldLoadOffersTab
   const shouldLoadReceivedOffers = shouldLoadOffersTab
   const shouldLoadOngoingTrades = shouldLoadOffersTab
-  const shouldLoadArchivedTrades = shouldLoadOffersTab
   const shouldLoadMultiWay = activeTab === 2 || activeTab === 3 || shouldLoadOngoingTrades
   const shouldLoadTradeHistory = activeTab === 4
   const activeOffersRefetchInterval = shouldLoadOffersTab ? 30000 : false
   const activeMultiWayRefetchInterval = shouldLoadMultiWay ? 30000 : false
+  const tradeHistoryPerPage = 6
+  const [tradeHistorySort, setTradeHistorySort] = useState<'newest' | 'oldest'>('newest')
+  const [tradeHistoryPage, setTradeHistoryPage] = useState(1)
 
   // Use React Query hooks for cached data
   const { data: userProducts = [], isLoading: productsLoading, isFetched: productsFetched } = useDashboardProducts(user?.id, { enabled: shouldLoadProducts })
   const actualUserProducts = Array.isArray(userProducts) ? userProducts : []
   const { data: counts = { unread_notifications: 0, pending_offers: 0 }, isFetched: countsFetched } = useDashboardCounts({ refetchInterval: 30000 })
-  const { data: sentOffersData = [], isFetched: sentFetched, isLoading: sentOffersLoading } = useSentOffers({ enabled: shouldLoadSentOffers, refetchInterval: activeOffersRefetchInterval })
-  const { data: receivedOffersData = [], isFetched: receivedFetched, isLoading: receivedOffersLoading } = useReceivedOffers({ enabled: shouldLoadReceivedOffers, refetchInterval: activeOffersRefetchInterval })
-  const { data: ongoingTradesData = [], isFetched: ongoingFetched, isLoading: ongoingTradesLoading } = useOngoingTrades({ enabled: shouldLoadOngoingTrades, refetchInterval: activeOffersRefetchInterval })
+  const { data: sentOffersData = [], isFetched: sentFetched, isLoading: sentOffersLoading, isFetching: sentOffersFetching } = useSentOffers({ enabled: shouldLoadSentOffers, refetchInterval: activeOffersRefetchInterval })
+  const { data: receivedOffersData = [], isFetched: receivedFetched, isLoading: receivedOffersLoading, isFetching: receivedOffersFetching } = useReceivedOffers({ enabled: shouldLoadReceivedOffers, refetchInterval: activeOffersRefetchInterval })
+  const { data: ongoingTradesData = [], isFetched: ongoingFetched, isLoading: ongoingTradesLoading, isFetching: ongoingTradesFetching } = useOngoingTrades({ enabled: shouldLoadOngoingTrades, refetchInterval: activeOffersRefetchInterval })
   const {
     data: multiWayLoopsData,
     isLoading: multiWayLoopsInitialLoading,
@@ -153,8 +165,17 @@ const Dashboard: React.FC = () => {
     isFetching: multiWayLoopsFetching,
     refetch: refetchMultiWayLoops,
   } = useMultiWayLoops(user?.id, { enabled: shouldLoadMultiWay, refetchInterval: activeMultiWayRefetchInterval })
-  const { data: archivedTradesData = [], isFetched: archivedFetched } = useArchivedTrades({ enabled: shouldLoadArchivedTrades })
-  const { data: tradeHistoryData = [], isFetched: historyFetched } = useTradeHistory({ enabled: shouldLoadTradeHistory })
+  const {
+    data: tradeHistoryResult = { items: [], total: 0, page: 1, limit: tradeHistoryPerPage, totalPages: 0 },
+    isFetched: historyFetched,
+    isLoading: historyLoading,
+  } = useTradeHistory({
+    enabled: shouldLoadTradeHistory,
+    page: tradeHistoryPage,
+    limit: tradeHistoryPerPage,
+    sort: tradeHistorySort,
+    refetchInterval: false,
+  })
 
   // Unified initial loading: true until all critical queries have fetched at least once
   // Once set to false, stays false (via ref) so background refetches never re-trigger loading
@@ -171,8 +192,6 @@ const Dashboard: React.FC = () => {
             return sentFetched
           case 2:
             return ongoingFetched && multiWayLoopsFetched
-          case 3:
-            return archivedFetched
           default:
             return true
         }
@@ -189,20 +208,24 @@ const Dashboard: React.FC = () => {
   if (allFetched) hasInitiallyLoaded.current = true
   const initialLoading = !hasInitiallyLoaded.current && !allFetched
 
-  const { invalidateDashboard, invalidateProducts, invalidateOffers, invalidateMultiWay, invalidateHistory, invalidateArchived } = useInvalidateDashboard()
+  const { invalidateDashboard, invalidateProducts, invalidateOffers, invalidateMultiWay, invalidateHistory, invalidateArchived, invalidateCounts } = useInvalidateDashboard()
 
   // Derived state from cached data
   const inventoryProducts = useMemo(
-    () => actualUserProducts.filter(p => p.status !== 'traded' && p.status !== 'sold' && p.status !== 'deleted'),
+    () => actualUserProducts.filter(p => p.status === 'available'),
     [actualUserProducts]
   )
   const hasListedProducts = actualUserProducts.length > 0
 
   // Combined loading states
   const offersLoading =
-    (offersSubTab === 0 && receivedOffersLoading) ||
-    (offersSubTab === 1 && sentOffersLoading) ||
-    (offersSubTab === 2 && (ongoingTradesLoading || multiWayLoopsInitialLoading))
+    (offersSubTab === 0 && receivedOffersLoading && receivedOffersData.length === 0) ||
+    (offersSubTab === 1 && sentOffersLoading && sentOffersData.length === 0) ||
+    (offersSubTab === 2 && (ongoingTradesLoading || multiWayLoopsInitialLoading) && ongoingTradesData.length === 0 && (multiWayLoopsData?.length || 0) === 0)
+  const offersBackgroundRefreshing =
+    (offersSubTab === 0 && receivedOffersFetching && receivedOffersData.length > 0) ||
+    (offersSubTab === 1 && sentOffersFetching && sentOffersData.length > 0) ||
+    (offersSubTab === 2 && ((ongoingTradesFetching && ongoingTradesData.length > 0) || (multiWayLoopsFetching && (multiWayLoopsData?.length || 0) > 0)))
   const [deleteModalOpen, setDeleteModalOpen] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [boosting, setBoosting] = useState(false)
@@ -237,13 +260,14 @@ const Dashboard: React.FC = () => {
   // Offers data from React Query hooks (replacing local state)
   const incoming = receivedOffersData // received offers
   const outgoing = sentOffersData // sent offers
+  const tradeHistoryData = tradeHistoryResult.items
   const tradeHistory = tradeHistoryData
 
   // Loading states from React Query
   const sentLoading = sentOffersLoading
   const receivedLoading = receivedOffersLoading
-  const ongoingLoading = shouldLoadOngoingTrades && (ongoingTradesLoading || multiWayLoopsInitialLoading)
-  const tradeHistoryLoading = shouldLoadTradeHistory && !historyFetched
+  const ongoingLoading = shouldLoadOngoingTrades && (ongoingTradesLoading || multiWayLoopsInitialLoading) && ongoingTradesData.length === 0 && (multiWayLoopsData?.length || 0) === 0
+  const tradeHistoryLoading = shouldLoadTradeHistory && historyLoading && tradeHistoryData.length === 0
   const [offersSort, setOffersSort] = useState<'newest' | 'oldest'>('newest')
   const [offersPage, setOffersPage] = useState(1)
   const [offersSearch, setOffersSearch] = useState('')
@@ -384,7 +408,12 @@ const Dashboard: React.FC = () => {
     if (tabIndex !== null) {
       setActiveTab(tabIndex)
     }
-    if (shouldOpenOngoingFromTab(tabParam)) {
+    const offersSubTabParam = searchParams.get('offersTab') || searchParams.get('subtab')
+    const offersSubTabIndex = getOffersSubTabIndex(offersSubTabParam)
+    if (offersSubTabIndex !== null) {
+      setActiveTab(1)
+      setOffersSubTab(offersSubTabIndex)
+    } else if (shouldOpenOngoingFromTab(tabParam)) {
       setOffersSubTab(2)
     }
   }, [searchParams])
@@ -568,7 +597,7 @@ const Dashboard: React.FC = () => {
   // Get product title helper (needs to be defined before use)
   const getProductTitle = (productId: number, fallbackTitle?: string): string => {
     if (fallbackTitle) return fallbackTitle
-    return productTitles.get(productId) || 'Unnamed Item'
+    return productTitles.get(productId) || 'Item unavailable'
   }
 
   const getSellerRequestedItems = useCallback((trade: Trade) => {
@@ -589,6 +618,10 @@ const Dashboard: React.FC = () => {
   }, [getProductTitle, getRequestedBundleCount])
 
   const getTradeReceivedTitle = useCallback((trade: Trade): string => {
+    const raw = trade as any
+    if (raw.received_title) {
+      return String(raw.received_title)
+    }
     if (trade.items && trade.items.length > 0) {
       return getProductTitle(Number(trade.items[0].product_id), trade.items[0].product_title)
     }
@@ -731,13 +764,6 @@ const Dashboard: React.FC = () => {
     }
   }, [tradeHistoryData])
 
-  useEffect(() => {
-    if (archivedTradesData.length > 0) {
-      cacheProductImages(archivedTradesData)
-      fetchProductTitles(archivedTradesData)
-    }
-  }, [archivedTradesData])
-
   // New optimized function to cache images from trades without additional API calls
   const cacheProductImages = (trades: Trade[]) => {
     trades.forEach(trade => {
@@ -783,7 +809,10 @@ const Dashboard: React.FC = () => {
   // Refresh offers data by invalidating cache (React Query will refetch automatically)
   const refreshOffersData = useCallback(() => {
     invalidateOffers()
-  }, [invalidateOffers])
+    invalidateCounts()
+    invalidateHistory()
+    invalidateArchived()
+  }, [invalidateArchived, invalidateCounts, invalidateHistory, invalidateOffers])
 
   // React Query automatically manages data fetching and caching
   // No need for manual loading state management
@@ -844,7 +873,7 @@ const Dashboard: React.FC = () => {
 
         const finalTitles = new Map(newTitles)
         results.forEach(({ id, title }: any) => {
-          finalTitles.set(id, title || 'Unnamed Item')
+          finalTitles.set(id, title || 'Item unavailable')
         })
         setProductTitles(prev => {
           if (prev.size === finalTitles.size && Array.from(finalTitles.entries()).every(([id, title]) => prev.get(id) === title)) {
@@ -854,11 +883,11 @@ const Dashboard: React.FC = () => {
         })
       } catch (error) {
         console.error('Failed to fetch product titles:', error)
-        // Fallback: use 'Unnamed Item' for all missing titles
+        // Fallback: use a neutral label for missing titles
         const finalTitles = new Map(newTitles)
         titlesToFetch.forEach(id => {
           if (!finalTitles.has(id)) {
-            finalTitles.set(id, 'Unnamed Item')
+            finalTitles.set(id, 'Item unavailable')
           }
         })
         setProductTitles(prev => {
@@ -968,9 +997,9 @@ const Dashboard: React.FC = () => {
     []
   )
   const pendingParticipantStatuses = useMemo(() => new Set(['', 'pending']), [])
-  const rejectedParticipantStatuses = useMemo(() => new Set(['declined', 'rejected', 'cancelled', 'expired']), [])
+  const rejectedParticipantStatuses = useMemo(() => new Set(['declined', 'rejected', 'cancelled', 'expired', 'archived']), [])
   const decisionLoopStatuses = useMemo(() => new Set(['pending', 'partially_accepted', 'accepted', 'accepted_by_one']), [])
-  const closedLoopStatuses = useMemo(() => new Set(['completed', 'history', 'rejected', 'cancelled', 'cancelled_due_to_conflict', 'broken', 'expired']), [])
+  const closedLoopStatuses = useMemo(() => new Set(['completed', 'did_not_push_through', 'history', 'rejected', 'cancelled', 'cancelled_due_to_conflict', 'broken', 'expired', 'archived']), [])
 
   const getParticipantStatus = useCallback((participant: any) => {
     return String(participant?.status || participant?.trade_status || '').toLowerCase()
@@ -1275,16 +1304,29 @@ const Dashboard: React.FC = () => {
     })
     setRefreshCallback('sentOffers', () => {
       invalidateOffers()
+      invalidateCounts()
+      invalidateHistory()
+      invalidateArchived()
     })
     setRefreshCallback('receivedOffers', () => {
       invalidateOffers()
+      invalidateCounts()
+      invalidateHistory()
+      invalidateArchived()
     })
     setRefreshCallback('ongoingTrades', () => {
       invalidateOffers()
+      invalidateCounts()
+      invalidateHistory()
+      invalidateArchived()
       void refreshOpenMultiWayTradeDetails()
     })
     setRefreshCallback('multiway', () => {
       invalidateMultiWay()
+      invalidateOffers()
+      invalidateCounts()
+      invalidateHistory()
+      invalidateArchived()
       void refreshOpenMultiWayTradeDetails()
       if (shouldLoadMultiWay) {
         void fetchMultiWayTrades()
@@ -1293,6 +1335,7 @@ const Dashboard: React.FC = () => {
     setRefreshCallback('history', () => {
       invalidateHistory()
       invalidateArchived()
+      invalidateCounts()
     })
     setRefreshCallback('multiwayAlert', () => {
       multiwayAlertCountRef.current += 1
@@ -1318,7 +1361,7 @@ const Dashboard: React.FC = () => {
         })
       }, 1500)
     })
-  }, [setRefreshCallback, invalidateProducts, invalidateOffers, invalidateMultiWay, invalidateHistory, invalidateArchived, toast, refreshOpenMultiWayTradeDetails, shouldLoadMultiWay])
+  }, [setRefreshCallback, invalidateProducts, invalidateOffers, invalidateMultiWay, invalidateHistory, invalidateArchived, invalidateCounts, toast, refreshOpenMultiWayTradeDetails, shouldLoadMultiWay])
 
   const handleHopIntoDiscoverable = async (trade: any) => {
     const chainId = String(trade?.chain_id || '')
@@ -1493,15 +1536,23 @@ const Dashboard: React.FC = () => {
 
   const updateTrade = useCallback(async (id: number, action: TradeAction) => {
     try {
-      await api.put(`/api/trades/${id}`, action)
+      const response = await api.put(`/api/trades/${id}`, action)
       toast({ id: 'success-offer-updated', title: 'Success', description: 'Offer updated', status: 'success' })
-      // Invalidate cache to refresh data
-      invalidateOffers()
-      invalidateDashboard()
+      await Promise.all([
+        invalidateOffers(),
+        invalidateDashboard(),
+        invalidateCounts(),
+        invalidateMultiWay(),
+        invalidateHistory(),
+        invalidateArchived(),
+        invalidateProducts(),
+      ])
+      return response.data?.data || response.data
     } catch (e: any) {
       toast({ id: 'error-update-offer', title: 'Error', description: e?.response?.data?.error || 'Failed to update offer', status: 'error' })
+      throw e
     }
-  }, [invalidateOffers, invalidateDashboard])
+  }, [invalidateArchived, invalidateCounts, invalidateDashboard, invalidateHistory, invalidateMultiWay, invalidateOffers, invalidateProducts, toast])
 
   const handleCompleteTradeClick = useCallback((trade: Trade) => {
     // Check if meetup is confirmed before allowing completion
@@ -1660,7 +1711,7 @@ const Dashboard: React.FC = () => {
     }
   }
 
-  const historyStatuses = ['declined', 'cancelled', 'completed', 'auto_completed', 'expired']
+  const historyStatuses = ['declined', 'rejected', 'cancelled', 'cancelled_due_to_conflict', 'completed', 'did_not_push_through', 'auto_completed', 'expired', 'broken', 'archived']
 
   const isBuyoutTrade = useCallback((trade: Trade | any) => {
     const hasCash = Number(trade?.offered_cash_amount || 0) > 0
@@ -1707,8 +1758,11 @@ const Dashboard: React.FC = () => {
       countered: 'Countered',
       cancelled: 'Cancelled',
       cancelled_due_to_conflict: 'Cancelled',
-      expired: 'Expired',
+      expired: 'Scheduled time passed',
+      archived: 'Archived due to inactivity',
       completed: 'Completed',
+      did_not_push_through: "Trade didn't push through",
+      under_review: 'Under Review',
       auto_completed: 'Completed',
       failed: 'Failed',
       broken: 'Failed',
@@ -1719,9 +1773,17 @@ const Dashboard: React.FC = () => {
 
   // Computed stats for offers (excluding completed - those go to Trade History)
   const offersStats = useMemo(() => {
-    const receivedBuyout = (incoming || []).filter(t => isBuyoutTrade(t) && (t.status === 'pending' || t.status === 'pending_multiway' || t.status === 'accepted_by_one' || t.status === 'countered')).length
-    const sentPending = (outgoing || []).filter(t => t.status === 'pending' || t.status === 'pending_multiway' || t.status === 'accepted_by_one' || t.status === 'countered').length
-    const receivedPending = (incoming || []).filter(t => t.status === 'pending' || t.status === 'pending_multiway' || t.status === 'accepted_by_one' || t.status === 'countered').length
+    const pendingStatuses = ['pending', 'pending_multiway', 'accepted_by_one', 'countered']
+    const receivedBuyout = (incoming || []).filter(t => isBuyoutTrade(t) && pendingStatuses.includes(t.status)).length
+    const sentPending = (outgoing || []).filter(t => pendingStatuses.includes(t.status)).length
+    // receivedPending = incoming pending + outgoing offers where the other party suggested a time and current user must respond
+    const timeSuggestionNeedsResponse = (outgoing || []).filter(t =>
+      pendingStatuses.includes(t.status) &&
+      t.suggestion_status === 'pending_time_confirmation' &&
+      Boolean(t.suggested_date) &&
+      t.suggested_by_user_id !== user?.id
+    ).length
+    const receivedPending = (incoming || []).filter(t => pendingStatuses.includes(t.status)).length + timeSuggestionNeedsResponse
     const ongoingMultiway = (multiWayTrades || []).filter((t: any) =>
       t?.status === 'active' || t?.status === 'multiway_active' || t?.status === 'confirmed' || t?.status === 'ongoing'
     ).length
@@ -1811,19 +1873,23 @@ const Dashboard: React.FC = () => {
 
   const handleAcceptTrade = useCallback(async (trade: Trade) => {
     try {
-      // Accept the offer, then open Trade Details for both parties
-      await updateTrade(trade.id, { action: 'accept' })
+      const updatedTrade = await updateTrade(trade.id, { action: 'accept' })
+      setActiveTab(1)
+      setOffersSubTab(2)
+      setOffersPage(1)
+      setOffersStatusFilter('all')
 
       let freshTrade: Trade | undefined
       try {
         const res = await api.get(`/api/trades/${trade.id}`)
-        freshTrade = res.data?.data
+        freshTrade = res.data?.data || res.data
       } catch {
         // Non-fatal: fall back to existing trade object
       }
 
-      setSelectedTrade(freshTrade || trade)
+      setSelectedTrade(freshTrade || updatedTrade || { ...trade, status: 'active' })
       setCompletionModalOpen(false)
+      setDetailsOpen(false)
       setViewTradeModalOpen(true)
     } catch {
       // updateTrade already toasts on error
@@ -1831,9 +1897,21 @@ const Dashboard: React.FC = () => {
   }, [updateTrade])
 
   const receivedOffers = useMemo(() => {
-    const active = (incoming || []).filter(t => t.status === 'pending' || t.status === 'pending_multiway' || t.status === 'accepted_by_one' || t.status === 'countered') // Include multiway matches and counter-offers
-    const filtered = filterTrades(active, offersSearch, offersStatusFilter)
-    // Sort inline to avoid extra function call
+    const pendingStatuses = ['pending', 'pending_multiway', 'accepted_by_one', 'countered']
+    const active = (incoming || []).filter(t => pendingStatuses.includes(t.status))
+    // Also include outgoing offers where the other party suggested a new time and current user needs to respond.
+    // These are the buyer's own sent offers where the seller suggested a time — they need inbox placement.
+    const sentNeedingTimeSuggestionResponse = (outgoing || []).filter(t =>
+      pendingStatuses.includes(t.status) &&
+      t.suggestion_status === 'pending_time_confirmation' &&
+      Boolean(t.suggested_date) &&
+      t.suggested_by_user_id !== user?.id
+    )
+    const combined = [...active, ...sentNeedingTimeSuggestionResponse]
+    // Deduplicate by id (shouldn't happen but safety measure)
+    const seen = new Set<number>()
+    const deduped = combined.filter(t => { if (seen.has(t.id)) return false; seen.add(t.id); return true })
+    const filtered = filterTrades(deduped, offersSearch, offersStatusFilter)
     if (filtered.length > 1) {
       filtered.sort((a, b) => {
         const at = new Date(a.created_at).getTime()
@@ -1842,7 +1920,7 @@ const Dashboard: React.FC = () => {
       })
     }
     return filtered
-  }, [incoming, offersSearch, offersStatusFilter, offersSort, filterTrades])
+  }, [incoming, outgoing, user, offersSearch, offersStatusFilter, offersSort, filterTrades])
 
 
   const ongoingTrades = useMemo(() => {
@@ -1862,18 +1940,6 @@ const Dashboard: React.FC = () => {
     }
     return filtered
   }, [ongoingTradesData, multiWayTrades, offersSearch, offersStatusFilter, offersSort, filterTrades])
-
-  const archivedOffers = useMemo(() => {
-    const filtered = filterTrades(archivedTradesData || [], offersSearch, offersStatusFilter)
-    if (filtered.length > 1) {
-      filtered.sort((a, b) => {
-        const at = new Date(a.updated_at || a.created_at).getTime()
-        const bt = new Date(b.updated_at || b.created_at).getTime()
-        return offersSort === 'newest' ? bt - at : at - bt
-      })
-    }
-    return filtered
-  }, [archivedTradesData, offersSearch, offersStatusFilter, offersSort, filterTrades])
 
   // Accepted multiway trades that should appear in the ongoing trades section.
   // Show trades once ALL participants have accepted:
@@ -1905,6 +1971,17 @@ const Dashboard: React.FC = () => {
     return offersTypeFilter === 'buyout' ? [] : ongoingMultiWayTrades
   }, [offersTypeFilter, ongoingMultiWayTrades])
 
+  const activeOfferItems = useMemo(() => {
+    return [
+      ...ongoingTrades.map(trade => ({ kind: 'trade' as const, key: `trade-${trade.id}`, trade })),
+      ...visibleOngoingMultiWayTrades.map((trade: any, index: number) => ({
+        kind: 'multiway' as const,
+        key: `multiway-${trade?.chain_id || trade?.loop_id || trade?.id || index}`,
+        trade,
+      })),
+    ]
+  }, [ongoingTrades, visibleOngoingMultiWayTrades])
+
   // Unified search handler - clears tab-specific searches when unified search is used
   const handleUnifiedSearchChange = (value: string) => {
     setUnifiedSearch(value)
@@ -1918,8 +1995,6 @@ const Dashboard: React.FC = () => {
 
   // Trade History: All completed trades
   const [tradeHistorySearch, setTradeHistorySearch] = useState('')
-  const [tradeHistorySort, setTradeHistorySort] = useState<'newest' | 'oldest'>('newest')
-  const [tradeHistoryPage, setTradeHistoryPage] = useState(1)
   const [multiwayDetailsTrade, setMultiwayDetailsTrade] = useState<Trade | null>(null)
 
   const isMultiwayHistoryTrade = useCallback((trade: Trade) => {
@@ -1950,11 +2025,16 @@ const Dashboard: React.FC = () => {
     const statusRaw = String(raw.loop_status || trade.status || '').toLowerCase()
     const statusLabel = statusRaw === 'completed' || statusRaw === 'history' || trade.status === 'completed'
       ? 'Completed'
-      : statusRaw === 'cancelled' || statusRaw === 'cancelled_due_to_conflict'
-        ? 'Cancelled'
-        : statusRaw === 'broken' || statusRaw === 'expired' || trade.status === 'expired'
-          ? 'Failed'
+      : statusRaw === 'did_not_push_through' || trade.status === 'did_not_push_through'
+        ? 'Did Not Push Through'
+        : ['cancelled', 'cancelled_due_to_conflict', 'broken', 'expired', 'archived', 'rejected', 'user3_declined', 'failed'].includes(statusRaw) || trade.status === 'expired' || trade.status === 'archived'
+          ? 'Not Completed'
           : getTradeStatusLabel(trade)
+    const statusHelper = statusLabel === 'Completed'
+      ? 'All users successfully exchanged items.'
+      : statusLabel === 'Did Not Push Through'
+        ? 'Users reached the final stage but decided not to continue. No penalty was applied.'
+        : 'Cycle did not complete. No exchange was finalized.'
     const loopCount = Number(raw.loop_length || raw.participant_count || participants.length || 3)
     return {
       participants,
@@ -1963,6 +2043,7 @@ const Dashboard: React.FC = () => {
       gave,
       received,
       statusLabel,
+      statusHelper,
       loopCount,
       where: getTradeWhere(trade),
       when: getTradeWhen(trade),
@@ -1973,7 +2054,7 @@ const Dashboard: React.FC = () => {
 
   const MultiwayHistorySummaryCard = ({ trade, compact = false }: { trade: Trade; compact?: boolean }) => {
     const summary = getMultiwaySummary(trade)
-    const statusScheme = summary.statusLabel === 'Completed' ? 'green' : summary.statusLabel === 'Cancelled' ? 'orange' : 'red'
+    const statusScheme = summary.statusLabel === 'Completed' ? 'green' : summary.statusLabel === 'Did Not Push Through' ? 'blue' : 'gray'
     const completedDate = new Date(summary.completedAt)
     const niceCompleted = Number.isNaN(completedDate.getTime())
       ? summary.when.date
@@ -2068,11 +2149,7 @@ const Dashboard: React.FC = () => {
               {summary.when.date} {summary.when.time || ''}
             </Text>
             <Text fontSize="xs" color="gray.500" noOfLines={2} display={{ base: 'none', lg: compact ? 'none' : 'block' }} maxW="220px">
-              {summary.statusLabel === 'Completed'
-                ? 'Loop closed for everyone.'
-                : summary.statusLabel === 'Cancelled'
-                  ? 'Loop stopped before completion.'
-                  : 'Review the last known chain.'}
+              {summary.statusHelper}
             </Text>
             <Button
               size={{ base: 'xs', md: 'sm' }}
@@ -2084,6 +2161,143 @@ const Dashboard: React.FC = () => {
               px={3}
               rightIcon={<ChevronRightIcon boxSize={3} />}
               onClick={() => setMultiwayDetailsTrade(trade)}
+              flexShrink={0}
+            >
+              View
+            </Button>
+          </HStack>
+        </Stack>
+      </Box>
+    )
+  }
+
+  const HistoryTradeCard = ({ trade, compact = false }: { trade: Trade; compact?: boolean }) => {
+    const isMultiway = isMultiwayHistoryTrade(trade)
+    const multiwaySummary = isMultiway ? getMultiwaySummary(trade) : null
+    const partner = getTradePartnerInfo(trade)
+    const where = multiwaySummary?.where || getTradeWhere(trade)
+    const when = multiwaySummary?.when || getTradeWhen(trade)
+    const rawStatus = String((trade as any).loop_status || trade.status || '').toLowerCase()
+    const statusLabel = rawStatus === 'did_not_push_through'
+      ? 'Did Not Push Through'
+      : multiwaySummary?.statusLabel || getTradeStatusLabel(trade)
+    const statusScheme = statusLabel === 'Completed'
+      ? 'green'
+      : statusLabel === 'Did Not Push Through'
+      ? 'blue'
+      : 'gray'
+    const itemTitle = multiwaySummary?.gave || getProductTitle(trade.target_product_id, trade.product_title)
+    const receivedTitle = multiwaySummary?.received || getTradeReceivedTitle(trade)
+    const participants = multiwaySummary?.participants || []
+    const participantNames = participants
+      .map((p: any) => Number(p?.user_id ?? p?.id) === Number(user?.id || 0) ? 'You' : (p?.user_name || p?.name || 'Trader'))
+      .filter(Boolean)
+    const who = isMultiway
+      ? (participantNames.length > 0
+        ? participantNames.slice(0, 3).join(', ') + (participantNames.length > 3 ? ` +${participantNames.length - 3}` : '')
+        : `${multiwaySummary?.loopCount || 3} traders`)
+      : partner.name
+    const completedDate = new Date(trade.completed_at || trade.updated_at || trade.created_at)
+    const niceDate = Number.isNaN(completedDate.getTime())
+      ? when.date
+      : completedDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+    const productId = Number(multiwaySummary?.current?.product_id || trade.target_product_id || 0)
+    const productImage = multiwaySummary?.current ? (resolveParticipantImage(multiwaySummary.current) || trade.product_image_url) : trade.product_image_url
+    const multiwayTag = isMultiway ? `Multiway • ${multiwaySummary?.loopCount || participants.length || 3}-way` : ''
+    const openTrade = () => {
+      if (isMultiway) {
+        setMultiwayDetailsTrade(trade)
+      } else {
+        setSelectedTrade(trade)
+        setDetailsOpen(true)
+      }
+    }
+
+    return (
+      <Box
+        bg="white"
+        borderWidth="1px"
+        borderColor="gray.100"
+        borderRadius="2xl"
+        p={{ base: 4, md: compact ? 3 : 4 }}
+        boxShadow="0 1px 4px rgba(0,0,0,0.05)"
+        cursor="pointer"
+        _hover={{ boxShadow: '0 3px 10px rgba(0,0,0,0.09)' }}
+        transition="box-shadow 0.15s"
+        onClick={openTrade}
+      >
+        <Stack direction={{ base: 'column', md: 'row' }} spacing={3} align={{ base: 'stretch', md: 'center' }}>
+          <HStack spacing={3} align="flex-start" flex={1} minW={0}>
+            <Box w={{ base: '56px', md: compact ? '52px' : '60px' }} h={{ base: '56px', md: compact ? '52px' : '60px' }} flexShrink={0} borderRadius="lg" overflow="hidden" bg="gray.100">
+              {productId > 0 ? (
+                <ProductThumb pid={productId} src={productImage} alt={itemTitle} size="100%" />
+              ) : (
+                <Center w="100%" h="100%">
+                  <Icon as={FaHandshake} color="gray.300" boxSize={5} />
+                </Center>
+              )}
+            </Box>
+
+            <Box flex={1} minW={0}>
+              <HStack justify="space-between" align="flex-start" spacing={3}>
+                <Box minW={0} flex={1}>
+                  <HStack spacing={1.5} mb={1} flexWrap="wrap">
+                    <Badge colorScheme={statusScheme} variant="subtle" fontSize="10px" px={2} py={0.5} borderRadius="md" textTransform="none">
+                      {statusLabel}
+                    </Badge>
+                    {multiwayTag && (
+                      <Badge colorScheme="gray" variant="outline" fontSize="10px" px={2} py={0.5} borderRadius="md" textTransform="none">
+                        {multiwayTag}
+                      </Badge>
+                    )}
+                  </HStack>
+                  <Text fontWeight="700" fontSize={{ base: 'sm', md: compact ? 'sm' : 'md' }} color="gray.800" noOfLines={1}>
+                    {itemTitle || 'Item unavailable'}
+                  </Text>
+                  <Text fontSize="xs" color="gray.500" noOfLines={1} mt={0.5}>
+                    Received:{' '}
+                    <Text as="span" color="gray.700" fontWeight="500">{receivedTitle || 'Item unavailable'}</Text>
+                  </Text>
+                </Box>
+                <VStack spacing={0} align="flex-end" flexShrink={0} display={{ base: 'flex', md: compact ? 'none' : 'flex' }}>
+                  <Text fontSize="10px" color="gray.400" fontWeight="500" whiteSpace="nowrap">{niceDate}</Text>
+                  <Text fontSize="10px" color="gray.400">{when.time || '-'}</Text>
+                </VStack>
+              </HStack>
+
+              <HStack spacing={0} mt={2} flexWrap="wrap" gap={1}>
+                <Text fontSize="11px" color="gray.600" noOfLines={1}>
+                  <Text as="span" fontWeight="600" color="gray.500">Who:</Text>{' '}{who}
+                </Text>
+                <Text fontSize="11px" color="gray.300" px={1.5}>•</Text>
+                <Text fontSize="11px" color="gray.600" noOfLines={1} maxW={{ base: '52%', md: compact ? '220px' : '260px' }}>
+                  <Text as="span" fontWeight="600" color="gray.500">Where:</Text>{' '}{where}
+                </Text>
+                <Text fontSize="11px" color="gray.300" px={1.5} display={{ base: 'none', md: 'inline' }}>•</Text>
+                <Text fontSize="11px" color="gray.600" noOfLines={1} display={{ base: 'none', md: 'block' }}>
+                  <Text as="span" fontWeight="600" color="gray.500">When:</Text>{' '}{when.date} {when.time || ''}
+                </Text>
+              </HStack>
+            </Box>
+          </HStack>
+
+          <HStack justify="space-between" align="center" flexShrink={0}>
+            <Text fontSize="xs" color="gray.500" noOfLines={1} display={{ base: 'none', md: compact ? 'block' : 'none' }}>
+              {when.date} {when.time || ''}
+            </Text>
+            <Button
+              size={{ base: 'xs', md: 'sm' }}
+              variant={{ base: 'ghost', md: 'outline' }}
+              colorScheme={{ base: 'gray', md: 'brand' } as any}
+              color={{ base: 'gray.500', md: undefined }}
+              fontSize={{ base: '12px', md: 'sm' }}
+              fontWeight="600"
+              px={3}
+              rightIcon={<ChevronRightIcon boxSize={3} />}
+              onClick={(event) => {
+                event.stopPropagation()
+                openTrade()
+              }}
               flexShrink={0}
             >
               View
@@ -2116,12 +2330,29 @@ const Dashboard: React.FC = () => {
     return filtered
   }, [tradeHistory, unifiedSearch, tradeHistorySearch, tradeHistorySort, applyUnifiedSearch])
 
-  const tradeHistoryPerPage = 6
-  const tradeHistoryTotalPages = Math.ceil(allCompletedTrades.length / tradeHistoryPerPage)
+  const isTradeHistoryClientFiltered = Boolean((unifiedSearch || tradeHistorySearch).trim())
+  const tradeHistoryItemsCount = isTradeHistoryClientFiltered ? allCompletedTrades.length : tradeHistoryResult.total
+  const tradeHistoryTotalPages = isTradeHistoryClientFiltered
+    ? Math.ceil(allCompletedTrades.length / tradeHistoryPerPage)
+    : tradeHistoryResult.totalPages
   const paginatedTradeHistory = useMemo(() => {
+    if (!isTradeHistoryClientFiltered) {
+      return allCompletedTrades
+    }
     const start = (tradeHistoryPage - 1) * tradeHistoryPerPage
     return allCompletedTrades.slice(start, start + tradeHistoryPerPage)
-  }, [allCompletedTrades, tradeHistoryPage])
+  }, [allCompletedTrades, isTradeHistoryClientFiltered, tradeHistoryPage, tradeHistoryPerPage])
+
+  useEffect(() => {
+    setTradeHistoryPage(1)
+  }, [tradeHistorySearch, tradeHistorySort, unifiedSearch])
+
+  useEffect(() => {
+    const safeTotalPages = Math.max(1, tradeHistoryTotalPages)
+    if (tradeHistoryPage > safeTotalPages) {
+      setTradeHistoryPage(safeTotalPages)
+    }
+  }, [tradeHistoryPage, tradeHistoryTotalPages])
 
   // Get current tab's trades (memoized to prevent unnecessary recalculations)
   const currentTabTrades = useMemo(() => {
@@ -2133,7 +2364,9 @@ const Dashboard: React.FC = () => {
     }
   }, [offersSubTab, sentOffers, receivedOffers, ongoingTrades])
   const offersPerPage = 9
-  const totalPages = Math.ceil(currentTabTrades.length / offersPerPage)
+  const activeOffersCount = activeOfferItems.length
+  const currentOffersItemCount = offersSubTab === 2 ? activeOffersCount : currentTabTrades.length
+  const totalPages = Math.ceil(currentOffersItemCount / offersPerPage)
   useEffect(() => {
     const safeTotalPages = Math.max(1, totalPages)
     if (offersPage > safeTotalPages) {
@@ -2144,6 +2377,10 @@ const Dashboard: React.FC = () => {
     const start = (offersPage - 1) * offersPerPage
     return currentTabTrades.slice(start, start + offersPerPage)
   }, [currentTabTrades, offersPage])
+  const paginatedActiveOfferItems = useMemo(() => {
+    const start = (offersPage - 1) * offersPerPage
+    return activeOfferItems.slice(start, start + offersPerPage)
+  }, [activeOfferItems, offersPage])
 
   const handleImageZoom = (e: React.MouseEvent, url: string, alt: string) => {
     e.stopPropagation()
@@ -2163,6 +2400,7 @@ const Dashboard: React.FC = () => {
       'cancelled_due_to_conflict': { color: 'gray', icon: '?' },
       'countered': { color: 'purple', icon: '??' },
       'expired': { color: 'gray', icon: '?' },
+      'archived': { color: 'teal', icon: '?' },
       'completed': { color: 'green', icon: '?' },
       'active': { color: 'blue', icon: '??' }
     }
@@ -2175,6 +2413,7 @@ const Dashboard: React.FC = () => {
     if (status === 'pending_multiway') statusText = 'Multiway Connect'
     if (status === 'accepted_by_one') statusText = 'Waiting for other user'
     if (status === 'cancelled_due_to_conflict') statusText = 'Cancelled due to conflict'
+    if (status === 'archived') statusText = 'Archived due to inactivity'
     return (
       <Badge
         colorScheme={color}
@@ -2566,22 +2805,93 @@ const Dashboard: React.FC = () => {
     currentPage,
     totalPages,
     onPageChange,
-    itemsCount
+    itemsCount,
+    pageSize = itemsPerPage,
   }: {
     currentPage: number
     totalPages: number
     onPageChange: (page: number) => void
     itemsCount: number
+    pageSize?: number
   }) => {
-    if (itemsCount <= itemsPerPage) return null
+    if (itemsCount <= pageSize || totalPages <= 1) return null
+
+    const safeTotalPages = Math.max(1, totalPages)
+    const getVisiblePages = () => {
+      if (safeTotalPages <= 7) {
+        return Array.from({ length: safeTotalPages }, (_, i) => i + 1)
+      }
+      const pages: Array<number | 'ellipsis-left' | 'ellipsis-right'> = [1]
+      if (currentPage > 4) {
+        pages.push('ellipsis-left')
+      }
+      const start = Math.max(2, currentPage - 1)
+      const end = Math.min(safeTotalPages - 1, currentPage + 1)
+      for (let page = start; page <= end; page += 1) {
+        pages.push(page)
+      }
+      if (currentPage < safeTotalPages - 3) {
+        pages.push('ellipsis-right')
+      }
+      pages.push(safeTotalPages)
+      return pages
+    }
 
     return (
-      <HStack spacing={2} justify="center" mt={6}>
+      <Stack spacing={3} align="center" justify="center" mt={6} w="full">
+        <HStack
+          display={{ base: 'flex', md: 'none' }}
+          spacing={2}
+          justify="center"
+          w="full"
+          maxW="360px"
+          mx="auto"
+        >
+          <Button
+            size="md"
+            variant="outline"
+            leftIcon={<ChevronLeftIcon />}
+            onClick={() => onPageChange(Math.max(1, currentPage - 1))}
+            isDisabled={currentPage === 1}
+            minH="44px"
+            minW="104px"
+            px={3}
+            _hover={{ bg: 'gray.50' }}
+          >
+            Previous
+          </Button>
+          <Text
+            fontSize="sm"
+            color="gray.600"
+            fontWeight="600"
+            textAlign="center"
+            flex="1"
+            minW={0}
+            whiteSpace="nowrap"
+          >
+            Page {currentPage} of {safeTotalPages}
+          </Text>
+          <Button
+            size="md"
+            variant="outline"
+            rightIcon={<ChevronRightIcon />}
+            onClick={() => onPageChange(Math.min(safeTotalPages, currentPage + 1))}
+            isDisabled={currentPage === safeTotalPages}
+            minH="44px"
+            minW="84px"
+            px={3}
+            _hover={{ bg: 'gray.50' }}
+          >
+            Next
+          </Button>
+        </HStack>
+
+        <HStack spacing={2} justify="center" display={{ base: 'none', md: 'flex' }}>
         <Button
           size="sm"
           variant="outline"
           leftIcon={<ChevronLeftIcon />}
-          onClick={() => onPageChange(currentPage - 1)}
+          onClick={() => onPageChange(Math.max(1, currentPage - 1))}
           isDisabled={currentPage === 1}
           _hover={{ bg: 'gray.50' }}
         >
@@ -2589,18 +2899,24 @@ const Dashboard: React.FC = () => {
         </Button>
 
         <HStack spacing={1}>
-          {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => (
-            <Button
-              key={page}
-              size="sm"
-              variant={page === currentPage ? 'solid' : 'outline'}
-              colorScheme={page === currentPage ? 'brand' : 'gray'}
-              onClick={() => onPageChange(page)}
-              minW="40px"
-              _hover={{ bg: page === currentPage ? 'brand.600' : 'gray.50' }}
-            >
-              {page}
-            </Button>
+          {getVisiblePages().map((page) => (
+            typeof page === 'number' ? (
+              <Button
+                key={page}
+                size="sm"
+                variant={page === currentPage ? 'solid' : 'outline'}
+                colorScheme={page === currentPage ? 'brand' : 'gray'}
+                onClick={() => onPageChange(page)}
+                minW="40px"
+                _hover={{ bg: page === currentPage ? 'brand.600' : 'gray.50' }}
+              >
+                {page}
+              </Button>
+            ) : (
+              <Text key={page} color="gray.400" px={1} fontSize="sm" aria-hidden>
+                ...
+              </Text>
+            )
           ))}
         </HStack>
 
@@ -2608,13 +2924,14 @@ const Dashboard: React.FC = () => {
           size="sm"
           variant="outline"
           rightIcon={<ChevronRightIcon />}
-          onClick={() => onPageChange(currentPage + 1)}
-          isDisabled={currentPage === totalPages}
+          onClick={() => onPageChange(Math.min(safeTotalPages, currentPage + 1))}
+          isDisabled={currentPage === safeTotalPages}
           _hover={{ bg: 'gray.50' }}
         >
           Next
         </Button>
       </HStack>
+      </Stack>
     )
   }
 
@@ -4070,40 +4387,12 @@ const Dashboard: React.FC = () => {
     )
   }
 
-  if (loading || initialLoading) {
+  if (loading) {
     return (
       <Box bg="#FFFDF1" minH="100vh" w="100%">
-        <Container maxW="container.xl" py={{ base: 3, md: 8 }} px={{ base: 3, md: 6 }}>
-          <VStack spacing={{ base: 3, md: 6 }} align="stretch">
-            <Box>
-              <Skeleton height="28px" width="220px" mb={2} />
-              <Skeleton height="16px" width="280px" />
-            </Box>
-
-            <HStack spacing={3}>
-              <Skeleton height="42px" flex={1} borderRadius="md" />
-              <Skeleton height="42px" width="96px" borderRadius="md" />
-            </HStack>
-
-            <SimpleGrid columns={{ base: 1, md: 2, lg: 4 }} spacing={4}>
-              {[1, 2, 3, 4].map((n) => (
-                <Card key={n} bg={cardBg} border="1px" borderColor={borderColor} borderRadius="xl">
-                  <CardBody>
-                    <Skeleton height="18px" width="70%" mb={3} />
-                    <Skeleton height="24px" width="50%" mb={2} />
-                    <Skeleton height="14px" width="60%" />
-                  </CardBody>
-                </Card>
-              ))}
-            </SimpleGrid>
-
-            <SimpleGrid columns={{ base: 1, sm: 2, xl: 3 }} spacing={{ base: 3, md: 4 }}>
-              {[1, 2, 3, 4, 5, 6].map((n) => (
-                <ProductCardSkeleton key={n} />
-              ))}
-            </SimpleGrid>
-          </VStack>
-        </Container>
+        <Center minH="60vh">
+          <Spinner color="brand.500" />
+        </Center>
         <FloatingTab showAddButton={false} />
       </Box>
     )
@@ -5081,32 +5370,13 @@ const Dashboard: React.FC = () => {
                             <Box display={{ base: 'none', md: 'inline' }}>Active</Box>
                             <Box display={{ base: 'inline', md: 'none' }}>Active</Box>
                           </HStack>
-                          {(ongoingTrades.length + visibleOngoingMultiWayTrades.length) > 0 && (
+                          {activeOffersCount > 0 && (
                             <Badge ml={2} colorScheme="green" borderRadius="full" fontSize="xs">
-                              {ongoingTrades.length + visibleOngoingMultiWayTrades.length}
+                              {activeOffersCount}
                             </Badge>
                           )}
-                          {(ongoingTrades.length + visibleOngoingMultiWayTrades.length) > 0 && (
+                          {activeOffersCount > 0 && (
                             <Badge ml={2} colorScheme="orange" variant="subtle" fontSize="2xs">Needs action</Badge>
-                          )}
-                        </Tab>
-                        <Tab
-                          fontSize={{ base: '10px', md: 'sm' }}
-                          borderWidth="1px"
-                          borderColor="gray.200"
-                          bg="gray.50"
-                          onClick={() => { setOffersSubTab(3); setOffersPage(1) }}
-                          _selected={{ bg: 'gray.100', borderColor: 'gray.400', color: 'gray.700' }}
-                        >
-                          <HStack spacing={1.5}>
-                            <Icon as={FiArchive} boxSize={3.5} />
-                            <Box display={{ base: 'none', md: 'inline' }}>Archive</Box>
-                            <Box display={{ base: 'inline', md: 'none' }}>Archive</Box>
-                          </HStack>
-                          {archivedTradesData.length > 0 && (
-                            <Badge ml={2} colorScheme="red" borderRadius="full" fontSize="xs">
-                              {archivedTradesData.length}
-                            </Badge>
                           )}
                         </Tab>
                       </TabList>
@@ -5140,6 +5410,12 @@ const Dashboard: React.FC = () => {
                         </Menu>
                       </Box>
                       </Flex>
+                      {offersBackgroundRefreshing && (
+                        <HStack spacing={2} color="gray.500" fontSize="xs" mb={2}>
+                          <Spinner size="xs" />
+                          <Text>Updating offers...</Text>
+                        </HStack>
+                      )}
 
                       <TabPanels>
                         {/* Inbox */}
@@ -5369,94 +5645,56 @@ const Dashboard: React.FC = () => {
                           )}
                         </TabPanel>
 
-                        {/* Ongoing Trades */}
+                        {/* Active */}
                         <TabPanel px={0}>
-                          {ongoingLoading ? (
+                          {offersLoading ? (
                             <SimpleGrid columns={{ base: 1, sm: 2, md: 2, lg: 3, xl: 4 }} spacing={{ base: 3, md: 4 }}>
                               {Array.from({ length: 8 }).map((_, i) => (
                                 <ProductCardSkeleton key={i} />
                               ))}
                             </SimpleGrid>
-                          ) : ongoingTrades.length === 0 && visibleOngoingMultiWayTrades.length === 0 ? (
+                          ) : activeOfferItems.length === 0 ? (
+                            <Box
+                              textAlign="center"
+                              py={12}
+                              bg="green.50"
+                              borderRadius="lg"
+                              border="2px dashed"
+                              borderColor="green.200"
+                            >
+                              <Icon as={FaClock} boxSize={16} color="green.300" mb={4} />
+                              <Text color="gray.600" fontSize="lg" fontWeight="medium" mb={2}>
+                                {(unifiedSearch || offersSearch) || offersStatusFilter !== 'all' || offersTypeFilter !== 'all'
+                                  ? 'No active offers match your filters.'
+                                  : 'No active offers yet'}
+                              </Text>
+                              <Text color="gray.500" fontSize="sm">
+                                {(unifiedSearch || offersSearch) || offersStatusFilter !== 'all' || offersTypeFilter !== 'all'
+                                  ? 'Try clearing search or filter settings.'
+                                  : 'Accepted offers and ongoing trades will appear here.'}
+                              </Text>
+                            </Box>
+                          ) : offersViewMode === 'list' ? (
                             <>
-                              <Box
-                                textAlign="center"
-                                py={12}
-                                bg="green.50"
-                                borderRadius="lg"
-                                border="2px dashed"
-                                borderColor="green.200"
-                              >
-                                <Icon as={FaHandshake} boxSize={16} color="green.300" mb={4} />
-                                <Text color="gray.600" fontSize="lg" fontWeight="medium" mb={2}>
-                                  {(unifiedSearch || offersSearch) || offersStatusFilter !== 'all'
-                                    ? 'No trades match your search/filters.'
-                                    : 'No active offers right now'}
-                                </Text>
-                                <Text color="gray.500" fontSize="sm" mb={4}>
-                                  {(unifiedSearch || offersSearch) || offersStatusFilter !== 'all'
-                                    ? 'Try adjusting your search or filters.'
-                                    : 'Accepted offers will appear here'}
-                                </Text>
-                              </Box>
-                            </>
-                          ) : true ? (
-                            <>
-                              <Box border="1px" borderColor={borderColor} borderRadius="lg" overflow="hidden" bg={cardBg}>
-                                <Box
-                                  px={4}
-                                  py={3}
-                                  bg="gray.50"
-                                  borderBottomWidth="1px"
-                                  borderColor="gray.200"
-                                  fontSize="xs"
-                                  fontWeight="semibold"
-                                  color="gray.600"
-                                  textTransform="uppercase"
-                                  display={{ base: 'none', md: 'block' }}
-                                >
-                                  Product � Partner � Status � Action
-                                </Box>
-                                {paginatedTrades.map((trade) => {
-                                  const isIncoming = user?.id === trade.seller_id
-                                  return (
-                                    <Box
-                                      key={trade.id}
-                                      px={2}
-                                      py={1.5}
-                                      borderBottom="1px"
-                                      borderColor={borderColor}
-                                    >
-                                      <OngoingTradeCard
-                                        trade={trade}
-                                        isIncoming={isIncoming}
-                                        onView={handleViewOngoingTrade}
-                                        onComplete={handleCompleteTradeClick}
-                                      />
-                                    </Box>
+                              <VStack align="stretch" spacing={3}>
+                                {paginatedActiveOfferItems.map((item) => (
+                                  item.kind === 'multiway' ? (
+                                    <OngoingMultiWayCompactCard
+                                      key={item.key}
+                                      trade={item.trade}
+                                      onView={handleViewMultiWayTradeDetails}
+                                    />
+                                  ) : (
+                                    <OngoingTradeCard
+                                      key={item.key}
+                                      trade={item.trade}
+                                      isIncoming={Number(item.trade.seller_id) === Number(user?.id)}
+                                      onView={handleViewOngoingTrade}
+                                      onComplete={handleCompleteTradeClick}
+                                    />
                                   )
-                                })}
-                                {visibleOngoingMultiWayTrades.map((trade: any) => {
-                                  const participants = Array.isArray(trade?.participants) ? trade.participants : []
-                                  if (participants.length < 2) return null
-                                  const loopId = String(trade.id || trade.loop_id || trade.chain_id)
-
-                                  return (
-                                    <Box
-                                      key={`ongoing-loop-list-${loopId}`}
-                                      px={2}
-                                      py={1.5}
-                                      borderBottom="1px"
-                                      borderColor={borderColor}
-                                    >
-                                      <OngoingMultiWayCompactCard
-                                        trade={trade}
-                                        onView={handleViewMultiWayTradeDetails}
-                                      />
-                                    </Box>
-                                  )
-                                })}
-                              </Box>
+                                ))}
+                              </VStack>
                               {totalPages > 1 && (
                                 <HStack justify="center" spacing={2} mt={4}>
                                   <Button
@@ -5484,152 +5722,22 @@ const Dashboard: React.FC = () => {
                           ) : (
                             <>
                               <SimpleGrid columns={{ base: 1, sm: 2, md: 2, lg: 3, xl: 4 }} spacing={{ base: 3, md: 4 }} mb={6}>
-                                {paginatedTrades.map((trade) => {
-                                  const isIncoming = user?.id === trade.seller_id
-                                  return (
-                                    <OngoingTradeCard
-                                      key={trade.id}
-                                      trade={trade}
-                                      isIncoming={isIncoming}
+                                {paginatedActiveOfferItems.map((item) => (
+                                  item.kind === 'multiway' ? (
+                                    <OngoingMultiWayCompactCard
+                                      key={item.key}
+                                      trade={item.trade}
+                                      onView={handleViewMultiWayTradeDetails}
+                                    />
+                                  ) : (
+                                    <OfferCard
+                                      key={item.key}
+                                      trade={item.trade}
+                                      isIncoming={Number(item.trade.seller_id) === Number(user?.id)}
                                       onView={handleViewOngoingTrade}
-                                      onComplete={handleCompleteTradeClick}
                                     />
                                   )
-                                })}
-                                {/* Multi-Way Loop Trades in same grid */}
-                                {visibleOngoingMultiWayTrades.map((trade: any) => {
-                                  const participants = Array.isArray(trade?.participants) ? trade.participants : []
-                                  if (participants.length < 2) return null
-                                  const summary = getMultiWayTradeSummary(trade)
-                                  const loopLabel = participants.length <= 2 ? 'Trade Connect' : 'Multi-Way'
-                                  
-                                  const currentUserID = Number(user?.id || 0)
-                                  const yourParticipantIndex = participants.findIndex((p: any) => Number(p?.id || p?.user_id) === currentUserID)
-                                  
-                                  const yourParticipant = yourParticipantIndex >= 0 ? participants[yourParticipantIndex] : null;
-                                  const nextParticipant = yourParticipantIndex >= 0 && participants.length > 0
-                                      ? participants[(yourParticipantIndex + 1) % participants.length]
-                                      : participants[0];
-
-                                  const desiredCategories = normalizeWantedCategories(nextParticipant?.wanted_categories).map(getCategoryLabel)
-                                  const desiredCategory = desiredCategories.length > 0 ? desiredCategories.join(', ') : 'Any'
-                                  const desiredItems = nextParticipant?.desired_product || 'Open to offers'
-                                  const matchScore = trade.match_score || trade.score || 0
-                                  
-                                  const yourProductImage = resolveParticipantImage(yourParticipant)
-                                  const incomingProductImage = resolveParticipantImage(nextParticipant)
-                                  
-                                  return (
-                                    <Card
-                                      key={trade.id || trade.loop_id || trade.chain_id}
-                                      variant="outline"
-                                      h="100%"
-                                      display="flex"
-                                      flexDirection="column"
-                                      borderRadius="2xl"
-                                      overflow="hidden"
-                                      borderWidth="0"
-                                      borderLeftWidth="4px"
-                                      borderLeftColor="purple.400"
-                                      shadow="sm"
-                                      _hover={{
-                                        shadow: 'md',
-                                        transform: 'translateY(-3px)',
-                                        transition: 'all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1)',
-                                      }}
-                                      transition="all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1)"
-                                      role="article"
-                                      bg="white"
-                                    >
-                                      {/* Image area */}
-                                      <Box position="relative" w="full" h={{ base: '96px', md: '130px' }} display="flex" gap={1} p={2} bg="gray.50" flexWrap="nowrap" overflow="hidden">
-                                        <Box flex={1} position="relative" borderRadius="xl" overflow="hidden" shadow="sm" minW="0">
-                                          {yourProductImage ? (
-                                            <Image src={yourProductImage} alt="Your Item" objectFit="cover" w="100%" h="100%" />
-                                          ) : (
-                                            <Box w="100%" h="100%" bg="gray.100" display="flex" alignItems="center" justifyContent="center">
-                                              <Icon as={FaHandshake} color="gray.300" boxSize={5} />
-                                            </Box>
-                                          )}
-                                          <Badge position="absolute" top={1} left={1} bg="blue.500" color="white" fontSize="9px" fontWeight="700" px={2} py={0.5} borderRadius="md" shadow="sm">Your Item</Badge>
-                                        </Box>
-                                        <Box flex={1} position="relative" borderRadius="xl" overflow="hidden" shadow="sm" minW="0">
-                                          {incomingProductImage ? (
-                                            <Image src={incomingProductImage} alt="Their Item" objectFit="cover" w="100%" h="100%" />
-                                          ) : (
-                                            <Box w="100%" h="100%" bg="gray.100" display="flex" alignItems="center" justifyContent="center">
-                                              <Icon as={FaHandshake} color="gray.300" boxSize={5} />
-                                            </Box>
-                                          )}
-                                          <Badge position="absolute" top={1} right={1} bg="purple.500" color="white" fontSize="9px" fontWeight="700" px={2} py={0.5} borderRadius="md" shadow="sm">{loopLabel}</Badge>
-                                        </Box>
-                                      </Box>
-
-                                      <CardHeader pb={{ base: 2, md: 3 }} pt={{ base: 3, md: 4 }} px={{ base: 3, md: 5 }} flex={1}>
-                                        <VStack spacing={{ base: 2, md: 3 }} align="stretch">
-                                          <HStack spacing={1.5} flexWrap="wrap">
-                                            <Badge colorScheme="purple" variant="solid" fontSize="10px" px={2} py={0.5} borderRadius="md" fontWeight="700" letterSpacing="wider" textTransform="uppercase">
-                                              {loopLabel}
-                                            </Badge>
-                                            <Badge colorScheme="green" bg="green.100" color="green.700" variant="solid" fontSize="10px" px={2} py={0.5} borderRadius="md" fontWeight="700" letterSpacing="wider" textTransform="uppercase">
-                                              Active Loop
-                                            </Badge>
-                                          </HStack>
-
-                                          <Box>
-                                            <Heading fontSize={{ base: 'sm', md: 'md' }} fontWeight="700" color="gray.800" noOfLines={1} lineHeight="1.3" letterSpacing="tight">
-                                              {summary.yourGive}
-                                            </Heading>
-                                            <Text fontSize="xs" color="gray.500" mt={0.5} noOfLines={1}>→ for {summary.yourGet}</Text>
-                                          </Box>
-
-                                          <HStack spacing={2}>
-                                            <HStack spacing={-2}>
-                                              {participants.slice(0, 3).map((p: any, i: number) => (
-                                                <Avatar
-                                                  key={p.user_id || p.id || i}
-                                                  name={p.user_name || 'User'}
-                                                  size="xs"
-                                                  bg="purple.500"
-                                                  color="white"
-                                                  boxShadow="0 0 0 2px white"
-                                                />
-                                              ))}
-                                            </HStack>
-                                            <Box flex={1} minW={0}>
-                                              <Text fontSize="xs" fontWeight="600" color="gray.700" noOfLines={1}>
-                                                {participants.length} traders in loop
-                                              </Text>
-                                              <Text fontSize="10px" color="gray.400" textTransform="uppercase" letterSpacing="wider">
-                                                {getTimeAgo(trade.updated_at || trade.created_at)}
-                                              </Text>
-                                            </Box>
-                                          </HStack>
-                                        </VStack>
-                                      </CardHeader>
-
-                                      <CardFooter pt={0} pb={{ base: 3, md: 4 }} px={{ base: 3, md: 4 }} borderTopWidth="1px" borderTopColor="gray.100">
-                                        <Button
-                                          size={{ base: 'sm', md: 'md' }}
-                                          borderRadius="2xl"
-                                          fontWeight="600"
-                                          colorScheme="brand"
-                                          w="full"
-                                          onClick={(e) => {
-                                            e.stopPropagation()
-                                            handleViewMultiWayTradeDetails(trade)
-                                          }}
-                                          leftIcon={<Icon as={ViewIcon} boxSize={{ base: 3, md: 4 }} />}
-                                          _hover={{ transform: 'translateY(-2px)' }}
-                                          transition="all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1)"
-                                          shadow="sm"
-                                        >
-                                          View Trade
-                                        </Button>
-                                      </CardFooter>
-                                    </Card>
-                                  )
-                                })}
+                                ))}
                               </SimpleGrid>
                               {totalPages > 1 && (
                                 <HStack justify="center" spacing={2} mt={4}>
@@ -5655,64 +5763,6 @@ const Dashboard: React.FC = () => {
                                 </HStack>
                               )}
                             </>
-                          )}
-                        </TabPanel>
-
-                        {/* Archive (Expired Trades) */}
-                        <TabPanel px={0}>
-                          {archivedOffers.length === 0 ? (
-                            <Box textAlign="center" py={8}>
-                              <Icon as={FaClock} boxSize={12} color="gray.300" mb={4} />
-                              <Text color="gray.500" fontSize="lg" fontWeight="medium" mb={2}>No archived offers yet</Text>
-                              <Text color="gray.400" fontSize="sm">
-                                {(unifiedSearch || offersSearch) || offersStatusFilter !== 'all' || offersTypeFilter !== 'all'
-                                  ? 'Try adjusting your search or filters.'
-                                  : 'Expired, cancelled, or failed trades and buyouts will appear here.'}
-                              </Text>
-                            </Box>
-                          ) : (
-                            <VStack spacing={3} align="stretch">
-                              {archivedOffers.map((trade) => {
-                                const isIncoming = incoming.some((t: Trade) => t.id === trade.id)
-                                const tradeKind = getTradeKindLabel(trade)
-                                return (
-                                  <Box
-                                    key={trade.id}
-                                    p={4}
-                                    bg={cardBg}
-                                    borderRadius="lg"
-                                    borderWidth="1px"
-                                    borderColor="red.100"
-                                    _hover={{ boxShadow: 'md', transform: 'translateY(-1px)', borderColor: 'red.200' }}
-                                    transition="all 0.2s ease"
-                                    cursor="pointer"
-                                    onClick={() => { setSelectedTrade(trade); setViewTradeModalOpen(true) }}
-                                  >
-                                    <HStack justify="space-between" align="start">
-                                      <VStack align="start" spacing={1}>
-                                        <Text fontWeight="semibold" fontSize="sm" color="gray.800">
-                                          {trade.product_title || `Trade #${trade.id}`}
-                                        </Text>
-                                        <Text fontSize="xs" color="gray.500">
-                                          {isIncoming ? 'From' : 'To'}: {isIncoming ? (trade.buyer_name || 'Anonymous') : (trade.seller_name || 'Anonymous')}
-                                        </Text>
-                                        <HStack spacing={1.5} flexWrap="wrap">
-                                          <Badge colorScheme={tradeKind === 'Buyout' ? 'orange' : 'brand'} variant="solid" fontSize="2xs" px={1.5}>
-                                            {tradeKind}
-                                          </Badge>
-                                          <Badge colorScheme={badgeColor(trade.status).color} variant="subtle" fontSize="2xs" px={1.5}>
-                                            {getTradeStatusLabel(trade)}
-                                          </Badge>
-                                        </HStack>
-                                      </VStack>
-                                      <Badge colorScheme="gray" variant="subtle" fontSize="xs" px={2} py={1} borderRadius="full">
-                                        {getTradeStatusLabel(trade)}
-                                      </Badge>
-                                    </HStack>
-                                  </Box>
-                                )
-                              })}
-                            </VStack>
                           )}
                         </TabPanel>
 
@@ -6147,7 +6197,13 @@ const Dashboard: React.FC = () => {
                 <TabPanel px={{ base: 2, md: 4 }} py={{ base: 3, md: 4 }}>
                   <VStack spacing={6} align="stretch">
                     {/* Trade History Grid */}
-                    {allCompletedTrades.length === 0 ? (
+                    {tradeHistoryLoading ? (
+                      <SimpleGrid columns={{ base: 1, sm: 2, md: 2, lg: 3, xl: 4 }} spacing={{ base: 3, md: 4 }}>
+                        {Array.from({ length: 6 }).map((_, i) => (
+                          <ProductCardSkeleton key={i} />
+                        ))}
+                      </SimpleGrid>
+                    ) : allCompletedTrades.length === 0 ? (
                       <>
                         <Box
                           textAlign="center"
@@ -6186,6 +6242,11 @@ const Dashboard: React.FC = () => {
                             What � Who � Where � When � Action
                           </Box>
                           {paginatedTradeHistory.map((trade, idx) => {
+                            return (
+                              <Box key={trade.id} p={3} borderBottom={idx < paginatedTradeHistory.length - 1 ? '1px' : 'none'} borderColor={borderColor}>
+                                <HistoryTradeCard trade={trade} compact />
+                              </Box>
+                            )
                             if (isMultiwayHistoryTrade(trade)) {
                               return (
                                 <Box key={trade.id} p={3} borderBottom={idx < paginatedTradeHistory.length - 1 ? '1px' : 'none'} borderColor={borderColor}>
@@ -6281,6 +6342,7 @@ const Dashboard: React.FC = () => {
                                 </Text>
                                 <VStack spacing={2.5} align="stretch">
                                   {groups[group].map(trade => {
+                                    return <HistoryTradeCard key={trade.id} trade={trade} compact />
                                     if (isMultiwayHistoryTrade(trade)) {
                                       return <MultiwayHistorySummaryCard key={trade.id} trade={trade} compact />
                                     }
@@ -6381,7 +6443,8 @@ const Dashboard: React.FC = () => {
                           currentPage={tradeHistoryPage}
                           totalPages={tradeHistoryTotalPages}
                           onPageChange={setTradeHistoryPage}
-                          itemsCount={allCompletedTrades.length}
+                          itemsCount={tradeHistoryItemsCount}
+                          pageSize={tradeHistoryPerPage}
                         />
                       </>
                     ) : (
@@ -6413,6 +6476,11 @@ const Dashboard: React.FC = () => {
                           </HStack>
                           {/* Trade Rows */}
                           {paginatedTradeHistory.map((trade, idx) => {
+                            return (
+                              <Box key={trade.id} w="full" p={3} borderBottomWidth={idx < paginatedTradeHistory.length - 1 ? "1px" : "0px"} borderColor={borderColor}>
+                                <HistoryTradeCard trade={trade} />
+                              </Box>
+                            )
                             if (isMultiwayHistoryTrade(trade)) {
                               return (
                                 <Box key={trade.id} w="full" p={3} borderBottomWidth={idx < paginatedTradeHistory.length - 1 ? "1px" : "0px"} borderColor={borderColor}>
@@ -6556,6 +6624,7 @@ const Dashboard: React.FC = () => {
                                 </Text>
                                 <VStack spacing={2.5} align="stretch">
                                   {groups[group].map(trade => {
+                                    return <HistoryTradeCard key={trade.id} trade={trade} compact />
                                     if (isMultiwayHistoryTrade(trade)) {
                                       return <MultiwayHistorySummaryCard key={trade.id} trade={trade} compact />
                                     }
@@ -6649,31 +6718,13 @@ const Dashboard: React.FC = () => {
                         </VStack>
 
                         {/* Pagination */}
-                        {tradeHistoryTotalPages > 1 && (
-                          <HStack justify="center" spacing={2} mt={6}>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              leftIcon={<ChevronLeftIcon />}
-                              onClick={() => setTradeHistoryPage(p => Math.max(1, p - 1))}
-                              isDisabled={tradeHistoryPage === 1}
-                            >
-                              Previous
-                            </Button>
-                            <Text fontSize="sm" color="gray.600">
-                              Page {tradeHistoryPage} of {tradeHistoryTotalPages}
-                            </Text>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              rightIcon={<ChevronRightIcon />}
-                              onClick={() => setTradeHistoryPage(p => Math.min(tradeHistoryTotalPages, p + 1))}
-                              isDisabled={tradeHistoryPage === tradeHistoryTotalPages}
-                            >
-                              Next
-                            </Button>
-                          </HStack>
-                        )}
+                        <PaginationControls
+                          currentPage={tradeHistoryPage}
+                          totalPages={tradeHistoryTotalPages}
+                          onPageChange={setTradeHistoryPage}
+                          itemsCount={tradeHistoryItemsCount}
+                          pageSize={tradeHistoryPerPage}
+                        />
                       </>
                     )}
                   </VStack>
@@ -6711,26 +6762,48 @@ const Dashboard: React.FC = () => {
                       })
                   return (
                     <VStack spacing={4} align="stretch">
-                      <MultiwayHistorySummaryCard trade={multiwayDetailsTrade} />
+                      <HistoryTradeCard trade={multiwayDetailsTrade} />
+                      <Box p={3} bg="gray.50" borderRadius="lg" borderWidth="1px" borderColor="gray.100">
+                        <HStack justify="space-between" align="start" spacing={3}>
+                          <Box>
+                            <Text fontSize="sm" fontWeight="800" color="gray.800">{summary.statusLabel}</Text>
+                            <Text fontSize="xs" color="gray.600">{summary.statusHelper}</Text>
+                          </Box>
+                          <Badge
+                            colorScheme={summary.statusLabel === 'Completed' ? 'green' : summary.statusLabel === 'Did Not Push Through' ? 'blue' : 'gray'}
+                            variant="subtle"
+                            textTransform="none"
+                          >
+                            {summary.statusLabel}
+                          </Badge>
+                        </HStack>
+                      </Box>
                       <Box>
                         <Text fontSize="xs" fontWeight="900" color="gray.500" textTransform="uppercase" mb={2}>Cycle Flow</Text>
                         <VStack spacing={2} align="stretch">
-                          {edges.map((edge: any, idx: number) => (
-                            <HStack key={`${edge.from_user_name}-${edge.to_user_name}-${idx}`} p={3} bg="gray.50" borderRadius="lg" borderWidth="1px" borderColor="gray.100" align="start">
-                              <Badge colorScheme="green" borderRadius="full">{idx + 1}</Badge>
-                              <Box flex={1} minW={0}>
-                                <Text fontSize="sm" fontWeight="800" color="gray.800" noOfLines={1}>
-                                  {edge.from_user_name || 'A trader'} gives to {edge.to_user_name || 'next trader'}
-                                </Text>
-                                <Text fontSize="xs" color="gray.600" noOfLines={1}>
-                                  Item: {edge.product_title || 'Final exchanged item'}
-                                </Text>
-                              </Box>
-                              <Badge colorScheme={String(edge.status || '').includes('cancel') ? 'orange' : summary.statusLabel === 'Completed' ? 'green' : 'gray'} variant="subtle">
-                                {String(edge.status || summary.statusLabel).replace(/_/g, ' ')}
-                              </Badge>
-                            </HStack>
-                          ))}
+                          {edges.map((edge: any, idx: number) => {
+                            const stepLabel = summary.statusLabel === 'Completed'
+                              ? 'Completed'
+                              : summary.statusLabel === 'Did Not Push Through'
+                                ? 'Did not push through'
+                                : 'Not completed'
+                            return (
+                              <HStack key={`${edge.from_user_name}-${edge.to_user_name}-${idx}`} p={3} bg="gray.50" borderRadius="lg" borderWidth="1px" borderColor="gray.100" align="start">
+                                <Badge colorScheme={summary.statusLabel === 'Completed' ? 'green' : 'gray'} borderRadius="full">{idx + 1}</Badge>
+                                <Box flex={1} minW={0}>
+                                  <Text fontSize="sm" fontWeight="800" color="gray.800" noOfLines={1}>
+                                    {edge.from_user_name || 'A trader'} gives to {edge.to_user_name || 'next trader'}
+                                  </Text>
+                                  <Text fontSize="xs" color="gray.600" noOfLines={1}>
+                                    Item: {edge.product_title || 'Final exchanged item'}
+                                  </Text>
+                                </Box>
+                                <Badge colorScheme={summary.statusLabel === 'Completed' ? 'green' : summary.statusLabel === 'Did Not Push Through' ? 'blue' : 'gray'} variant="subtle" textTransform="none">
+                                  {stepLabel}
+                                </Badge>
+                              </HStack>
+                            )
+                          })}
                         </VStack>
                       </Box>
                     </VStack>
@@ -6749,6 +6822,8 @@ const Dashboard: React.FC = () => {
             onClose={() => setDetailsOpen(false)}
             onAccepted={async (action) => {
               invalidateOffers()
+              invalidateHistory()
+              invalidateArchived()
               invalidateDashboard()
               
               if (action === 'accept') {
@@ -6771,7 +6846,7 @@ const Dashboard: React.FC = () => {
                 setOffersSubTab(1) // Show Sent Offers tab after countering
               }
             }}
-            onDeclined={() => { invalidateOffers(); invalidateDashboard() }}
+            onDeclined={() => { invalidateOffers(); invalidateHistory(); invalidateArchived(); invalidateDashboard() }}
           />
 
           <ViewTradeModal
@@ -6780,6 +6855,8 @@ const Dashboard: React.FC = () => {
             onClose={() => setViewTradeModalOpen(false)}
             onStatusUpdate={() => { 
               invalidateOffers()
+              invalidateHistory()
+              invalidateArchived()
               invalidateDashboard()
             }}
             onTradeUpdate={setSelectedTrade}
@@ -6806,6 +6883,8 @@ const Dashboard: React.FC = () => {
               onTradeUpdated={(status?: string) => {
                 void fetchMultiWayTrades()
                 invalidateOffers()
+                invalidateHistory()
+                invalidateArchived()
                 invalidateProducts()
                 invalidateDashboard()
                 if (status === 'ongoing') {
@@ -6816,6 +6895,8 @@ const Dashboard: React.FC = () => {
               onTradeCompleted={() => {
                 void fetchMultiWayTrades()
                 invalidateOffers()
+                invalidateHistory()
+                invalidateArchived()
                 invalidateProducts()
                 invalidateDashboard()
                 // Switch to History tab
@@ -6830,6 +6911,8 @@ const Dashboard: React.FC = () => {
             onClose={() => setCompletionModalOpen(false)}
             onCompleted={() => { 
               invalidateOffers()
+              invalidateHistory()
+              invalidateArchived()
               invalidateDashboard()
               setActiveTab(4)
             }}

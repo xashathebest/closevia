@@ -1,4 +1,4 @@
-import { hasStoredAuthenticatedSession } from './authStorage'
+import { clearStoredAuth, hasStoredAuthenticatedSession, setStoredAuthenticatedSession } from './authStorage'
 
 const AUTH_INVALID_EVENT = 'clovia:auth-invalid'
 
@@ -10,10 +10,22 @@ export const resetAuthInvalid = (): void => {
   authInvalid = false
 }
 
+const redirectToExpiredLogin = (): void => {
+  if (typeof window === 'undefined') return
+  const { pathname, search } = window.location
+  if (pathname === '/login' && new URLSearchParams(search).get('expired') === 'true') return
+  window.location.replace('/login?expired=true')
+}
+
 export const markAuthInvalid = (reason = 'expired'): boolean => {
   if (authInvalid) return false
   authInvalid = true
+  setStoredAuthenticatedSession(false)
+  clearStoredAuth()
   window.dispatchEvent(new CustomEvent(AUTH_INVALID_EVENT, { detail: { reason } }))
+  if (reason === 'expired' || reason === 'unauthorized' || reason === 'refresh_failed') {
+    redirectToExpiredLogin()
+  }
   return true
 }
 

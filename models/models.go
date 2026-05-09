@@ -335,11 +335,14 @@ type Trade struct {
 	BuyerID         int         `json:"buyer_id"`
 	SellerID        int         `json:"seller_id"`
 	TargetProductID int         `json:"target_product_id"`
-	Status          string      `json:"status" validate:"oneof=pending accepted accepted_by_one accepted_by_both declined countered active ongoing awaiting_confirmation completed auto_completed cancelled cancelled_due_to_conflict expired broken history pending_multiway multiway_active"`
+	Status          string      `json:"status" validate:"oneof=pending accepted accepted_by_one accepted_by_both declined countered active ongoing awaiting_confirmation awaiting_other_party completed did_not_push_through under_review auto_completed cancelled cancelled_due_to_conflict expired broken history archived pending_multiway multiway_active"`
 	Message         string      `json:"message,omitempty"`
 	OfferedCash     *float64    `json:"offered_cash_amount,omitempty"`
 	CreatedAt       time.Time   `json:"created_at"`
 	UpdatedAt       time.Time   `json:"updated_at"`
+	LastActivityAt  *time.Time  `json:"last_activity_at,omitempty"`
+	ArchivedAt      *time.Time  `json:"archived_at,omitempty"`
+	ArchivedReason  string      `json:"archived_reason,omitempty"`
 	Items           []TradeItem `json:"items"`
 	BuyerCompleted  bool        `json:"buyer_completed"`
 	SellerCompleted bool        `json:"seller_completed"`
@@ -413,6 +416,13 @@ type Trade struct {
 	// Counter offer fields
 	CounteredBy   int  `json:"countered_by,omitempty"`
 	ParentTradeID *int `json:"parent_trade_id,omitempty"`
+	// Pending offer time suggestion fields
+	SuggestedDate      string `json:"suggested_date,omitempty"`
+	SuggestedStartTime string `json:"suggested_start_time,omitempty"`
+	SuggestedEndTime   string `json:"suggested_end_time,omitempty"`
+	SuggestedByUserID  int    `json:"suggested_by_user_id,omitempty"`
+	SuggestionStatus   string `json:"suggestion_status,omitempty"`
+	SuggestionType     string `json:"suggestion_type,omitempty"`
 }
 
 // TradeItem represents an item offered in a trade
@@ -449,11 +459,12 @@ type TradeReview struct {
 
 // TradeReviewCreate represents payload for submitting a review
 type TradeReviewCreate struct {
-	Rating        int    `json:"rating" validate:"required,min=1,max=5"`
-	Feedback      string `json:"feedback" validate:"required,min=1"`
-	ProofURL      string `json:"proof_url,omitempty"`
-	IsCameraPhoto bool   `json:"is_camera_photo"`
-	IsFollowup    bool   `json:"is_followup"` // true to submit as follow-up instead of initial
+	Rating            int    `json:"rating" validate:"required,min=1,max=5"`
+	Feedback          string `json:"feedback" validate:"required,min=1"`
+	ProofURL          string `json:"proof_url,omitempty"`
+	IsCameraPhoto     bool   `json:"is_camera_photo"`
+	IsFollowup        bool   `json:"is_followup"` // true to submit as follow-up instead of initial
+	CompletionOutcome string `json:"completion_outcome,omitempty"`
 }
 
 // TradeReviewUpdate represents updating a followup review (not initial)

@@ -9,6 +9,12 @@ import (
 	"github.com/xashathebest/clovia/utils"
 )
 
+func unauthorized(c *fiber.Ctx) error {
+	return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+		"error": "unauthorized",
+	})
+}
+
 // AuthMiddleware checks if the request has a valid JWT token
 func AuthMiddleware() fiber.Handler {
 	return func(c *fiber.Ctx) error {
@@ -30,17 +36,11 @@ func AuthMiddleware() fiber.Handler {
 			}
 		}
 		if token == "" {
-			return c.Status(401).JSON(fiber.Map{
-				"success": false,
-				"error":   "Authentication required",
-			})
+			return unauthorized(c)
 		}
 
 		if authHeader != "" && authSource == "" {
-			return c.Status(401).JSON(fiber.Map{
-				"success": false,
-				"error":   "Invalid authorization format. Use 'Bearer <token>'",
-			})
+			return unauthorized(c)
 		}
 
 		// Validate the token
@@ -49,10 +49,7 @@ func AuthMiddleware() fiber.Handler {
 			if authSource == "cookie" {
 				utils.ClearAuthCookie(c)
 			}
-			return c.Status(401).JSON(fiber.Map{
-				"success": false,
-				"error":   "Invalid or expired token",
-			})
+			return unauthorized(c)
 		}
 
 		// Extract user information from claims
@@ -62,10 +59,7 @@ func AuthMiddleware() fiber.Handler {
 			if authSource == "cookie" {
 				utils.ClearAuthCookie(c)
 			}
-			return c.Status(401).JSON(fiber.Map{
-				"success": false,
-				"error":   "Invalid token claims",
-			})
+			return unauthorized(c)
 		}
 
 		email, ok := claims["email"].(string)
@@ -74,10 +68,7 @@ func AuthMiddleware() fiber.Handler {
 			if authSource == "cookie" {
 				utils.ClearAuthCookie(c)
 			}
-			return c.Status(401).JSON(fiber.Map{
-				"success": false,
-				"error":   "Invalid token claims",
-			})
+			return unauthorized(c)
 		}
 
 		// Store user information in context for later use

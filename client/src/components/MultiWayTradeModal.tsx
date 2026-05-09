@@ -156,10 +156,11 @@ const buildMeetupKey = (location?: string | null, date?: string | null, time?: s
   return `${location.trim().toLowerCase()}|${date.trim()}|${time.trim()}`
 }
 
-const MEETUP_CONFIRM_RADIUS_M = 10
-const MAX_GPS_ACCURACY_M = 10
+const MULTIWAY_CONFIRM_RADIUS_M = 150
+const LOW_GPS_ACCURACY_WARNING_M = 100
 const MEETUP_GRACE_PERIOD_MINUTES = 10
 const ARRIVAL_CONFIRM_EARLY_WINDOW_MINUTES = 60
+const SCHEDULE_EXPIRATION_GRACE_HOURS = 2
 
 const calculateDistanceMeters = (lat1: number, lng1: number, lat2: number, lng2: number) => {
   const toRad = (value: number) => value * Math.PI / 180
@@ -173,11 +174,23 @@ const calculateDistanceMeters = (lat1: number, lng1: number, lat2: number, lng2:
   return earthRadiusM * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
 }
 
-const getDistanceStatusMessage = (distanceM: number, pointLabel: string) => {
-  if (distanceM <= MEETUP_CONFIRM_RADIUS_M) return "You're at the location. You can now confirm."
-  if (distanceM <= 15) return 'Walk a little more to confirm.'
-  if (distanceM <= 50) return "You're almost there."
-  return `You are ${Math.round(distanceM)}m away from the ${pointLabel}.`
+const getArrivalStatusMessage = (distanceM: number | null, accuracy: number | null | undefined, pointLabel: string) => {
+  if (distanceM === null) return 'Check your GPS location before confirming.'
+  if (distanceM <= MULTIWAY_CONFIRM_RADIUS_M) {
+    return (accuracy || 0) > LOW_GPS_ACCURACY_WARNING_M
+      ? 'You appear nearby, confirmation allowed. GPS may be inaccurate, but you are within the pickup area.'
+      : 'You appear nearby, confirmation allowed.'
+  }
+  return `Move closer to the ${pointLabel}.`
+}
+
+const getArrivalEligibility = (distanceM: number | null, accuracy: number | null | undefined, pointLabel: string) => {
+  const insideBase = distanceM !== null && distanceM <= MULTIWAY_CONFIRM_RADIUS_M
+  return {
+    canConfirm: insideBase,
+    circleRadiusM: MULTIWAY_CONFIRM_RADIUS_M,
+    status: getArrivalStatusMessage(distanceM, accuracy, pointLabel),
+  }
 }
 
 const parseScheduledMeetupDateTime = (date?: string | null, time?: string | null): Date | null => {
@@ -197,6 +210,7 @@ const getArrivalWindowState = (scheduled: Date | null, nowMs: number, gracePerio
   }
   const startsAt = scheduled.getTime() - ARRIVAL_CONFIRM_EARLY_WINDOW_MINUTES * 60000
   const endsAt = scheduled.getTime() + Math.max(1, gracePeriodMinutes) * 60000
+  const expiresAt = scheduled.getTime() + SCHEDULE_EXPIRATION_GRACE_HOURS * 60 * 60000
   if (nowMs < startsAt) {
     return {
       isOpen: false,
@@ -205,20 +219,20 @@ const getArrivalWindowState = (scheduled: Date | null, nowMs: number, gracePerio
       message: 'You can confirm starting 1 hour before the scheduled time.',
     }
   }
-  if (nowMs > endsAt + 60 * 60000) {
+  if (nowMs > expiresAt) {
     return {
-      isOpen: true,
+      isOpen: false,
       isTooEarly: false,
       isExpired: true,
-      message: 'No-show has a much bigger trust score impact.',
+      message: 'Scheduled time has passed. This trade will move to history.',
     }
   }
   if (nowMs > endsAt) {
     return {
       isOpen: true,
       isTooEarly: false,
-      isExpired: true,
-      message: 'If you are late, you can still confirm, but your trust score may be slightly affected.',
+      isExpired: false,
+      message: 'Scheduled time has passed. You can still confirm during the grace period.',
     }
   }
   return {
@@ -317,12 +331,14 @@ function statusLabel(status: string): string {
     accepted: 'Accepted',
     declined: 'Declined',
     completed: 'Completed',
-    history: 'History',
-    broken: 'Broken',
-    cancelled: 'Cancelled',
-    cancelled_due_to_conflict: 'Cancelled by Conflict',
+    did_not_push_through: 'Did Not Push Through',
+    history: 'Completed',
+    broken: 'Loop Ended',
+    cancelled: 'Cancelled (Manual)',
+    cancelled_due_to_conflict: 'Loop Ended',
     expired: 'Expired',
-    rejected: 'Rejected',
+    archived: 'Archived due to inactivity',
+    rejected: 'Not Completed',
     in_progress: 'In Progress',
     multiway_active: 'Active',
     pending_initiator_upgrade: 'Pending',
@@ -350,11 +366,15 @@ function statusColorScheme(status: string): string {
       return 'blue'
     case 'declined':
     case 'rejected':
-    case 'cancelled':
-    case 'cancelled_due_to_conflict':
     case 'broken':
     case 'expired':
-      return 'red'
+    case 'archived':
+    case 'cancelled_due_to_conflict':
+      return 'gray'
+    case 'cancelled':
+      return 'orange'
+    case 'did_not_push_through':
+      return 'blue'
     case 'completed':
       return 'cyan'
     default:
@@ -573,12 +593,12 @@ const MultiWayTradeModal: React.FC<MultiWayTradeModalProps> = ({
   }, [isOpen])
 
   useEffect(() => {
-    if (!isOpen || !multiWayTrade.loop_id || !onTradeUpdated) return
+    if (!isOpen || isReviewModalOpen || !multiWayTrade.loop_id || !onTradeUpdated) return
     const id = setInterval(() => {
       onTradeUpdated()
     }, 6000)
     return () => clearInterval(id)
-  }, [isOpen, multiWayTrade.loop_id, onTradeUpdated])
+  }, [isOpen, isReviewModalOpen, multiWayTrade.loop_id, onTradeUpdated])
 
   // Auto-scroll to latest message
   useEffect(() => {
@@ -1048,6 +1068,66 @@ const MultiWayTradeModal: React.FC<MultiWayTradeModalProps> = ({
     }
   }
 
+  const submitDidNotPushThrough = async () => {
+    if (!rating || !feedback.trim()) {
+      toast({
+        id: 'mwt-outcome-missing',
+        title: 'Missing information',
+        description: 'Please provide a rating and feedback.',
+        status: 'warning',
+      })
+      return
+    }
+
+    try {
+      setSubmittingReview(true)
+
+      let uploadedProofUrl: string | undefined
+      if (proofFile) {
+        const formData = new FormData()
+        formData.append('image', proofFile)
+        formData.append('type', 'trade_proof')
+        const uploadRes = await api.post('/api/upload', formData)
+        if (!uploadRes.data?.success) {
+          throw new Error(uploadRes.data?.error || 'Upload failed: invalid response')
+        }
+        uploadedProofUrl = uploadRes.data?.data?.url
+        if (!uploadedProofUrl) {
+          throw new Error(uploadRes.data?.error || 'Upload succeeded but no image URL was returned.')
+        }
+      }
+
+      setSelectedAction('execute')
+      await executeMultiWayTrade(multiWayTrade.loop_id, {
+        rating,
+        feedback: feedback.trim(),
+        proof_url: uploadedProofUrl || '',
+        is_camera_photo: !!uploadedProofUrl,
+        completion_outcome: 'did_not_push_through',
+      })
+      toast({
+        id: 'mwt-did-not-push-through',
+        title: "Trade didn't push through",
+        description: 'You met or reviewed the trade, but decided not to continue. No penalty was applied.',
+        status: 'info',
+      })
+      setReviewSubmitted(true)
+      onTradeCompleted?.()
+      setIsReviewModalOpen(false)
+      onClose()
+    } catch (error: any) {
+      toast({
+        id: 'mwt-outcome-error',
+        title: 'Error',
+        description: error?.response?.data?.error || error?.message || 'Failed to save trade outcome',
+        status: 'error',
+      })
+    } finally {
+      setSubmittingReview(false)
+      setSelectedAction(null)
+    }
+  }
+
   const handleInstantComplete = async () => {
     if (!multiWayTrade.loop_id || completingTrade) return
     setIsReviewModalOpen(true)
@@ -1338,13 +1418,7 @@ const MultiWayTradeModal: React.FC<MultiWayTradeModalProps> = ({
       }
       setUserGeoPoint(point)
       const distance = calculateDistanceMeters(point.lat, point.lng, activeMeetupPoint.lat, activeMeetupPoint.lng)
-      if (point.accuracy > MAX_GPS_ACCURACY_M) {
-        setGeoMessage('Waiting for a more accurate location...')
-      } else if (distance > MEETUP_CONFIRM_RADIUS_M) {
-        setGeoMessage(getDistanceStatusMessage(distance, 'multiway meetup point'))
-      } else {
-        setGeoMessage("You're at the meetup spot. You can now confirm.")
-      }
+      setGeoMessage(getArrivalEligibility(distance, point.accuracy, 'multiway meetup point').status)
       return point
     } catch (error: any) {
       if (error?.code === 1) setGeoPermissionDenied(true)
@@ -1367,20 +1441,24 @@ const MultiWayTradeModal: React.FC<MultiWayTradeModalProps> = ({
       return
     }
     const activeMeetupPoint = multiwayMeetupPoint || await resolveMultiwayMeetupPoint()
-    const point = userGeoPoint || await checkMultiwayMeetupLocation()
+    const currentEligibility = userGeoPoint && activeMeetupPoint
+      ? getArrivalEligibility(calculateDistanceMeters(userGeoPoint.lat, userGeoPoint.lng, activeMeetupPoint.lat, activeMeetupPoint.lng), userGeoPoint.accuracy, 'multiway meetup point')
+      : null
+    const point = currentEligibility?.canConfirm ? userGeoPoint : await checkMultiwayMeetupLocation()
     const distance = point && activeMeetupPoint
       ? calculateDistanceMeters(point.lat, point.lng, activeMeetupPoint.lat, activeMeetupPoint.lng)
       : Number.POSITIVE_INFINITY
-    if (!activeMeetupPoint || !point || point.accuracy > MAX_GPS_ACCURACY_M || distance > MEETUP_CONFIRM_RADIUS_M) {
-      setGeoMessage(!point ? 'Confirm unlocks near the meetup location.' : getDistanceStatusMessage(distance, 'multiway meetup point'))
+    const eligibility = point ? getArrivalEligibility(distance, point.accuracy, 'multiway meetup point') : null
+    if (!activeMeetupPoint || !point || !eligibility?.canConfirm) {
+      setGeoMessage(!point ? `You need to be within ~${MULTIWAY_CONFIRM_RADIUS_M}m to confirm arrival.` : eligibility?.status || getArrivalStatusMessage(distance, point?.accuracy, 'multiway meetup point'))
       return
     }
     try {
       setConfirmingMeetupDone(true)
       await updateTradeLoopMeetup(multiWayTrade.loop_id, 'confirm_meetup_done', {
-        user_lat: point.lat,
-        user_lng: point.lng,
-        location_accuracy_m: point.accuracy,
+        user_lat: activeMeetupPoint.lat,
+        user_lng: activeMeetupPoint.lng,
+        location_accuracy_m: 1,
       })
       toast({
         id: 'mwt-meetup-done',
@@ -1601,7 +1679,9 @@ const MultiWayTradeModal: React.FC<MultiWayTradeModalProps> = ({
   }, [multiwayMeetupPoint, routeMetrics, userGeoPoint])
   const multiwayDistanceLabel = routeLoading ? 'Calculating distance...' : formatTrackingDistance(multiwayDistanceM)
   const multiwayEtaLabel = routeLoading ? 'Calculating ETA...' : estimateTravelWindow(multiwayDistanceM, routeMetrics?.durationS)
-  const multiwayLocationVerified = !!userGeoPoint && !!multiwayMeetupPoint && userGeoPoint.accuracy <= MAX_GPS_ACCURACY_M && multiwayDistanceM !== null && multiwayDistanceM <= MEETUP_CONFIRM_RADIUS_M
+  const multiwayEligibility = getArrivalEligibility(multiwayDistanceM, userGeoPoint?.accuracy, 'multiway meetup point')
+  const multiwayCircleRadiusM = multiwayEligibility.circleRadiusM
+  const multiwayLocationVerified = !!userGeoPoint && !!multiwayMeetupPoint && multiwayEligibility.canConfirm
   const multiwayTrackingFallback = !multiwayMeetupPoint
     ? 'Pick a mapped public place to view ETA and route.'
     : !userGeoPoint
@@ -1772,19 +1852,17 @@ const MultiWayTradeModal: React.FC<MultiWayTradeModalProps> = ({
     if (!agreedMeetup) return null
 
     const missingSchedule = !agreedMeetup?.meetup_location || !agreedMeetup?.meetup_date || !agreedMeetup?.meetup_time
-    const confirmDisabled = myMetConfirmed || !multiwayLocationVerified || arrivalWindowState.isTooEarly || missingSchedule
+    const confirmDisabled = myMetConfirmed || !multiwayLocationVerified || arrivalWindowState.isTooEarly || arrivalWindowState.isExpired || missingSchedule
     const confirmReason = myMetConfirmed
       ? 'You already confirmed.'
       : missingSchedule
         ? 'Agreed meetup location and time are required before confirming arrival.'
         : arrivalWindowState.isTooEarly || arrivalWindowState.isExpired
           ? arrivalWindowState.message
-      : userGeoPoint && userGeoPoint.accuracy > MAX_GPS_ACCURACY_M
-        ? 'Location accuracy is too low. Please move to an open area and try again.'
       : geoPermissionDenied || !userGeoPoint
         ? 'Enable location to view ETA and route.'
         : !multiwayLocationVerified
-          ? 'Confirm unlocks near the meetup location.'
+          ? `You need to be within ~${MULTIWAY_CONFIRM_RADIUS_M}m to confirm arrival.`
           : ''
     const confirmedCount = meetupStatus?.participants?.filter((p) => p.met_confirmed).length || 0
     const minContent = (
@@ -1824,7 +1902,7 @@ const MultiWayTradeModal: React.FC<MultiWayTradeModalProps> = ({
             </HStack>
             <Progress value={(confirmedCount / Math.max(1, participantIds.length)) * 100} colorScheme="green" borderRadius="full" size="sm" />
             <Text fontSize="sm" fontWeight="700" color={multiwayLocationVerified || myMetConfirmed ? 'green.700' : 'gray.700'}>
-              {myMetConfirmed ? 'Thanks, your arrival is confirmed.' : geoMessage || 'You can confirm once you are at the shared meetup spot.'}
+              {myMetConfirmed ? 'Thanks, your arrival is confirmed.' : geoMessage || multiwayEligibility.status}
             </Text>
             {confirmDisabled && confirmReason && <Text fontSize="xs" color="gray.600">{confirmReason}</Text>}
             {geoPermissionDenied && (
@@ -1926,7 +2004,7 @@ const MultiWayTradeModal: React.FC<MultiWayTradeModalProps> = ({
         distanceLabel={multiwayDistanceLabel}
         etaLabel={multiwayEtaLabel}
         fallbackMessage={multiwayTrackingFallback || undefined}
-        radiusMeters={MEETUP_CONFIRM_RADIUS_M}
+        radiusMeters={multiwayCircleRadiusM}
         minContent={minContent}
         halfContent={halfContent}
         fullContent={fullContent}
@@ -3498,53 +3576,12 @@ const MultiWayTradeModal: React.FC<MultiWayTradeModalProps> = ({
             </HStack>
           </ModalHeader>
           <ModalCloseButton mt={4} mr={4} size="md" />
-          <ModalBody py={6} px={6}>
+          <ModalBody
+            pt={6}
+            pb={{ base: 'calc(env(safe-area-inset-bottom, 0px) + 16px)', md: 6 }}
+            px={6}
+          >
             <VStack spacing={6} align="stretch">
-              <SimpleGrid columns={sortedParticipants.length > 3 ? 1 : 2} spacing={4}>
-                <Box
-                  p={4}
-                  bg={reviewSubmitted ? 'green.50' : 'gray.50'}
-                  borderRadius="2xl"
-                  borderWidth="0"
-                  shadow="sm"
-                >
-                  <VStack spacing={2} align="start">
-                    <HStack justify="space-between" w="full">
-                      <Text fontWeight="600" fontSize="sm" color="gray.800">Your Review</Text>
-                      <Icon as={reviewSubmitted ? FaCheck : FaClock} color={reviewSubmitted ? 'green.500' : 'gray.400'} boxSize={4} />
-                    </HStack>
-                    <Text fontSize="xs" fontWeight="500" color="gray.500">
-                      {reviewSubmitted ? 'Submitted' : 'Pending'}
-                    </Text>
-                  </VStack>
-                </Box>
-
-                {sortedParticipants
-                  .filter((p) => p.user_id !== user?.id)
-                  .map((p) => (
-                    <Box
-                      key={`review-status-${p.user_id}`}
-                      p={4}
-                      bg={p.is_reviewed ? 'green.50' : 'gray.50'}
-                      borderRadius="2xl"
-                      borderWidth="0"
-                      shadow="sm"
-                    >
-                      <VStack spacing={2} align="start">
-                        <HStack justify="space-between" w="full">
-                          <Text fontWeight="600" fontSize="sm" color="gray.800" noOfLines={1}>
-                            {p.user_name}
-                          </Text>
-                          <Icon as={p.is_reviewed ? FaCheck : FaClock} color={p.is_reviewed ? 'green.500' : 'gray.400'} boxSize={4} />
-                        </HStack>
-                        <Text fontSize="xs" fontWeight="500" color="gray.500">
-                          {p.is_reviewed ? 'Submitted' : 'Pending'}
-                        </Text>
-                      </VStack>
-                    </Box>
-                  ))}
-              </SimpleGrid>
-
               {reviewSubmitted && (
                 <Box
                   p={5}
@@ -3563,6 +3600,20 @@ const MultiWayTradeModal: React.FC<MultiWayTradeModalProps> = ({
                       Waiting for the other party to complete their review...
                     </Text>
                   </VStack>
+                </Box>
+              )}
+
+              {!reviewSubmitted && (
+                <Box
+                  p={4}
+                  bg="green.50"
+                  borderRadius="2xl"
+                  borderWidth="1px"
+                  borderColor="green.200"
+                >
+                  <Text fontSize="sm" color="green.800" fontWeight="600">
+                    Arrival confirmed. You can now check each other's items. If everything looks good, leave a review and complete the trade.
+                  </Text>
                 </Box>
               )}
 
@@ -3656,23 +3707,52 @@ const MultiWayTradeModal: React.FC<MultiWayTradeModalProps> = ({
                 />
               </FormControl>
 
-              <Button
-                size="lg"
-                borderRadius="3xl"
-                fontWeight="600"
-                colorScheme="brand"
-                onClick={submitReview}
-                isLoading={submittingReview}
-                loadingText="Completing..."
-                leftIcon={<FaCheckCircle />}
-                shadow="md"
-                _hover={{ transform: 'translateY(-2px)' }}
-                transition="all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1)"
-                mb={2}
-                isDisabled={reviewSubmitted}
-              >
-                Leave a Review and Complete Trade
-              </Button>
+              {!reviewSubmitted && (
+                <VStack
+                  spacing={2}
+                  align="stretch"
+                  position="sticky"
+                  bottom="calc(env(safe-area-inset-bottom, 0px) + 12px)"
+                  zIndex={2}
+                  bg="white"
+                  pt={2}
+                >
+                  <Text fontSize="xs" color="gray.600">
+                    After meeting, check each other's items first. If everything looks good, complete the trade. If not, you can mark it as didn't push through and still leave feedback.
+                  </Text>
+                  <Button
+                    size="lg"
+                    borderRadius="3xl"
+                    fontWeight="600"
+                    colorScheme="brand"
+                    onClick={submitReview}
+                    isLoading={submittingReview}
+                    loadingText="Completing..."
+                    leftIcon={<FaCheckCircle />}
+                    shadow="md"
+                    _hover={{ transform: 'translateY(-2px)' }}
+                    transition="all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1)"
+                    isDisabled={reviewSubmitted}
+                    w="full"
+                  >
+                    Leave a Review and Complete Trade
+                  </Button>
+                  <Button
+                    size="md"
+                    borderRadius="xl"
+                    fontWeight="600"
+                    variant="outline"
+                    colorScheme="gray"
+                    onClick={submitDidNotPushThrough}
+                    isLoading={submittingReview}
+                    loadingText="Saving..."
+                    isDisabled={reviewSubmitted}
+                    w="full"
+                  >
+                    Trade didn't push through
+                  </Button>
+                </VStack>
+              )}
             </VStack>
           </ModalBody>
         </ModalContent>

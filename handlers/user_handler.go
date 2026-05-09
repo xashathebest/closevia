@@ -696,6 +696,12 @@ func (h *UserHandler) Login(c *fiber.Ctx) error {
 	// 	})
 	// }
 
+	// Promote to admin if this email is the configured ADMIN_EMAIL
+	if adminEmail := strings.TrimSpace(os.Getenv("ADMIN_EMAIL")); adminEmail != "" && strings.EqualFold(user.Email, adminEmail) && user.Role != "admin" {
+		_, _ = h.db.Exec("UPDATE users SET role = 'admin' WHERE id = ?", user.ID)
+		user.Role = "admin"
+	}
+
 	// Check for strikes suspension ladder
 	if user.IsSuspended || user.Strikes >= 3 {
 		return c.Status(403).JSON(models.APIResponse{
@@ -771,17 +777,11 @@ func (h *UserHandler) RefreshSession(c *fiber.Ctx) error {
 		}
 	}
 	if token == "" {
-		return c.Status(fiber.StatusUnauthorized).JSON(models.APIResponse{
-			Success: false,
-			Error:   "Authentication required",
-		})
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "unauthorized"})
 	}
 	if _, err := utils.ValidateJWT(token); err != nil {
 		utils.ClearAuthCookie(c)
-		return c.Status(fiber.StatusUnauthorized).JSON(models.APIResponse{
-			Success: false,
-			Error:   "Invalid or expired token",
-		})
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "unauthorized"})
 	}
 	utils.SetAuthCookie(c, token)
 	return c.JSON(models.APIResponse{
@@ -896,6 +896,12 @@ func (h *UserHandler) GoogleLogin(c *fiber.Ctx) error {
 
 	h.applyPremiumExpiry(&user)
 	h.ensureWmsuPlus(&user)
+
+	// Promote to admin if this email is the configured ADMIN_EMAIL
+	if adminEmail := strings.TrimSpace(os.Getenv("ADMIN_EMAIL")); adminEmail != "" && strings.EqualFold(user.Email, adminEmail) && user.Role != "admin" {
+		_, _ = h.db.Exec("UPDATE users SET role = 'admin' WHERE id = ?", user.ID)
+		user.Role = "admin"
+	}
 
 	// Check if user is suspended or has 3+ strikes
 	if user.IsSuspended || user.Strikes >= 3 {
@@ -2419,7 +2425,11 @@ func (h *UserHandler) GetSellerStats(c *fiber.Ctx) error {
 		SELECT
 			COUNT(DISTINCT CASE WHEN status IN ('completed', 'auto_completed') THEN id END) AS completed_trades,
 			COUNT(DISTINCT CASE WHEN status IN ('pending', 'pending_multiway', 'accepted', 'accepted_by_one', 'accepted_by_both', 'countered', 'active', 'ongoing', 'awaiting_confirmation', 'multiway_active') THEN id END) AS pending_trades,
-			COUNT(DISTINCT CASE WHEN status IN ('cancelled', 'canceled', 'cancelled_due_to_conflict', 'declined', 'rejected', 'expired', 'broken') THEN id END) AS cancelled_trades
+			COUNT(DISTINCT CASE
+				WHEN status IN ('cancelled', 'canceled', 'cancelled_due_to_conflict', 'declined', 'rejected', 'expired', 'broken')
+				  AND NOT (status = 'cancelled' AND COALESCE(cancellation_reason, '') LIKE 'Trade did not push through after meetup:%')
+				THEN id
+			END) AS cancelled_trades
 		FROM trades
 		WHERE seller_id = ? OR buyer_id = ?
 	`, userID, userID).Scan(&stats.CompletedTrades, &stats.PendingTrades, &stats.CancelledTrades)
@@ -2431,70 +2441,16 @@ func (h *UserHandler) GetSellerStats(c *fiber.Ctx) error {
 	stats.SuccessfulTrades = stats.CompletedTrades
 	stats.TotalTrades = stats.CompletedTrades + stats.PendingTrades + stats.CancelledTrades
 
-	// Calculate average rating and positive feedback percentage from post-trade
-	// reviews only. General profile reviews are intentionally excluded so the
-	// trust score reflects ratings tied to completed trades.
-	var avgRating sql.NullFloat64
-	var totalReviews sql.NullInt64
-	var positivePercent sql.NullFloat64
-
-	err = h.db.QueryRow(`
-		SELECT 
-			AVG(rating) AS avg_rating,
-			COUNT(*) AS total_reviews,
-			SUM(CASE WHEN rating >= 4 THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*), 0) AS positive_feedback
-		FROM (
-			SELECT tr.rating
-			FROM trade_reviews tr
-			JOIN trades t ON t.id = tr.trade_id
-			WHERE tr.is_followup = FALSE
-			  AND COALESCE(tr.is_auto_generated, FALSE) = FALSE
-			  AND t.status IN ('completed', 'auto_completed')
-			  AND (
-				(tr.reviewer_id = t.buyer_id AND t.seller_id = ?)
-				OR
-				(tr.reviewer_id = t.seller_id AND t.buyer_id = ?)
-			  )
-
-			UNION ALL
-
-			SELECT t.buyer_rating AS rating
-			FROM trades t
-			WHERE t.seller_id = ?
-			  AND t.status IN ('completed', 'auto_completed')
-			  AND t.buyer_rating IS NOT NULL
-			  AND NOT EXISTS (
-				SELECT 1
-				FROM trade_reviews tr
-				WHERE tr.trade_id = t.id
-				  AND tr.reviewer_id = t.buyer_id
-				  AND tr.is_followup = FALSE
-			  )
-
-			UNION ALL
-
-			SELECT t.seller_rating AS rating
-			FROM trades t
-			WHERE t.buyer_id = ?
-			  AND t.status IN ('completed', 'auto_completed')
-			  AND t.seller_rating IS NOT NULL
-			  AND NOT EXISTS (
-				SELECT 1
-				FROM trade_reviews tr
-				WHERE tr.trade_id = t.id
-				  AND tr.reviewer_id = t.seller_id
-				  AND tr.is_followup = FALSE
-			  )
-		) user_reviews
-	`, userID, userID, userID, userID).Scan(&avgRating, &totalReviews, &positivePercent)
-
-	if err == nil && totalReviews.Valid {
-		stats.TotalFeedback = int(totalReviews.Int64)
-		if stats.TotalFeedback > 0 && avgRating.Valid {
-			stats.AvgRating = avgRating.Float64
+	// Calculate average rating and positive feedback percentage from the same
+	// received post-trade review source used by the profile review list.
+	reviewStats, err := getReceivedTradeReviewStats(h.db, userID)
+	if err == nil {
+		stats.TotalFeedback = reviewStats.TotalReviews
+		if stats.TotalFeedback > 0 && reviewStats.AvgRating.Valid {
+			stats.AvgRating = reviewStats.AvgRating.Float64
 		}
-		if stats.TotalFeedback > 0 && positivePercent.Valid {
-			stats.PositivePercent = positivePercent.Float64
+		if stats.TotalFeedback > 0 && reviewStats.PositivePercent.Valid {
+			stats.PositivePercent = reviewStats.PositivePercent.Float64
 		}
 	}
 
@@ -2888,7 +2844,13 @@ func (h *UserHandler) computeConductSummary(userID int) *models.UserConductSumma
 	// Cancellation rate: cancelled trades / total trades
 	var totalTrades, cancelledTrades int
 	_ = h.db.QueryRow(`SELECT COUNT(*) FROM trades WHERE buyer_id = ? OR seller_id = ?`, userID, userID).Scan(&totalTrades)
-	_ = h.db.QueryRow(`SELECT COUNT(*) FROM trades WHERE (buyer_id = ? OR seller_id = ?) AND status = 'cancelled'`, userID, userID).Scan(&cancelledTrades)
+	_ = h.db.QueryRow(`
+		SELECT COUNT(*)
+		FROM trades
+		WHERE (buyer_id = ? OR seller_id = ?)
+		  AND status = 'cancelled'
+		  AND COALESCE(cancellation_reason, '') NOT LIKE 'Trade did not push through after meetup:%'
+	`, userID, userID).Scan(&cancelledTrades)
 	cancellationRate := 0.0
 	if totalTrades > 0 {
 		cancellationRate = float64(cancelledTrades) / float64(totalTrades)

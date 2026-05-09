@@ -3,6 +3,9 @@ export interface AvailabilitySlot {
   date: string        // "YYYY-MM-DD"
   start_time: string  // "HH:MM"
   end_time: string    // "HH:MM"
+  method?: CollectionMethod
+  mode?: 'recurring' | 'specific_date'
+  weekdays?: string[]
 }
 
 export interface User {
@@ -127,15 +130,19 @@ export interface CollectionLocationPoint {
 export interface CollectionSetup {
   methods: CollectionMethod[]
   pickup?: {
+    availability_mode?: 'recurring' | 'specific_date'
     days: string[]
+    specific_date?: string
     time_start: string
     time_end: string
     notes?: string
   }
   meetup?: {
+    availability_mode?: 'recurring' | 'specific_date'
     locations: string[]
     location_points?: CollectionLocationPoint[]
     days: string[]
+    specific_date?: string
     time_start: string
     time_end: string
     distance_km?: string
@@ -247,7 +254,7 @@ export interface PaginatedResponse<T> {
   total_pages: number
 }
 
-export type TradeStatus = 'pending' | 'partially_accepted' | 'pending_multiway' | 'accepted' | 'accepted_by_one' | 'accepted_by_both' | 'confirmed' | 'declined' | 'rejected' | 'countered' | 'active' | 'ongoing' | 'awaiting_confirmation' | 'completed' | 'auto_completed' | 'cancelled' | 'cancelled_due_to_conflict' | 'expired' | 'broken' | 'history' | 'multiway_active' | 'pending_user3' | 'user3_accepted'
+export type TradeStatus = 'pending' | 'partially_accepted' | 'pending_multiway' | 'accepted' | 'accepted_by_one' | 'accepted_by_both' | 'confirmed' | 'declined' | 'rejected' | 'countered' | 'active' | 'ongoing' | 'awaiting_confirmation' | 'awaiting_other_party' | 'completed' | 'did_not_push_through' | 'under_review' | 'auto_completed' | 'cancelled' | 'cancelled_due_to_conflict' | 'expired' | 'archived' | 'broken' | 'history' | 'multiway_active' | 'pending_user3' | 'user3_accepted'
 export type TradeOption = 'meetup' | 'delivery'
 
 export interface TradeItem {
@@ -335,6 +342,12 @@ export interface Trade {
   seller_rating?: number // Rating given by seller (1-5)
   countered_by?: number
   parent_trade_id?: number | null
+  suggested_date?: string
+  suggested_start_time?: string
+  suggested_end_time?: string
+  suggested_by_user_id?: number
+  suggestion_status?: string
+  suggestion_type?: 'pickup' | 'meetup' | string
 }
 
 // Multi-way/Three-way Trading Types
@@ -373,7 +386,7 @@ export interface MultiWayTrade {
   participants: MultiWayTradeParticipant[]
   edges: TradeEdge[]
   total_value?: number
-  status: 'pending' | 'partially_accepted' | 'accepted' | 'confirmed' | 'ongoing' | 'cancelled' | 'cancelled_due_to_conflict' | 'broken' | 'expired' | 'rejected' | 'history' | 'active' | 'completed' | 'user3_accepted' | 'pending_user3' | 'multiway_active'
+  status: 'pending' | 'partially_accepted' | 'accepted' | 'confirmed' | 'ongoing' | 'did_not_push_through' | 'cancelled' | 'cancelled_due_to_conflict' | 'broken' | 'expired' | 'archived' | 'rejected' | 'history' | 'active' | 'completed' | 'user3_accepted' | 'pending_user3' | 'multiway_active'
   created_at?: string
   expires_at?: string
 }

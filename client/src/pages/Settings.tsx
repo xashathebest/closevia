@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
+import React, { useState, useEffect, useRef, useMemo } from 'react'
 import {
   Box,
   Container,
@@ -23,7 +23,6 @@ import {
   useToast,
   useColorMode,
   useColorModeValue,
-  useBreakpointValue,
   Avatar,
   IconButton,
   Modal,
@@ -80,7 +79,6 @@ import FloatingTab from '../components/FloatingTab'
 import {
   FaUserCircle,
   FaBell,
-  FaPalette,
   FaLock,
   FaSignOutAlt,
   FaTrash,
@@ -88,9 +86,6 @@ import {
   FaEyeSlash,
   FaUpload,
   FaCheckCircle,
-  FaGlobe,
-  FaDesktop,
-  FaAccessibleIcon,
   FaEnvelope,
   FaGraduationCap,
   FaMobile,
@@ -107,7 +102,6 @@ import {
   FaPauseCircle,
 } from 'react-icons/fa'
 import { FiSettings, FiSave, FiMapPin } from 'react-icons/fi'
-import { motion, useAnimation, useDragControls, AnimationControls, DragControls } from 'framer-motion'
 
 const NOTIFICATION_GROUPS: Array<{
   title: string
@@ -181,10 +175,6 @@ const HomeMapCenterUpdater = ({ lat, lng }: { lat: number; lng: number }) => {
 }
 
 interface SettingsSheetProps {
-  isMobile: boolean | undefined
-  sheetAnimation: AnimationControls
-  dragControls: DragControls
-  onClose: () => void
   children: React.ReactNode
 }
 
@@ -215,9 +205,30 @@ const SettingsPage: React.FC = () => {
   const notificationEnabledBg = useColorModeValue('brand.50', 'whiteAlpha.100')
   const notificationDisabledBg = useColorModeValue('white', 'gray.800')
   const notificationIconBg = useColorModeValue('white', 'gray.700')
-  const isMobile = useBreakpointValue({ base: true, md: false })
-  const sheetAnimation = useAnimation()
-  const dragControls = useDragControls()
+
+  const tabBaseStyle = {
+    flexShrink: 0 as const,
+    justifyContent: 'flex-start' as const,
+    whiteSpace: 'nowrap' as const,
+    borderRadius: { base: 'full', md: 'xl' },
+    px: { base: 5, md: 4 },
+    py: { base: 2.5, md: 3 },
+    fontSize: 'sm',
+    fontWeight: '600',
+    bg: cardBg,
+    border: '1px solid',
+    borderColor: borderColor,
+    shadow: 'sm',
+    transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+    _hover: { bg: useColorModeValue('gray.50', 'gray.700'), transform: 'translateY(-1px)', shadow: 'md' },
+  }
+  const tabSelectedStyle = {
+    bg: useColorModeValue('brand.500', 'brand.600'),
+    color: 'white',
+    borderColor: 'transparent',
+    shadow: 'md',
+    transform: 'translateY(-1px)',
+  }
 
   // Account State
   const [username, setUsername] = useState(user?.name || '')
@@ -241,22 +252,6 @@ const SettingsPage: React.FC = () => {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false)
   const [passwordErrors, setPasswordErrors] = useState<string[]>([])
 
-  // Helper function to load initial font size from localStorage
-  const initializeFontSize = () => {
-    try {
-      const saved = localStorage.getItem('user_settings')
-      if (saved) {
-        const parsed = JSON.parse(saved)
-        if (parsed.fontSize) {
-          return parsed.fontSize
-        }
-      }
-    } catch (e) {
-      // ignore
-    }
-    return 'medium'
-  }
-
   // Notifications State
   const [emailNotifications, setEmailNotifications] = useState(true)
   const [pushNotifications, setPushNotifications] = useState(true)
@@ -276,9 +271,6 @@ const SettingsPage: React.FC = () => {
   const [yearLevel, setYearLevel] = useState<string>((user as any)?.year_level || '')
   const [academicBio, setAcademicBio] = useState<string>((user as any)?.bio || '')
   const [verificationLoading, setVerificationLoading] = useState(false)
-  const [idUploadLoading, setIdUploadLoading] = useState(false)
-  const [verificationReason, setVerificationReason] = useState<string | null>(null)
-  const [documentType, setDocumentType] = useState<'id' | 'cor'>('id')
   // School email OTP step (code sent to .edu email)
   const [schoolEmailCode, setSchoolEmailCode] = useState('')
   const [schoolEmailVerifyLoading, setSchoolEmailVerifyLoading] = useState(false)
@@ -337,7 +329,6 @@ const SettingsPage: React.FC = () => {
   const [searching, setSearching] = useState(false)
   const [gpsLoading, setGpsLoading] = useState(false)
 
-  const cancelRef = useRef<HTMLButtonElement>(null)
   const logoutCancelRef = useRef<HTMLButtonElement>(null)
   const deleteAccountCancelRef = useRef<HTMLButtonElement>(null)
   const identityConfirmCancelRef = useRef<HTMLButtonElement>(null)
@@ -1111,7 +1102,6 @@ const SettingsPage: React.FC = () => {
       setShowSchoolOtpStep(false)
       await refreshUser()
       setVerificationStatus('not_verified')
-      setVerificationReason(null)
     } catch (err: any) {
       const message = err?.response?.data?.error || err?.message || 'Invalid or expired code'
       toast({
@@ -1205,26 +1195,17 @@ const SettingsPage: React.FC = () => {
     }
   }
 
-  // Handle logout — clear tokens/cookies and notify backend if possible
+  const clearAuthTokens = () => {
+    const keys = ['token', 'auth_token', 'access_token', 'refresh_token', 'session']
+    keys.forEach((k) => {
+      try { localStorage.removeItem(k) } catch { }
+      try { sessionStorage.removeItem(k) } catch { }
+      try { document.cookie = `${k}=; Max-Age=0; path=/;` } catch { }
+    })
+  }
+
   const handleLogout = async () => {
-
-    // Clear common client-side storage keys
-    try {
-      const keys = ['token', 'auth_token', 'access_token', 'refresh_token', 'session']
-      keys.forEach((k) => {
-        try { localStorage.removeItem(k) } catch { }
-        try { sessionStorage.removeItem(k) } catch { }
-        try { document.cookie = `${k}=; Max-Age=0; path=/;` } catch { }
-      })
-    } catch (e) {
-      // ignore
-    }
-
-    // Server-side logout endpoint not implemented in all backends.
-    // Skip calling `/api/logout` to avoid 404 noise in the browser console.
-    // If you have a server-side logout endpoint, re-enable this call.
-
-    // Call context logout if available to clear auth state
+    clearAuthTokens()
     try {
       logout && logout()
     } catch (e) {
@@ -1240,29 +1221,14 @@ const SettingsPage: React.FC = () => {
       isClosable: true,
     })
 
-    // Navigate to login page and close any open logout dialog
     navigate('/login')
     try { onLogoutModalClose() } catch { }
   }
 
-  // Handle account deletion
   const handleDeleteAccount = async () => {
     try {
       await api.delete('/api/users/account')
-
-      // Clear client-side storage
-      try {
-        const keys = ['token', 'auth_token', 'access_token', 'refresh_token', 'session']
-        keys.forEach((k) => {
-          try { localStorage.removeItem(k) } catch { }
-          try { sessionStorage.removeItem(k) } catch { }
-          try { document.cookie = `${k}=; Max-Age=0; path=/;` } catch { }
-        })
-      } catch (e) {
-        // ignore
-      }
-
-      // Logout locally
+      clearAuthTokens()
       try {
         logout && logout()
       } catch (e) {
@@ -1294,12 +1260,703 @@ const SettingsPage: React.FC = () => {
     }
   }
 
-  const handleClose = useCallback(() => {
-    navigate(-1)
-  }, [navigate])
+  const openHomeAddressPicker = () => {
+    setAddressSearch('')
+    setSearchResults([])
+    const initial = homeLocation || { lat: 14.5995, lng: 120.9842 }
+    setPendingHomeLocation(initial)
+    onHomeMapOpen()
+    if ('geolocation' in navigator) {
+      setGpsLoading(true)
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          setPendingHomeLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude })
+          setGpsLoading(false)
+        },
+        () => setGpsLoading(false),
+        { timeout: 8000 }
+      )
+    }
+  }
+
+  const handleRemoveHomeAddress = async () => {
+    try {
+      await api.put('/api/users/profile', {
+        home_latitude: null,
+        home_longitude: null,
+        home_address: '',
+      })
+      localStorage.removeItem('clovia_home_location')
+      setHomeLocation(null)
+      setHomeAddressLabel('')
+      window.dispatchEvent(new CustomEvent('homeAddressChanged', { detail: { lat: null, lng: null } }))
+      toast({ id: 'home-address-cleared', title: 'Home address removed', status: 'info', duration: 3000, isClosable: true })
+    } catch {
+      toast({ id: 'home-address-clear-error', title: 'Could not remove location', status: 'error', duration: 3000, isClosable: true })
+    }
+  }
+
+  const [editingField, setEditingField] = useState<'name' | 'phone' | 'email' | null>(null)
+  const isVerified = user?.verification_status === 'verified' || user?.verified || false
+
+  const StatusBadge = ({ ok, label }: { ok: boolean; label: string }) => (
+    <Badge colorScheme={ok ? 'green' : 'orange'} variant="subtle" borderRadius="full" px={2} py={0.5}>
+      <HStack spacing={1}>
+        {ok && <Icon as={FaCheckCircle} boxSize={3} />}
+        <Text fontSize="2xs">{label}</Text>
+      </HStack>
+    </Badge>
+  )
+
+  const SettingsCard = ({ title, icon, children, tone = 'default' }: { title: string; icon: React.ElementType; children: React.ReactNode; tone?: 'default' | 'danger' }) => (
+    <Card
+      bg={tone === 'danger' ? useColorModeValue('red.50', 'rgba(245, 75, 85, 0.08)') : cardBg}
+      borderRadius="2xl"
+      borderWidth="1px"
+      borderColor={tone === 'danger' ? useColorModeValue('red.200', 'red.800') : borderColor}
+      shadow="sm"
+      overflow="hidden"
+    >
+      <CardHeader pb={2}>
+        <HStack spacing={3}>
+          <Icon as={icon} color={tone === 'danger' ? 'red.500' : 'brand.500'} boxSize={5} />
+          <Heading size="md" color={tone === 'danger' ? useColorModeValue('red.700', 'red.200') : undefined}>{title}</Heading>
+        </HStack>
+      </CardHeader>
+      <CardBody pt={0}>{children}</CardBody>
+    </Card>
+  )
+
+  const RowButton = ({
+    label,
+    value,
+    badge,
+    onClick,
+    children,
+  }: {
+    label: string
+    value: React.ReactNode
+    badge?: React.ReactNode
+    onClick?: () => void
+    children?: React.ReactNode
+  }) => (
+    <Box>
+      <Flex
+        as={onClick ? 'button' : 'div'}
+        onClick={onClick}
+        w="full"
+        minH="58px"
+        align="center"
+        justify="space-between"
+        gap={3}
+        textAlign="left"
+        px={3}
+        py={3}
+        borderRadius="xl"
+        _hover={onClick ? { bg: useColorModeValue('gray.50', 'whiteAlpha.100') } : undefined}
+      >
+        <Box minW={0}>
+          <Text fontSize="xs" color={mutedTextColor} fontWeight="700" textTransform="uppercase">
+            {label}
+          </Text>
+          <Text fontSize="sm" fontWeight="700" color={useColorModeValue('gray.800', 'gray.100')} noOfLines={1}>
+            {value}
+          </Text>
+        </Box>
+        <HStack spacing={2} flexShrink={0}>
+          {badge}
+          {onClick && <Text color={mutedTextColor} fontSize="lg">›</Text>}
+        </HStack>
+      </Flex>
+      {children}
+    </Box>
+  )
+
+  const ToggleRow = ({ label, helper, checked, disabled, onChange }: { label: string; helper?: string; checked: boolean; disabled?: boolean; onChange: (checked: boolean) => void }) => (
+    <Flex align="center" justify="space-between" gap={4} py={3}>
+      <Box minW={0}>
+        <Text fontWeight="700" fontSize="sm">{label}</Text>
+        {helper && <Text fontSize="xs" color={mutedTextColor} mt={0.5}>{helper}</Text>}
+      </Box>
+      <Switch isChecked={checked} isDisabled={disabled} onChange={(e) => onChange(e.target.checked)} colorScheme="brand" size="lg" flexShrink={0} />
+    </Flex>
+  )
 
   return (
-    <SettingsSheet isMobile={isMobile} sheetAnimation={sheetAnimation} dragControls={dragControls} onClose={handleClose}>
+    <SettingsSheet>
+      <Container maxW="container.md" py={{ base: 4, md: 8 }} px={{ base: 3, md: 6 }}>
+        <VStack spacing={4} align="stretch">
+          <Flex justify="space-between" align="center" px={{ base: 1, md: 0 }}>
+            <HStack spacing={3}>
+              <Icon as={FiSettings} boxSize={5} color={useColorModeValue('brand.500', 'brand.300')} />
+              <Heading size="lg">Settings</Heading>
+            </HStack>
+            {saveStatus === 'saved' && <Badge colorScheme="green" borderRadius="full" px={3}>Saved</Badge>}
+          </Flex>
+
+          <SettingsCard title="Profile" icon={FaUserCircle}>
+            <Flex align="center" gap={4}>
+              <Box position="relative" flexShrink={0}>
+                <VerifiedAvatar
+                  key={profileImage || 'no-image'}
+                  size="2xl"
+                  src={profileImage || undefined}
+                  name={username || user?.name || 'User'}
+                  bg="brand.500"
+                  isVerified={isVerified}
+                />
+              </Box>
+              <Box flex={1} minW={0}>
+                <HStack spacing={2} flexWrap="wrap">
+                  <Text fontSize={{ base: 'lg', md: 'xl' }} fontWeight="800" noOfLines={1}>{username || user?.name || 'Clovia user'}</Text>
+                  <StatusBadge ok={isVerified} label={isVerified ? 'Verified' : 'Unverified'} />
+                </HStack>
+                <Text fontSize="sm" color={mutedTextColor} noOfLines={1}>{email || user?.email}</Text>
+                <Input type="file" accept="image/*" onChange={handleImageUpload} display="none" id="profile-image-upload" />
+                <Button
+                  as="label"
+                  htmlFor="profile-image-upload"
+                  variant="ghost"
+                  size="sm"
+                  mt={2}
+                  px={0}
+                  cursor="pointer"
+                  colorScheme="brand"
+                  isLoading={uploadingImage}
+                  loadingText="Uploading..."
+                >
+                  Change Photo
+                </Button>
+              </Box>
+            </Flex>
+          </SettingsCard>
+
+          <SettingsCard title="Account Info" icon={FaEnvelope}>
+            <VStack spacing={1} align="stretch" divider={<Divider />}>
+              <RowButton
+                label="Display Name"
+                value={username || 'Not set'}
+                badge={displayNameLock.isLocked ? <Badge colorScheme="purple" borderRadius="full">Locked</Badge> : undefined}
+                onClick={() => setEditingField(editingField === 'name' ? null : 'name')}
+              >
+                {editingField === 'name' && (
+                  <Box px={3} pb={3}>
+                    <Input
+                      value={username}
+                      onChange={(e) => { setUsername(e.target.value); markFieldDirty('username') }}
+                      isDisabled={displayNameLock.isLocked}
+                      placeholder="Your public display name"
+                    />
+                    {displayNameLock.lastChanged && displayNameLock.nextAvailable && (
+                      <Text fontSize="xs" color={displayNameLock.isLocked ? 'orange.500' : mutedTextColor} mt={1}>
+                        Last changed {formatAccountDate(displayNameLock.lastChanged!)}.
+                      </Text>
+                    )}
+                  </Box>
+                )}
+              </RowButton>
+
+              <RowButton
+                label="Phone Number"
+                value={phoneNumber || 'Add phone number'}
+                badge={<StatusBadge ok={phoneVerified} label={phoneVerified ? 'Verified' : 'Unverified'} />}
+                onClick={() => setEditingField(editingField === 'phone' ? null : 'phone')}
+              >
+                {editingField === 'phone' && (
+                  <VStack px={3} pb={3} align="stretch" spacing={2}>
+                    <HStack spacing={2}>
+                      <Input
+                        type="tel"
+                        inputMode="numeric"
+                        value={phoneNumber}
+                        onChange={(e) => {
+                          const digitsOnly = normalizePhilippinePhone(e.target.value)
+                          setPhoneNumber(digitsOnly)
+                          if (phoneVerified && digitsOnly !== ((user as any)?.phone || '')) setPhoneVerified(false)
+                          markFieldDirty('phone')
+                        }}
+                        isDisabled={phoneLock.isLocked}
+                        placeholder="09XXXXXXXXX"
+                      />
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        colorScheme="orange"
+                        isDisabled={!phoneNumber.trim() || phoneVerified || phoneNumber !== ((user as any)?.phone || '') || !validatePhone(phoneNumber)}
+                        onClick={() => { setPhoneOtpCode(''); setPhoneOtpSent(false); setResendPhoneCooldown(0); onPhoneModalOpen() }}
+                      >
+                        Verify
+                      </Button>
+                    </HStack>
+                    {phoneNumber && !validatePhone(phoneNumber) && <Text fontSize="xs" color="red.500">Use 09XXXXXXXXX format.</Text>}
+                  </VStack>
+                )}
+              </RowButton>
+
+              <RowButton
+                label="Email"
+                value={email || 'Add email'}
+                badge={<StatusBadge ok={Boolean(user?.verified)} label={user?.verified ? 'Verified' : 'Unverified'} />}
+                onClick={() => setEditingField(editingField === 'email' ? null : 'email')}
+              >
+                {editingField === 'email' && (
+                  <VStack px={3} pb={3} align="stretch" spacing={2}>
+                    <HStack spacing={2}>
+                      <Input
+                        type="email"
+                        value={email}
+                        onChange={(e) => { setEmail(e.target.value); markFieldDirty('email') }}
+                        isDisabled={emailLock.isLocked}
+                        placeholder="you@example.com"
+                      />
+                      {!user?.verified && email === user?.email && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          colorScheme="orange"
+                          isLoading={verificationLoading}
+                          onClick={async () => {
+                            setVerificationLoading(true)
+                            try {
+                              await api.post('/api/auth/resend-verification', { email: user?.email })
+                              toast({ title: 'Verification email sent', status: 'info', duration: 4000, isClosable: true })
+                              navigate('/verify-email', { state: { email: user?.email } })
+                            } catch (err: any) {
+                              toast({ title: 'Error', description: err.response?.data?.error || 'Failed to send verification email', status: 'error', duration: 3000, isClosable: true })
+                            } finally {
+                              setVerificationLoading(false)
+                            }
+                          }}
+                        >
+                          Verify
+                        </Button>
+                      )}
+                    </HStack>
+                    {email && !validateEmail(email) && <Text fontSize="xs" color="red.500">Enter a valid email address.</Text>}
+                  </VStack>
+                )}
+              </RowButton>
+            </VStack>
+          </SettingsCard>
+
+          <SettingsCard title="Security" icon={FaLock}>
+            <VStack spacing={1} align="stretch" divider={<Divider />}>
+              <RowButton label="Change Password" value={getPasswordChangedLabel().replace('Password last changed: ', '')} onClick={onPasswordModalOpen} />
+              <RowButton label="Session" value="Session expires automatically when authentication is invalid." />
+            </VStack>
+          </SettingsCard>
+
+          <SettingsCard title="Address" icon={FaHome}>
+            <VStack align="stretch" spacing={3}>
+              {homeLocation ? (
+                <Box borderRadius="xl" overflow="hidden" borderWidth="1px" borderColor={borderColor}>
+                  <Box h="150px">
+                  <MapContainer center={[homeLocation.lat, homeLocation.lng]} zoom={14} style={{ height: '100%', width: '100%' }} dragging={false} zoomControl={false} scrollWheelZoom={false}>
+                      <TileLayer attribution="" url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+                      <Marker position={[homeLocation.lat, homeLocation.lng]} />
+                    </MapContainer>
+                  </Box>
+                  <HStack p={3} align="start">
+                    <Icon as={FiMapPin} color="brand.500" mt={0.5} />
+                    <Box>
+                      <Text fontWeight="700" fontSize="sm">{homeAddressLabel || `${homeLocation.lat.toFixed(5)}, ${homeLocation.lng.toFixed(5)}`}</Text>
+                      <Text fontSize="xs" color={mutedTextColor}>This is used for distance calculations only.</Text>
+                    </Box>
+                  </HStack>
+                </Box>
+              ) : (
+                <Box p={4} borderRadius="xl" bg={useColorModeValue('gray.50', 'whiteAlpha.100')}>
+                  <Text fontWeight="700" fontSize="sm">No home location set</Text>
+                  <Text fontSize="xs" color={mutedTextColor}>This is used for distance calculations only.</Text>
+                </Box>
+              )}
+              <HStack spacing={2} flexWrap="wrap">
+                <Button leftIcon={<FiMapPin />} size="sm" colorScheme="brand" variant={homeLocation ? 'outline' : 'solid'} onClick={openHomeAddressPicker}>
+                  {homeLocation ? 'Edit Location' : 'Set Location'}
+                </Button>
+                {homeLocation && (
+                  <Button size="sm" variant="ghost" colorScheme="red" onClick={handleRemoveHomeAddress}>
+                    Remove Location
+                  </Button>
+                )}
+              </HStack>
+            </VStack>
+          </SettingsCard>
+
+          <SettingsCard title="Notifications" icon={FaBell}>
+            <VStack spacing={0} align="stretch" divider={<Divider />}>
+              <ToggleRow
+                label="Push Notifications"
+                helper={pushSubscriptionActive ? 'Enabled on this device' : 'Device alerts for important updates'}
+                checked={pushNotifications}
+                disabled={pushBusy || !isPushSupported()}
+                onChange={handlePushNotificationsToggle}
+              />
+              <ToggleRow
+                label="Trade Updates"
+                checked={notificationPreferences.trade_updates}
+                onChange={(checked) => updateNotificationPreference('trade_updates', checked)}
+              />
+              <ToggleRow
+                label="Messages"
+                checked={notificationPreferences.chat_messages}
+                onChange={(checked) => updateNotificationPreference('chat_messages', checked)}
+              />
+              <ToggleRow
+                label="Promotions and announcements"
+                checked={notificationPreferences.system_announcements}
+                onChange={(checked) => updateNotificationPreference('system_announcements', checked)}
+              />
+              <ToggleRow
+                label="Email Notifications"
+                checked={emailNotifications}
+                onChange={(checked) => { setEmailNotifications(checked); markFieldDirty('emailNotifications') }}
+              />
+            </VStack>
+            {pushStatusText && <Text fontSize="xs" color={mutedTextColor} mt={3}>{pushStatusText}</Text>}
+          </SettingsCard>
+
+          <SettingsCard title="Danger Zone" icon={FaTrash} tone="danger">
+            <VStack spacing={3} align="stretch">
+              <Flex justify="space-between" align="center" gap={3}>
+                <Box>
+                  <Text fontWeight="700" fontSize="sm">Log out</Text>
+                  <Text fontSize="xs" color={mutedTextColor}>Sign out from this device.</Text>
+                </Box>
+                <Button size="sm" variant="outline" colorScheme="red" leftIcon={<FaSignOutAlt />} onClick={onLogoutModalOpen}>
+                  Logout
+                </Button>
+              </Flex>
+              <Divider borderColor={useColorModeValue('red.200', 'red.800')} />
+              <Flex justify="space-between" align="center" gap={3}>
+                <Box>
+                  <Text fontWeight="700" fontSize="sm">Deactivate Account</Text>
+                  <Text fontSize="xs" color={mutedTextColor}>Hide your profile and listings temporarily.</Text>
+                </Box>
+                <Button size="sm" variant="outline" colorScheme="orange" onClick={onDeactivateOpen}>
+                  Deactivate
+                </Button>
+              </Flex>
+              <Flex justify="space-between" align="center" gap={3}>
+                <Box>
+                  <Text fontWeight="700" fontSize="sm">Delete Account</Text>
+                  <Text fontSize="xs" color={mutedTextColor}>Permanently remove your account.</Text>
+                </Box>
+                <Button size="sm" variant="ghost" colorScheme="red" onClick={() => { setDeleteConfirmText(''); onDeleteAccountOpen() }}>
+                  Delete
+                </Button>
+              </Flex>
+            </VStack>
+          </SettingsCard>
+        </VStack>
+      </Container>
+
+      {hasUnsavedChanges && (
+        <Box
+          position="fixed"
+          bottom={{ base: 'calc(env(safe-area-inset-bottom, 0px) + 88px)', md: 0 }}
+          left={0}
+          right={0}
+          bg={cardBg}
+          borderTopWidth="1px"
+          borderColor={borderColor}
+          boxShadow="0 -4px 24px rgba(0,0,0,0.10)"
+          pt={3}
+          pb={{ base: 3, md: 'calc(env(safe-area-inset-bottom, 0px) + 12px)' }}
+          px={4}
+          zIndex={1001}
+        >
+          <Container maxW="container.md">
+            <Flex justify="space-between" align="center" flexWrap="wrap" gap={3}>
+              <Text color={mutedTextColor} fontSize="sm" fontWeight="600">Unsaved changes</Text>
+              <HStack spacing={3}>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    if (user) resetEditableStateFromUser(user, true)
+                    toast({ id: 'settings-changes-discarded', title: 'Changes discarded', status: 'info', duration: 2000, isClosable: true })
+                  }}
+                >
+                  Discard
+                </Button>
+                <Button colorScheme="brand" size="sm" leftIcon={isSaving ? <Spinner size="sm" /> : <FiSave />} onClick={() => handleSaveSettings()} isLoading={isSaving}>
+                  Save
+                </Button>
+              </HStack>
+            </Flex>
+          </Container>
+        </Box>
+      )}
+
+      <Modal isOpen={isHomeMapOpen} onClose={() => { onHomeMapClose(); setSearchResults([]); setAddressSearch('') }} size="xl" isCentered scrollBehavior="inside">
+        <ModalOverlay backdropFilter="blur(4px)" />
+        <ModalContent borderRadius="2xl" overflow="hidden" mx={2} maxH="90vh">
+          <ModalHeader pb={2}><HStack spacing={2}><Icon as={FaHome} color="brand.500" /><Text>Set Home Address</Text></HStack></ModalHeader>
+          <ModalCloseButton />
+          <ModalBody p={0}>
+            <VStack spacing={0} align="stretch">
+              <Box p={4} bg={cardBg} borderBottom="1px solid" borderColor={borderColor}>
+                <HStack spacing={2}>
+                  <Input
+                    placeholder="Search address or place name..."
+                    value={addressSearch}
+                    onChange={(e) => setAddressSearch(e.target.value)}
+                    onKeyDown={async (e) => {
+                      if (e.key === 'Enter' && addressSearch.trim().length > 2) {
+                        setSearching(true)
+                        try {
+                          const res = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(addressSearch)}&format=json&limit=5&countrycodes=ph`, { headers: { 'Accept-Language': 'en' } })
+                          const data = await res.json()
+                          setSearchResults(Array.isArray(data) ? data : [])
+                        } finally {
+                          setSearching(false)
+                        }
+                      }
+                    }}
+                    borderRadius="xl"
+                  />
+                  <Button
+                    leftIcon={<FiMapPin />}
+                    isLoading={gpsLoading}
+                    onClick={() => {
+                      if (!('geolocation' in navigator)) return
+                      setGpsLoading(true)
+                      navigator.geolocation.getCurrentPosition(
+                        (pos) => { setPendingHomeLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude }); setGpsLoading(false) },
+                        () => setGpsLoading(false),
+                        { timeout: 8000 }
+                      )
+                    }}
+                    variant="outline"
+                  >
+                    GPS
+                  </Button>
+                  <Button
+                    isLoading={searching}
+                    onClick={async () => {
+                      if (addressSearch.trim().length < 2) return
+                      setSearching(true)
+                      try {
+                        const res = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(addressSearch)}&format=json&limit=5&countrycodes=ph`, { headers: { 'Accept-Language': 'en' } })
+                        const data = await res.json()
+                        setSearchResults(Array.isArray(data) ? data : [])
+                      } finally {
+                        setSearching(false)
+                      }
+                    }}
+                    colorScheme="brand"
+                  >
+                    Search
+                  </Button>
+                </HStack>
+                {searchResults.length > 0 && (
+                  <VStack mt={3} align="stretch" spacing={2}>
+                    {searchResults.map((r, idx) => (
+                      <Button key={`${r.lat}-${r.lon}-${idx}`} variant="ghost" justifyContent="flex-start" h="auto" py={2} whiteSpace="normal" onClick={() => {
+                        setPendingHomeLocation({ lat: parseFloat(r.lat), lng: parseFloat(r.lon) })
+                        setAddressSearch(r.display_name.split(',').slice(0, 3).join(','))
+                        setSearchResults([])
+                      }}>
+                        <Text fontSize="sm" textAlign="left" noOfLines={2}>{r.display_name}</Text>
+                      </Button>
+                    ))}
+                  </VStack>
+                )}
+              </Box>
+              {pendingHomeLocation && (
+                <Box h={{ base: '360px', md: '420px' }} w="full">
+                  <MapContainer center={[pendingHomeLocation!.lat, pendingHomeLocation!.lng]} zoom={15} style={{ height: '100%', width: '100%' }}>
+                    <TileLayer attribution="&copy; OpenStreetMap contributors" url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+                    <HomeMapClickHandler onSelect={(lat, lng) => { setPendingHomeLocation({ lat, lng }); setSearchResults([]) }} />
+                    <HomeMapCenterUpdater lat={pendingHomeLocation!.lat} lng={pendingHomeLocation!.lng} />
+                    <Marker position={[pendingHomeLocation!.lat, pendingHomeLocation!.lng]} />
+                  </MapContainer>
+                </Box>
+              )}
+            </VStack>
+          </ModalBody>
+          <ModalFooter gap={2} pt={3}>
+            <Button variant="ghost" size="sm" onClick={() => { onHomeMapClose(); setSearchResults([]); setAddressSearch('') }} isDisabled={homeSaving}>Cancel</Button>
+            <Button colorScheme="brand" size="sm" leftIcon={<FaHome />} isLoading={homeSaving} isDisabled={!pendingHomeLocation} onClick={() => pendingHomeLocation && handleSaveHomeAddress(pendingHomeLocation)}>
+              Confirm Home Address
+            </Button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
+
+      <AlertDialog isOpen={isIdentityConfirmOpen} leastDestructiveRef={identityConfirmCancelRef} onClose={onIdentityConfirmClose} isCentered>
+        <AlertDialogOverlay>
+          <AlertDialogContent borderRadius="2xl">
+            <AlertDialogHeader fontSize="lg" fontWeight="700">Confirm account identity changes</AlertDialogHeader>
+            <AlertDialogBody>
+              <Text fontSize="sm">You are changing your {identityChangeSummary.join(', ')}. These fields cannot be changed again for 3 months after saving.</Text>
+            </AlertDialogBody>
+            <AlertDialogFooter>
+              <Button ref={identityConfirmCancelRef} variant="ghost" onClick={onIdentityConfirmClose}>Cancel</Button>
+              <Button colorScheme="brand" ml={3} isLoading={isSaving} onClick={() => { onIdentityConfirmClose(); handleSaveSettings(true) }}>Save Protected Changes</Button>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialogOverlay>
+      </AlertDialog>
+
+      <Modal isOpen={isPasswordModalOpen} onClose={onPasswordModalClose} size="md">
+        <ModalOverlay />
+        <ModalContent>
+          <ModalHeader>Change Password</ModalHeader>
+          <ModalCloseButton />
+          <ModalBody>
+            <VStack spacing={4} align="stretch">
+              <FormControl>
+                <FormLabel>Current Password</FormLabel>
+                <InputGroup>
+                  <Input type={showCurrentPassword ? 'text' : 'password'} value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} placeholder="Enter current password" />
+                  <InputRightElement>
+                    <IconButton aria-label={showCurrentPassword ? 'Hide password' : 'Show password'} icon={showCurrentPassword ? <FaEyeSlash /> : <FaEye />} variant="ghost" size="sm" onClick={() => setShowCurrentPassword(!showCurrentPassword)} />
+                  </InputRightElement>
+                </InputGroup>
+              </FormControl>
+              <FormControl>
+                <FormLabel>New Password</FormLabel>
+                <InputGroup>
+                  <Input type={showNewPassword ? 'text' : 'password'} value={newPassword} onChange={(e) => { setNewPassword(e.target.value); setPasswordErrors(validatePassword(e.target.value)) }} placeholder="Enter new password" />
+                  <InputRightElement>
+                    <IconButton aria-label={showNewPassword ? 'Hide password' : 'Show password'} icon={showNewPassword ? <FaEyeSlash /> : <FaEye />} variant="ghost" size="sm" onClick={() => setShowNewPassword(!showNewPassword)} />
+                  </InputRightElement>
+                </InputGroup>
+                {passwordErrors.length > 0 && (
+                  <VStack align="start" spacing={1} mt={2}>
+                    {passwordErrors.map((error, index) => <Text key={index} fontSize="xs" color="red.500">• {error}</Text>)}
+                  </VStack>
+                )}
+              </FormControl>
+              <FormControl>
+                <FormLabel>Confirm New Password</FormLabel>
+                <InputGroup>
+                  <Input type={showConfirmPassword ? 'text' : 'password'} value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} placeholder="Confirm new password" />
+                  <InputRightElement>
+                    <IconButton aria-label={showConfirmPassword ? 'Hide password' : 'Show password'} icon={showConfirmPassword ? <FaEyeSlash /> : <FaEye />} variant="ghost" size="sm" onClick={() => setShowConfirmPassword(!showConfirmPassword)} />
+                  </InputRightElement>
+                </InputGroup>
+              </FormControl>
+            </VStack>
+          </ModalBody>
+          <ModalFooter>
+            <Button variant="ghost" mr={3} onClick={onPasswordModalClose}>Cancel</Button>
+            <Button colorScheme="brand" onClick={handlePasswordChange} isLoading={changingPassword} loadingText="Changing...">Change Password</Button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
+
+      <Modal isOpen={isPhoneModalOpen} onClose={() => { setPhoneOtpCode(''); setPhoneOtpSent(false); setResendPhoneCooldown(0); onPhoneModalClose() }} size="md">
+        <ModalOverlay />
+        <ModalContent>
+          <ModalHeader>Verify Phone Number</ModalHeader>
+          <ModalCloseButton />
+          <ModalBody>
+            <VStack spacing={4} align="stretch">
+              <FormControl><FormLabel>Phone Number</FormLabel><Input value={phoneNumber} isReadOnly /></FormControl>
+              {!phoneVerified && (
+                <>
+                  <Button size="sm" colorScheme="orange" w="fit-content" onClick={phoneOtpSent ? handleResendPhoneVerification : handleStartPhoneVerification} isLoading={phoneSendLoading} isDisabled={phoneOtpSent && resendPhoneCooldown > 0}>
+                    {phoneOtpSent ? (resendPhoneCooldown > 0 ? `Resend in ${resendPhoneCooldown}s` : 'Resend Code') : 'Send Code'}
+                  </Button>
+                  {phoneOtpSent && (
+                    <FormControl>
+                      <FormLabel>Verification Code</FormLabel>
+                      <Input maxLength={6} value={phoneOtpCode} onChange={(e) => setPhoneOtpCode(e.target.value.replace(/\D/g, '').slice(0, 6))} placeholder="000000" fontFamily="mono" fontSize="lg" w="140px" />
+                    </FormControl>
+                  )}
+                </>
+              )}
+            </VStack>
+          </ModalBody>
+          <ModalFooter>
+            <Button variant="ghost" mr={3} onClick={onPhoneModalClose}>Close</Button>
+            {!phoneVerified && <Button colorScheme="green" onClick={handleVerifyPhoneCode} isLoading={phoneVerifyLoading} isDisabled={phoneOtpCode.trim().length !== 6}>Verify Code</Button>}
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
+
+      <AlertDialog isOpen={isLogoutModalOpen} leastDestructiveRef={logoutCancelRef} onClose={onLogoutModalClose}>
+        <AlertDialogOverlay>
+          <AlertDialogContent>
+            <AlertDialogHeader fontSize="lg" fontWeight="bold">Logout</AlertDialogHeader>
+            <AlertDialogBody>Are you sure you want to logout? You will need to login again to access your account.</AlertDialogBody>
+            <AlertDialogFooter>
+              <Button ref={logoutCancelRef} onClick={onLogoutModalClose}>Cancel</Button>
+              <Button colorScheme="red" variant="outline" onClick={handleLogout} ml={3}>Logout</Button>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialogOverlay>
+      </AlertDialog>
+
+      <AlertDialog isOpen={isDeleteAccountOpen} leastDestructiveRef={deleteAccountCancelRef} onClose={onDeleteAccountClose}>
+        <AlertDialogOverlay>
+          <AlertDialogContent>
+            <AlertDialogHeader fontSize="lg" fontWeight="bold">Delete Account</AlertDialogHeader>
+            <AlertDialogBody>
+              This will permanently delete your account and all your data. Type <strong>DELETE</strong> to confirm.
+              <Input mt={3} value={deleteConfirmText} onChange={(e) => setDeleteConfirmText(e.target.value)} placeholder="Type DELETE" />
+            </AlertDialogBody>
+            <AlertDialogFooter>
+              <Button ref={deleteAccountCancelRef} onClick={() => { setDeleteConfirmText(''); onDeleteAccountClose() }}>Cancel</Button>
+              <Button colorScheme="red" onClick={handleDeleteAccount} ml={3} isDisabled={deleteConfirmText.trim() !== 'DELETE'}>Delete Account</Button>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialogOverlay>
+      </AlertDialog>
+
+      <AlertDialog isOpen={isDeactivateOpen} leastDestructiveRef={deactivateCancelRef} onClose={onDeactivateClose} isCentered>
+        <AlertDialogOverlay>
+          <AlertDialogContent borderRadius="2xl" mx={4}>
+            <AlertDialogHeader fontSize="lg" fontWeight="700">Deactivate Account</AlertDialogHeader>
+            <AlertDialogBody>
+              <VStack spacing={4} align="stretch">
+                <Text fontSize="sm" color="gray.600">Your profile, listings, and trade availability will be hidden. You can reactivate anytime by logging back in.</Text>
+                <Select value={deactivateDuration} onChange={(e) => setDeactivateDuration(e.target.value as typeof deactivateDuration)} borderRadius="xl" fontWeight="600">
+                  <option value="1_week">1 week</option>
+                  <option value="2_weeks">2 weeks</option>
+                  <option value="1_month">1 month</option>
+                  <option value="indefinite">Indefinite (until I log back in)</option>
+                </Select>
+              </VStack>
+            </AlertDialogBody>
+            <AlertDialogFooter>
+              <Button ref={deactivateCancelRef} variant="ghost" onClick={onDeactivateClose}>Cancel</Button>
+              <Button
+                colorScheme="orange"
+                ml={3}
+                isLoading={isDeactivating}
+                loadingText="Deactivating..."
+                onClick={async () => {
+                  setIsDeactivating(true)
+                  try {
+                    await api.post('/api/users/deactivate', { duration: deactivateDuration })
+                    toast({ id: 'account-deactivated', title: 'Account deactivated', description: 'Your account is now hidden. Log back in anytime to reactivate.', status: 'success', duration: 4000, isClosable: true })
+                    onDeactivateClose()
+                    await logout()
+                    navigate('/login')
+                  } catch (err: any) {
+                    toast({ id: 'deactivate-error', title: 'Could not deactivate account', description: err?.response?.data?.error || 'Please try again.', status: 'error', duration: 3000, isClosable: true })
+                  } finally {
+                    setIsDeactivating(false)
+                  }
+                }}
+              >
+                Deactivate
+              </Button>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialogOverlay>
+      </AlertDialog>
+
+      <FloatingTab />
+    </SettingsSheet>
+  )
+
+  return (
+    <SettingsSheet>
       <Container maxW="container.lg" py={{ base: 6, md: 8 }}>
         <VStack spacing={6} align="stretch">
 
@@ -1326,26 +1983,14 @@ const SettingsPage: React.FC = () => {
                     Settings
                   </Heading>
                 </HStack>
-                <HStack spacing={3}>
-                  {saveStatus === 'saved' && (
-                    <Badge colorScheme="green" px={3} py={1} borderRadius="full" fontSize="sm">
-                      <HStack spacing={1}>
-                        <Icon as={FaCheckCircle} />
-                        <Text>Saved</Text>
-                      </HStack>
-                    </Badge>
-                  )}
-                  {/* Logout Button */}
-                  <IconButton
-                    aria-label="Logout"
-                    icon={<FaSignOutAlt />}
-                    size="sm"
-                    variant="ghost"
-                    colorScheme="orange"
-                    onClick={onLogoutModalOpen}
-                    title="Logout"
-                  />
-                </HStack>
+                {saveStatus === 'saved' && (
+                  <Badge colorScheme="green" px={3} py={1} borderRadius="full" fontSize="sm">
+                    <HStack spacing={1}>
+                      <Icon as={FaCheckCircle} />
+                      <Text>Saved</Text>
+                    </HStack>
+                  </Badge>
+                )}
               </Flex>
 
               {/* Horizontal scrollable tab list */}
@@ -1357,107 +2002,29 @@ const SettingsPage: React.FC = () => {
                 display="flex"
                 flexWrap="nowrap"
               >
-                <Tab
-                  flexShrink={0}
-                  justifyContent="flex-start"
-                  whiteSpace="nowrap"
-                  borderRadius={{ base: "full", md: "xl" }}
-                  px={{ base: 5, md: 4 }}
-                  py={{ base: 2.5, md: 3 }}
-                  fontSize="sm"
-                  fontWeight="600"
-                  color={useColorModeValue('gray.600', 'gray.400')}
-                  bg={useColorModeValue('white', 'gray.800')}
-                  border="1px solid"
-                  borderColor={useColorModeValue('gray.200', 'gray.700')}
-                  shadow="sm"
-                  _selected={{
-                    bg: useColorModeValue('brand.500', 'brand.600'),
-                    color: 'white',
-                    borderColor: 'transparent',
-                    shadow: 'md',
-                    transform: 'translateY(-1px)'
-                  }}
-                  _hover={{ bg: useColorModeValue('gray.50', 'gray.700'), transform: 'translateY(-1px)', shadow: 'md' }}
-                  transition="all 0.2s cubic-bezier(0.4, 0, 0.2, 1)"
-                ><Icon as={FaUserCircle} mr={2} boxSize={4} /> Account</Tab>
+                <Tab {...tabBaseStyle} color={useColorModeValue('gray.600', 'gray.400')} _selected={tabSelectedStyle}>
+                  <Icon as={FaUserCircle} mr={2} boxSize={4} /> Account
+                </Tab>
 
                 {user?.role !== 'admin' && (
-                  <Tab
-                    flexShrink={0}
-                    justifyContent="flex-start"
-                    whiteSpace="nowrap"
-                    borderRadius={{ base: "full", md: "xl" }}
-                    px={{ base: 5, md: 4 }}
-                    py={{ base: 2.5, md: 3 }}
-                    fontSize="sm"
-                    fontWeight="600"
-                    color={useColorModeValue('gray.600', 'gray.400')}
-                    bg={useColorModeValue('white', 'gray.800')}
-                    border="1px solid"
-                    borderColor={useColorModeValue('gray.200', 'gray.700')}
-                    shadow="sm"
-                    _selected={{
-                      bg: useColorModeValue('brand.500', 'brand.600'),
-                      color: 'white',
-                      borderColor: 'transparent',
-                      shadow: 'md',
-                      transform: 'translateY(-1px)'
-                    }}
-                    _hover={{ bg: useColorModeValue('gray.50', 'gray.700'), transform: 'translateY(-1px)', shadow: 'md' }}
-                    transition="all 0.2s cubic-bezier(0.4, 0, 0.2, 1)"
-                  ><Icon as={FaGraduationCap} mr={2} boxSize={4} /> Education</Tab>
+                  <Tab {...tabBaseStyle} color={useColorModeValue('gray.600', 'gray.400')} _selected={tabSelectedStyle}>
+                    <Icon as={FaGraduationCap} mr={2} boxSize={4} /> Education
+                  </Tab>
                 )}
 
-                <Tab
-                  flexShrink={0}
-                  justifyContent="flex-start"
-                  whiteSpace="nowrap"
-                  borderRadius={{ base: "full", md: "xl" }}
-                  px={{ base: 5, md: 4 }}
-                  py={{ base: 2.5, md: 3 }}
-                  fontSize="sm"
-                  fontWeight="600"
-                  color={useColorModeValue('gray.600', 'gray.400')}
-                  bg={useColorModeValue('white', 'gray.800')}
-                  border="1px solid"
-                  borderColor={useColorModeValue('gray.200', 'gray.700')}
-                  shadow="sm"
-                  _selected={{
-                    bg: useColorModeValue('brand.500', 'brand.600'),
-                    color: 'white',
-                    borderColor: 'transparent',
-                    shadow: 'md',
-                    transform: 'translateY(-1px)'
-                  }}
-                  _hover={{ bg: useColorModeValue('gray.50', 'gray.700'), transform: 'translateY(-1px)', shadow: 'md' }}
-                  transition="all 0.2s cubic-bezier(0.4, 0, 0.2, 1)"
-                ><Icon as={FaBell} mr={2} boxSize={4} /> Notifications</Tab>
+                <Tab {...tabBaseStyle} color={useColorModeValue('gray.600', 'gray.400')} _selected={tabSelectedStyle}>
+                  <Icon as={FaBell} mr={2} boxSize={4} /> Notifications
+                </Tab>
 
                 <Tab
-                  flexShrink={0}
-                  justifyContent="flex-start"
-                  whiteSpace="nowrap"
-                  borderRadius={{ base: "full", md: "xl" }}
-                  px={{ base: 5, md: 4 }}
-                  py={{ base: 2.5, md: 3 }}
-                  fontSize="sm"
-                  fontWeight="600"
+                  {...tabBaseStyle}
                   color={useColorModeValue('red.600', 'red.400')}
-                  bg={useColorModeValue('white', 'gray.800')}
-                  border="1px solid"
                   borderColor={useColorModeValue('red.200', 'red.800')}
-                  shadow="sm"
-                  _selected={{
-                    bg: useColorModeValue('red.500', 'red.600'),
-                    color: 'white',
-                    borderColor: 'transparent',
-                    shadow: 'md',
-                    transform: 'translateY(-1px)'
-                  }}
+                  _selected={{ bg: useColorModeValue('red.500', 'red.600'), color: 'white', borderColor: 'transparent', shadow: 'md', transform: 'translateY(-1px)' }}
                   _hover={{ bg: useColorModeValue('red.50', 'red.900'), transform: 'translateY(-1px)', shadow: 'md' }}
-                  transition="all 0.2s cubic-bezier(0.4, 0, 0.2, 1)"
-                ><Icon as={FaTrash} mr={2} boxSize={4} /> Danger Zone</Tab>
+                >
+                  <Icon as={FaTrash} mr={2} boxSize={4} /> Danger Zone
+                </Tab>
               </TabList>
             </Box>
 
@@ -1558,12 +2125,9 @@ const SettingsPage: React.FC = () => {
                           isDisabled={displayNameLock.isLocked}
                           placeholder="Your public display name"
                         />
-                        <Text fontSize="xs" color={useColorModeValue('gray.500', 'gray.400')} mt={2}>
-                          Your display name helps keep trades recognizable. For account safety, it can only be changed once every 3 months.
-                        </Text>
                         {displayNameLock.lastChanged && displayNameLock.nextAvailable && (
                           <Text fontSize="xs" color={displayNameLock.isLocked ? 'orange.500' : useColorModeValue('gray.500', 'gray.400')} mt={1}>
-                            Last changed: {formatAccountDate(displayNameLock.lastChanged)}. {displayNameLock.isLocked ? `You can update this again on ${formatAccountDate(displayNameLock.nextAvailable)}.` : 'You can update this now.'}
+                            Last changed: {formatAccountDate(displayNameLock.lastChanged!)}. {displayNameLock.isLocked ? `You can update this again on ${formatAccountDate(displayNameLock.nextAvailable!)}.` : 'You can update this now.'}
                           </Text>
                         )}
                       </FormControl>
@@ -1637,7 +2201,7 @@ const SettingsPage: React.FC = () => {
                         )}
                         {phoneLock.lastChanged && phoneLock.nextAvailable && (
                           <Text fontSize="xs" color={phoneLock.isLocked ? 'orange.500' : useColorModeValue('gray.500', 'gray.400')} mt={1}>
-                            Last changed: {formatAccountDate(phoneLock.lastChanged)}. {phoneLock.isLocked ? `You can update this again on ${formatAccountDate(phoneLock.nextAvailable)}.` : 'You can update this now.'}
+                            Last changed: {formatAccountDate(phoneLock.lastChanged!)}. {phoneLock.isLocked ? `You can update this again on ${formatAccountDate(phoneLock.nextAvailable!)}.` : 'You can update this now.'}
                           </Text>
                         )}
                       </FormControl>
@@ -1714,12 +2278,9 @@ const SettingsPage: React.FC = () => {
                             Please enter a valid email address
                           </Text>
                         )}
-                        <Text fontSize="xs" color={useColorModeValue('gray.500', 'gray.400')} mt={2}>
-                          Email changes require verification and are limited to once every 3 months for account security.
-                        </Text>
                         {emailLock.lastChanged && emailLock.nextAvailable && (
                           <Text fontSize="xs" color={emailLock.isLocked ? 'orange.500' : useColorModeValue('gray.500', 'gray.400')} mt={1}>
-                            Last changed: {formatAccountDate(emailLock.lastChanged)}. {emailLock.isLocked ? `You can update this again on ${formatAccountDate(emailLock.nextAvailable)}.` : 'You can update this now.'}
+                            Last changed: {formatAccountDate(emailLock.lastChanged!)}. {emailLock.isLocked ? `You can update this again on ${formatAccountDate(emailLock.nextAvailable!)}.` : 'You can update this now.'}
                           </Text>
                         )}
                         {email.trim().toLowerCase() !== (user?.email || '').toLowerCase() && validateEmail(email.trim()) && (
@@ -1732,11 +2293,6 @@ const SettingsPage: React.FC = () => {
                               </AlertDescription>
                             </Box>
                           </Alert>
-                        )}
-                        {!user?.verified && (
-                          <Text fontSize="xs" color="orange.500" mt={2}>
-                            ⚠️ Your email is not verified. Some features may be restricted.
-                          </Text>
                         )}
                       </FormControl>
 
@@ -1762,7 +2318,7 @@ const SettingsPage: React.FC = () => {
                       </FormControl>
 
                       <FormControl>
-                        <FormLabel>Session</FormLabel>
+                        <FormLabel>Sign Out</FormLabel>
                         <Button
                           leftIcon={<FaSignOutAlt />}
                           colorScheme="orange"
@@ -1770,10 +2326,10 @@ const SettingsPage: React.FC = () => {
                           size="sm"
                           onClick={onLogoutModalOpen}
                         >
-                          Logout
+                          Sign Out
                         </Button>
-                        <Text fontSize="xs" color={useColorModeValue('gray.500', 'gray.400')} mt={2}>
-                          Sign out from this device.
+                        <Text fontSize="xs" color={mutedTextColor} mt={2}>
+                          Sign out from this device. Your data will remain saved.
                         </Text>
                       </FormControl>
 
@@ -2002,7 +2558,7 @@ const SettingsPage: React.FC = () => {
                       {pendingHomeLocation && (
                         <Box h="340px" position="relative">
                           <MapContainer
-                            center={[pendingHomeLocation.lat, pendingHomeLocation.lng]}
+                            center={[pendingHomeLocation!.lat, pendingHomeLocation!.lng]}
                             zoom={15}
                             style={{ height: '100%', width: '100%' }}
                           >
@@ -2011,8 +2567,8 @@ const SettingsPage: React.FC = () => {
                               attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
                             />
                             <HomeMapClickHandler onSelect={(lat, lng) => { setPendingHomeLocation({ lat, lng }); setSearchResults([]) }} />
-                            <HomeMapCenterUpdater lat={pendingHomeLocation.lat} lng={pendingHomeLocation.lng} />
-                            <Marker position={[pendingHomeLocation.lat, pendingHomeLocation.lng]} />
+                            <HomeMapCenterUpdater lat={pendingHomeLocation!.lat} lng={pendingHomeLocation!.lng} />
+                            <Marker position={[pendingHomeLocation!.lat, pendingHomeLocation!.lng]} />
                           </MapContainer>
                         </Box>
                       )}
@@ -2023,7 +2579,7 @@ const SettingsPage: React.FC = () => {
                           <HStack spacing={2}>
                             <Icon as={FiMapPin} color="brand.500" boxSize={3} />
                             <Text fontSize="xs" color={useColorModeValue('gray.500', 'gray.400')}>
-                              Pinned: {pendingHomeLocation.lat.toFixed(5)}, {pendingHomeLocation.lng.toFixed(5)} · Tap map to adjust
+                              Pinned: {pendingHomeLocation!.lat.toFixed(5)}, {pendingHomeLocation!.lng.toFixed(5)} · Tap map to adjust
                             </Text>
                           </HStack>
                         </Box>
@@ -2252,119 +2808,6 @@ const SettingsPage: React.FC = () => {
                       </VStack>
                     </CardBody>
                   </Card>
-                  <Card
-                    bg={cardBg}
-                    borderRadius="2xl"
-                    overflow="hidden"
-                    variant="outline"
-                    borderColor={borderColor}
-                    shadow="sm"
-                  >
-                    <CardHeader pb={3}>
-                      <HStack spacing={3} justify="space-between" flexWrap="wrap" gap={2}>
-                        <HStack spacing={3}>
-                          <Icon as={FaBell} color="brand.500" boxSize={5} />
-                          <Heading size={{ base: 'sm', md: 'md' }}>Education Updates</Heading>
-                        </HStack>
-                        <Badge colorScheme="brand" variant="subtle" borderRadius="full" px={3} py={1}>
-                          Communication defaults
-                        </Badge>
-                      </HStack>
-                    </CardHeader>
-                    <CardBody pt={0}>
-                      <VStack spacing={4} align="stretch">
-                        <Text fontSize="sm" color={useColorModeValue('gray.600', 'gray.300')}>
-                          Choose how Clovia can reach you about school verification, student trust signals, and education profile changes.
-                        </Text>
-
-                        <SimpleGrid columns={{ base: 1, md: 2 }} spacing={4}>
-                          <Flex
-                            justify="space-between"
-                            align="flex-start"
-                            gap={4}
-                            p={4}
-                            borderWidth="1px"
-                            borderColor={borderColor}
-                            borderRadius="xl"
-                            bg={useColorModeValue('gray.50', 'whiteAlpha.50')}
-                          >
-                            <Box minW={0}>
-                              <FormLabel mb={1}>
-                                <HStack spacing={2}>
-                                  <Icon as={FaEnvelope} color="brand.500" />
-                                  <Text>Email Notifications</Text>
-                                </HStack>
-                              </FormLabel>
-                              <Text fontSize="sm" color={useColorModeValue('gray.500', 'gray.400')}>
-                                Receive school verification and education updates by email.
-                              </Text>
-                            </Box>
-                            <Switch
-                              isChecked={emailNotifications}
-                              onChange={(e) => {
-                                setEmailNotifications(e.target.checked)
-                                markFieldDirty('emailNotifications')
-                              }}
-                              colorScheme="brand"
-                              size="lg"
-                            />
-                          </Flex>
-
-                          <Flex
-                            justify="space-between"
-                            align="center"
-                            gap={4}
-                            p={4}
-                            borderWidth="1px"
-                            borderColor={borderColor}
-                            borderRadius="xl"
-                            bg={useColorModeValue('gray.50', 'whiteAlpha.50')}
-                          >
-                            <Box minW={0}>
-                              <FormLabel mb={1}>
-                                <HStack spacing={2}>
-                                  <Icon as={FaMobile} color="brand.500" />
-                                  <Text>Push Notifications</Text>
-                                </HStack>
-                              </FormLabel>
-                              <Text fontSize="sm" color={useColorModeValue('gray.500', 'gray.400')}>
-                                Receive device alerts for offers, chats, schedule changes, and trade updates.
-                              </Text>
-                              <HStack spacing={2} mt={2} flexWrap="wrap">
-                                <Badge colorScheme={pushSubscriptionActive ? 'green' : 'gray'} variant="subtle" borderRadius="full">
-                                  {pushSubscriptionActive ? 'Subscribed' : 'Not subscribed'}
-                                </Badge>
-                                <Badge colorScheme={pushPermission === 'granted' ? 'green' : pushPermission === 'denied' ? 'red' : 'gray'} variant="subtle" borderRadius="full">
-                                  {pushPermission === 'unsupported' ? 'Unsupported' : `Permission: ${pushPermission}`}
-                                </Badge>
-                              </HStack>
-                              {isIosPushContext && (
-                                <Text fontSize="xs" color={mutedTextColor} mt={2}>
-                                  Install CloviaPH to enable notifications on iPhone.
-                                </Text>
-                              )}
-                              {pushStatusText && (
-                                <Text fontSize="xs" color={pushSubscriptionActive ? 'green.600' : mutedTextColor} mt={2}>
-                                  {pushStatusText}
-                                </Text>
-                              )}
-                            </Box>
-                            <HStack spacing={2} flexShrink={0} pt={1}>
-                              {pushBusy && <Spinner size="sm" color="brand.500" />}
-                              <Switch
-                                aria-label="Enable push notifications"
-                                isChecked={pushNotifications}
-                                isDisabled={pushBusy || !isPushSupported()}
-                                onChange={(e) => handlePushNotificationsToggle(e.target.checked)}
-                                colorScheme="brand"
-                                size="lg"
-                              />
-                            </HStack>
-                          </Flex>
-                        </SimpleGrid>
-                      </VStack>
-                    </CardBody>
-                  </Card>
                   </VStack>
                 </Box>
               )}
@@ -2372,6 +2815,117 @@ const SettingsPage: React.FC = () => {
               {/* Notifications Section */}
               {activeTabKey === 'notifications' && (
               <Box p={0} m={0}>
+                {/* Delivery Channels */}
+                <Card
+                  bg={cardBg}
+                  borderRadius="2xl"
+                  overflow="hidden"
+                  variant="outline"
+                  borderColor={borderColor}
+                  shadow="sm"
+                  mb={5}
+                >
+                  <CardHeader pb={3}>
+                    <HStack spacing={3}>
+                      <Icon as={FaBell} color="brand.500" boxSize={5} />
+                      <Box>
+                        <Heading size={{ base: 'sm', md: 'md' }}>Delivery Channels</Heading>
+                        <Text fontSize="sm" color={mutedTextColor} mt={1}>
+                          Master switches for how Clovia reaches you. Turning off a channel mutes all delivery through it.
+                        </Text>
+                      </Box>
+                    </HStack>
+                  </CardHeader>
+                  <CardBody pt={0}>
+                    <SimpleGrid columns={{ base: 1, md: 2 }} spacing={4}>
+                      <Flex
+                        justify="space-between"
+                        align="flex-start"
+                        gap={4}
+                        p={4}
+                        borderWidth="1px"
+                        borderColor={borderColor}
+                        borderRadius="xl"
+                        bg={useColorModeValue('gray.50', 'whiteAlpha.50')}
+                      >
+                        <Box minW={0}>
+                          <FormLabel mb={1}>
+                            <HStack spacing={2}>
+                              <Icon as={FaEnvelope} color="brand.500" />
+                              <Text>Email Notifications</Text>
+                            </HStack>
+                          </FormLabel>
+                          <Text fontSize="sm" color={mutedTextColor}>
+                            Receive trade updates, verification notices, and account alerts by email.
+                          </Text>
+                        </Box>
+                        <Switch
+                          isChecked={emailNotifications}
+                          onChange={(e) => {
+                            setEmailNotifications(e.target.checked)
+                            markFieldDirty('emailNotifications')
+                          }}
+                          colorScheme="brand"
+                          size="lg"
+                          flexShrink={0}
+                        />
+                      </Flex>
+
+                      <Flex
+                        justify="space-between"
+                        align="center"
+                        gap={4}
+                        p={4}
+                        borderWidth="1px"
+                        borderColor={borderColor}
+                        borderRadius="xl"
+                        bg={useColorModeValue('gray.50', 'whiteAlpha.50')}
+                      >
+                        <Box minW={0}>
+                          <FormLabel mb={1}>
+                            <HStack spacing={2}>
+                              <Icon as={FaMobile} color="brand.500" />
+                              <Text>Push Notifications</Text>
+                            </HStack>
+                          </FormLabel>
+                          <Text fontSize="sm" color={mutedTextColor}>
+                            Receive device alerts for offers, chats, meetups, and trade updates.
+                          </Text>
+                          <HStack spacing={2} mt={2} flexWrap="wrap">
+                            <Badge colorScheme={pushSubscriptionActive ? 'green' : 'gray'} variant="subtle" borderRadius="full">
+                              {pushSubscriptionActive ? 'Subscribed' : 'Not subscribed'}
+                            </Badge>
+                            <Badge colorScheme={pushPermission === 'granted' ? 'green' : pushPermission === 'denied' ? 'red' : 'gray'} variant="subtle" borderRadius="full">
+                              {pushPermission === 'unsupported' ? 'Unsupported' : `Permission: ${pushPermission}`}
+                            </Badge>
+                          </HStack>
+                          {isIosPushContext && (
+                            <Text fontSize="xs" color={mutedTextColor} mt={2}>
+                              Install CloviaPH to enable notifications on iPhone.
+                            </Text>
+                          )}
+                          {pushStatusText && (
+                            <Text fontSize="xs" color={pushSubscriptionActive ? 'green.600' : mutedTextColor} mt={2}>
+                              {pushStatusText}
+                            </Text>
+                          )}
+                        </Box>
+                        <HStack spacing={2} flexShrink={0} pt={1}>
+                          {pushBusy && <Spinner size="sm" color="brand.500" />}
+                          <Switch
+                            aria-label="Enable push notifications"
+                            isChecked={pushNotifications}
+                            isDisabled={pushBusy || !isPushSupported()}
+                            onChange={(e) => handlePushNotificationsToggle(e.target.checked)}
+                            colorScheme="brand"
+                            size="lg"
+                          />
+                        </HStack>
+                      </Flex>
+                    </SimpleGrid>
+                  </CardBody>
+                </Card>
+
                 <Card
                   bg={cardBg}
                   borderRadius="2xl"

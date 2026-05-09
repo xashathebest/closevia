@@ -338,7 +338,7 @@ func CreateTables() error {
 			log.Printf("Migration: Added column %s to trade_like_loop_participants table", col)
 		}
 	}
-	_, _ = DB.Exec(`ALTER TABLE trade_like_loops MODIFY COLUMN status ENUM('pending','partially_accepted','accepted','confirmed','ongoing','completed','history','rejected','cancelled','cancelled_due_to_conflict','broken','expired') DEFAULT 'pending'`)
+	_, _ = DB.Exec(`ALTER TABLE trade_like_loops MODIFY COLUMN status ENUM('pending','partially_accepted','accepted','confirmed','ongoing','completed','did_not_push_through','history','rejected','cancelled','cancelled_due_to_conflict','broken','expired') DEFAULT 'pending'`)
 	_, _ = DB.Exec(`ALTER TABLE trade_like_loop_participants MODIFY COLUMN status ENUM('pending','confirmed','accepted','declined','rejected','cancelled','cancelled_due_to_conflict','expired') DEFAULT 'pending'`)
 
 	queries := []string{
@@ -557,11 +557,16 @@ func CreateTables() error {
 			buyer_id INT NOT NULL,
 			seller_id INT NOT NULL,
 			target_product_id INT NOT NULL,
-			status ENUM('pending','accepted','declined','countered','active','completed','cancelled') DEFAULT 'pending',
+			status ENUM('pending','accepted','declined','countered','active','awaiting_confirmation','completed','did_not_push_through','under_review','cancelled','archived') DEFAULT 'pending',
 			message TEXT NULL,
 			offered_cash_amount DECIMAL(10,2) NULL,
 			buyer_completed BOOLEAN DEFAULT FALSE,
 			seller_completed BOOLEAN DEFAULT FALSE,
+			buyer_completion_outcome VARCHAR(32) NULL,
+			seller_completion_outcome VARCHAR(32) NULL,
+			buyer_completion_confirmed BOOLEAN DEFAULT FALSE,
+			seller_completion_confirmed BOOLEAN DEFAULT FALSE,
+			outcome_mismatch_at TIMESTAMP NULL,
 			completed_at TIMESTAMP NULL,
 			buyer_rating INT NULL,
 			seller_rating INT NULL,
@@ -584,6 +589,9 @@ func CreateTables() error {
 			seller_late_penalty_applied BOOLEAN DEFAULT FALSE,
 			agreed_arrival_deadline TIMESTAMP NULL,
 			grace_period_minutes INT DEFAULT 10,
+			last_activity_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+			archived_at TIMESTAMP NULL,
+			archived_reason VARCHAR(64) NULL,
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 			FOREIGN KEY (buyer_id) REFERENCES users(id) ON DELETE CASCADE,
@@ -769,7 +777,7 @@ func CreateTables() error {
 		`CREATE TABLE IF NOT EXISTS trade_like_loops (
 			id INT AUTO_INCREMENT PRIMARY KEY,
 			loop_key VARCHAR(255) NOT NULL,
-			status ENUM('pending', 'partially_accepted', 'accepted', 'confirmed', 'ongoing', 'completed', 'history', 'rejected', 'cancelled', 'cancelled_due_to_conflict', 'broken', 'expired') DEFAULT 'pending',
+			status ENUM('pending', 'partially_accepted', 'accepted', 'confirmed', 'ongoing', 'completed', 'did_not_push_through', 'history', 'rejected', 'cancelled', 'cancelled_due_to_conflict', 'broken', 'expired') DEFAULT 'pending',
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 			confirmed_at TIMESTAMP NULL,
@@ -1834,6 +1842,12 @@ func ensureTradeColumns() {
 		{"buyer_meetup_time", "VARCHAR(50) NULL"},
 		{"seller_meetup_location", "VARCHAR(500) NULL"},
 		{"seller_meetup_time", "VARCHAR(50) NULL"},
+		{"suggested_date", "VARCHAR(20) NULL"},
+		{"suggested_start_time", "VARCHAR(20) NULL"},
+		{"suggested_end_time", "VARCHAR(20) NULL"},
+		{"suggested_by_user_id", "INT NULL"},
+		{"suggestion_status", "VARCHAR(40) NULL"},
+		{"suggestion_type", "VARCHAR(20) NULL"},
 		{"buyer_met", "BOOLEAN DEFAULT FALSE"},
 		{"seller_met", "BOOLEAN DEFAULT FALSE"},
 		{"buyer_arrived_at", "TIMESTAMP NULL"},
@@ -1847,6 +1861,11 @@ func ensureTradeColumns() {
 		{"grace_period_minutes", "INT DEFAULT 10"},
 		{"buyer_photo_is_camera", "BOOLEAN DEFAULT FALSE"},
 		{"seller_photo_is_camera", "BOOLEAN DEFAULT FALSE"},
+		{"buyer_completion_outcome", "VARCHAR(32) NULL"},
+		{"seller_completion_outcome", "VARCHAR(32) NULL"},
+		{"buyer_completion_confirmed", "BOOLEAN DEFAULT FALSE"},
+		{"seller_completion_confirmed", "BOOLEAN DEFAULT FALSE"},
+		{"outcome_mismatch_at", "TIMESTAMP NULL"},
 		{"cancellation_reason", "VARCHAR(255) NULL"},
 		{"cancelled_by", "INT NULL"},
 		{"cancelled_at", "TIMESTAMP NULL"},
@@ -1894,7 +1913,10 @@ func ensureTradeColumns() {
 			"'accepted_by_one'",
 			"'accepted_by_both'",
 			"'ongoing'",
+			"'awaiting_other_party'",
 			"'cancelled_due_to_conflict'",
+			"'did_not_push_through'",
+			"'under_review'",
 			"'broken'",
 			"'history'",
 			"'pending_multiway'",
@@ -1908,7 +1930,7 @@ func ensureTradeColumns() {
 			}
 		}
 		if needsTradeStatusUpdate {
-			if _, err := DB.Exec(`ALTER TABLE trades MODIFY COLUMN status ENUM('pending','accepted','accepted_by_one','accepted_by_both','declined','countered','active','ongoing','awaiting_confirmation','completed','cancelled','cancelled_due_to_conflict','auto_completed','expired','broken','history','pending_multiway','multiway_active') DEFAULT 'pending'`); err != nil {
+			if _, err := DB.Exec(`ALTER TABLE trades MODIFY COLUMN status ENUM('pending','accepted','accepted_by_one','accepted_by_both','declined','countered','active','ongoing','awaiting_confirmation','awaiting_other_party','completed','did_not_push_through','under_review','cancelled','cancelled_due_to_conflict','auto_completed','expired','broken','history','archived','pending_multiway','multiway_active') DEFAULT 'pending'`); err != nil {
 				log.Printf("Warning: failed to update trades status enum: %v", err)
 			} else {
 				log.Println("Updated trades status enum with lifecycle/conflict states")
@@ -2364,6 +2386,7 @@ func ensureIndexes() {
 		{"trades", "idx_trades_participants", "buyer_id, seller_id"},
 		{"trades", "idx_trades_target", "target_product_id"},
 		{"trades", "idx_trades_status", "status"},
+		{"trades", "idx_trades_status_last_activity", "status, last_activity_at"},
 		{"trade_items", "idx_trade_items_trade", "trade_id"},
 		{"trade_items", "idx_trade_items_product", "product_id"},
 		{"trade_messages", "idx_trade_messages_trade", "trade_id"},

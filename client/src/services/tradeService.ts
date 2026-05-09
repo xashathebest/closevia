@@ -120,8 +120,9 @@ export const executeMultiWayTrade = async (
     feedback: string
     proof_url: string
     is_camera_photo: boolean
+    completion_outcome?: 'did_not_push_through'
   }
-): Promise<{ is_fully_completed?: boolean } | undefined> => {
+): Promise<{ is_fully_completed?: boolean; completion_outcome?: string } | undefined> => {
   try {
     const response = await api.post(`/api/trades/loops/${loopId}/execute`, reviewData)
     return response.data?.data

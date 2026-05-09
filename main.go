@@ -116,8 +116,7 @@ func main() {
 	if !loadedAny {
 		log.Println("No .env files found, using system environment variables")
 	}
-	// CloviaPH is a Philippine app. Keep app/wake schedule calculations explicit
-	// and independent of the server, browser, or operator's local timezone.
+	// CloviaPH uses Philippine time for app/wake schedule behavior.
 	appLocation := services.ConfigureAppTimezone()
 	startTime = time.Now().In(appLocation)
 	appLogger := services.InitLogger()
@@ -136,6 +135,18 @@ func main() {
 	}
 	defer database.CloseDatabase()
 	log.Println("[STARTUP] Database connected successfully")
+
+	// Promote ADMIN_EMAIL to admin role on every startup (safe to run repeatedly).
+	if adminEmail := strings.TrimSpace(os.Getenv("ADMIN_EMAIL")); adminEmail != "" {
+		var count int
+		if err := database.DB.QueryRow("SELECT COUNT(*) FROM users WHERE email = ?", adminEmail).Scan(&count); err == nil && count > 0 {
+			if _, err := database.DB.Exec("UPDATE users SET role = 'admin' WHERE email = ?", adminEmail); err == nil {
+				log.Printf("[STARTUP] Admin role ensured for %s", adminEmail)
+			}
+		} else if count == 0 {
+			log.Printf("[STARTUP] ADMIN_EMAIL %s not found in users table yet — will be promoted on first login", adminEmail)
+		}
+	}
 
 	// Auto-migration (CreateTables) can be extremely slow on hosted DBs (ALTER TABLE on large tables).
 	// Default behavior:
@@ -178,6 +189,11 @@ func main() {
 			if code >= fiber.StatusInternalServerError {
 				services.RecordBackendError()
 			}
+			if code == fiber.StatusUnauthorized {
+				return c.Status(code).JSON(fiber.Map{
+					"error": "unauthorized",
+				})
+			}
 			return c.Status(code).JSON(fiber.Map{
 				"success":    false,
 				"error":      message,
@@ -193,7 +209,11 @@ func main() {
 	app.Use(middleware.SecurityHeaders())
 	app.Use(middleware.RequestTiming())
 	app.Use(middleware.StructuredRequestLogger(appLogger))
-	app.Use(logger.New())
+	app.Use(logger.New(logger.Config{
+		Next: func(c *fiber.Ctx) bool {
+			return strings.TrimRight(c.Path(), "/") == "/health"
+		},
+	}))
 
 	corsOrigins := os.Getenv("CORS_ORIGINS")
 	if corsOrigins == "" {
@@ -344,13 +364,16 @@ func main() {
 		})
 	})
 
-	// Simple health check endpoint (for basic liveness probes, no DB ping)
+	// Simple health check endpoint for Render/UptimeRobot liveness probes.
+	// Keep this fast: no database, no external services, no internal self-ping.
+	// It still reports UTC + Asia/Manila timing so wake schedules can be verified.
 	app.Get("/health", func(c *fiber.Ctx) error {
 		healthStart := time.Now()
 		wakeStatus := services.BuildWakeScheduleStatus(healthStart)
 		responseMS := time.Since(healthStart).Milliseconds()
 		log.Printf("[HEALTH] Current UTC time: %s | Asia/Manila time: %s | Wake active PH: %t | Next ping PH: %s | Response: %dms",
 			wakeStatus.UTC, wakeStatus.PhilippineTime, wakeStatus.Active, wakeStatus.NextPingPH, responseMS)
+		c.Set("Cache-Control", "no-store")
 		return c.JSON(fiber.Map{
 			"status":      "ok",
 			"timezone":    services.AppTimezoneName(),
@@ -552,6 +575,14 @@ func main() {
 	organizationHandler := handlers.NewOrganizationHandler()
 	meetupHandler := handlers.NewMeetupHandler(database.DB)
 
+	// Pending offer negotiation endpoint used by Dashboard > Offers > Inbox.
+	// Register it directly as well as under the offers group below so this exact
+	// frontend URL is always available and never falls through to trade routes.
+	app.Post("/api/offers/:offerID/time-suggestion", middleware.AuthMiddleware(), tradeHandler.SuggestOfferTime)
+	app.Post("/api/offers/:offerID/time-suggestion/", middleware.AuthMiddleware(), tradeHandler.SuggestOfferTime)
+	app.Post("/api/offers/:offerID/time-suggestion/accept", middleware.AuthMiddleware(), tradeHandler.AcceptOfferTimeSuggestion)
+	app.Post("/api/offers/:offerID/time-suggestion/decline", middleware.AuthMiddleware(), tradeHandler.DeclineOfferTimeSuggestion)
+
 	// Hybrid matcher background refresh (MVP cron-like task).
 	go func() {
 		tradeHandler.RebuildAllLoopCaches()
@@ -721,6 +752,14 @@ func main() {
 	orders.Get("/", middleware.AuthMiddleware(), orderHandler.GetOrders)
 	orders.Get("/:id", middleware.AuthMiddleware(), orderHandler.GetOrder)
 	orders.Put("/:id/status", middleware.AuthMiddleware(), orderHandler.UpdateOrderStatus)
+
+	// Offer routes. Pending offers are stored as trade rows, but these endpoints
+	// keep pre-acceptance offer negotiation separate from active trade reschedules.
+	offers := api.Group("/offers")
+	offers.Post("/:offerID/time-suggestion", middleware.AuthMiddleware(), tradeHandler.SuggestOfferTime)
+	offers.Post("/:offerID/time-suggestion/", middleware.AuthMiddleware(), tradeHandler.SuggestOfferTime)
+	offers.Post("/:offerID/time-suggestion/accept", middleware.AuthMiddleware(), tradeHandler.AcceptOfferTimeSuggestion)
+	offers.Post("/:offerID/time-suggestion/decline", middleware.AuthMiddleware(), tradeHandler.DeclineOfferTimeSuggestion)
 
 	// Chat routes (REST + SSE)
 	chat := api.Group("/chat")

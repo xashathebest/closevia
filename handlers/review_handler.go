@@ -125,137 +125,16 @@ func (h *ReviewHandler) GetUserReviews(c *fiber.Ctx) error {
 		})
 	}
 
-	// Try to query with reply fields first, fall back to basic query if columns don't exist
-	query := `
-		SELECT 
-			r.id,
-			r.reviewer_id,
-			u.name as reviewer_name,
-			u.profile_picture as reviewer_avatar,
-			r.rating,
-			r.comment,
-			r.created_at
-		FROM reviews r
-		JOIN users u ON r.reviewer_id = u.id
-		WHERE r.reviewed_user_id = ?
-		ORDER BY r.created_at DESC
-	`
-
-	// Check if reply columns exist
-	hasReplyColumns := false
-	var columnCheck string
-	checkErr := h.db.QueryRow("SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'reviews' AND COLUMN_NAME = 'reply' AND TABLE_SCHEMA = DATABASE()").Scan(&columnCheck)
-	if checkErr == nil {
-		log.Printf("✅ Reply columns exist, using extended query")
-		hasReplyColumns = true
-		query = `
-			SELECT 
-				r.id,
-				r.reviewer_id,
-				u.name as reviewer_name,
-				u.profile_picture as reviewer_avatar,
-				r.rating,
-				r.comment,
-				r.created_at,
-				r.reply,
-				r.reply_date,
-				ru.name as reply_author_name
-			FROM reviews r
-			JOIN users u ON r.reviewer_id = u.id
-			LEFT JOIN users ru ON r.replied_by_user_id = ru.id
-			WHERE r.reviewed_user_id = ?
-			ORDER BY r.created_at DESC
-		`
-	}
-
-	rows, err := h.db.Query(query, userID)
+	tradeReviews, err := getReceivedTradeReviews(h.db, userID)
 	if err != nil {
-		log.Printf("❌ Failed to fetch reviews for user %d: %v", userID, err)
+		log.Printf("Failed to fetch received trade reviews for user %d: %v", userID, err)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error": "Failed to fetch reviews",
 		})
 	}
-	defer rows.Close()
-
-	var reviews []fiber.Map
-	for rows.Next() {
-		var review struct {
-			ID              int
-			ReviewerID      int
-			ReviewerName    string
-			ReviewerAvatar  sql.NullString
-			Rating          int
-			Comment         string
-			CreatedAt       time.Time
-			Reply           sql.NullString
-			ReplyDate       sql.NullTime
-			ReplyAuthorName sql.NullString
-		}
-
-		var err error
-		if hasReplyColumns {
-			err = rows.Scan(
-				&review.ID,
-				&review.ReviewerID,
-				&review.ReviewerName,
-				&review.ReviewerAvatar,
-				&review.Rating,
-				&review.Comment,
-				&review.CreatedAt,
-				&review.Reply,
-				&review.ReplyDate,
-				&review.ReplyAuthorName,
-			)
-		} else {
-			err = rows.Scan(
-				&review.ID,
-				&review.ReviewerID,
-				&review.ReviewerName,
-				&review.ReviewerAvatar,
-				&review.Rating,
-				&review.Comment,
-				&review.CreatedAt,
-			)
-		}
-
-		if err != nil {
-			continue
-		}
-
-		avatar := ""
-		if review.ReviewerAvatar.Valid {
-			avatar = review.ReviewerAvatar.String
-		}
-
-		reviewMap := fiber.Map{
-			"id":       review.ID,
-			"reviewer": review.ReviewerName,
-			"avatar":   avatar,
-			"rating":   review.Rating,
-			"comment":  review.Comment,
-			"date":     review.CreatedAt.Format("2006-01-02"),
-		}
-
-		// Add reply if exists and columns are available
-		if hasReplyColumns && review.Reply.Valid {
-			reviewMap["reply"] = review.Reply.String
-			if review.ReplyDate.Valid {
-				reviewMap["reply_date"] = review.ReplyDate.Time.Format("2006-01-02")
-			}
-			if review.ReplyAuthorName.Valid {
-				reviewMap["reply_author"] = review.ReplyAuthorName.String
-			}
-		}
-
-		reviews = append(reviews, reviewMap)
-	}
-
-	if reviews == nil {
-		reviews = []fiber.Map{}
-	}
 
 	return c.JSON(fiber.Map{
-		"data": reviews,
+		"data": tradeReviews,
 	})
 }
 
@@ -276,38 +155,26 @@ func (h *ReviewHandler) GetUserRating(c *fiber.Ctx) error {
 		})
 	}
 
-	query := `
-		SELECT 
-			COALESCE(AVG(rating), 0) as avg_rating,
-			COUNT(*) as total_reviews,
-			COALESCE(SUM(CASE WHEN rating >= 4 THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*), 0), 0) as positive_feedback
-		FROM reviews
-		WHERE reviewed_user_id = ?
-	`
-
-	var stats struct {
-		AvgRating        float64
-		TotalReviews     int
-		PositiveFeedback float64
-	}
-
-	err = h.db.QueryRow(query, userID).Scan(
-		&stats.AvgRating,
-		&stats.TotalReviews,
-		&stats.PositiveFeedback,
-	)
-
+	tradeStats, err := getReceivedTradeReviewStats(h.db, userID)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error": "Failed to calculate rating",
 		})
 	}
+	avgRating := 0.0
+	if tradeStats.TotalReviews > 0 && tradeStats.AvgRating.Valid {
+		avgRating = tradeStats.AvgRating.Float64
+	}
+	positiveFeedback := 0
+	if tradeStats.TotalReviews > 0 && tradeStats.PositivePercent.Valid {
+		positiveFeedback = int(tradeStats.PositivePercent.Float64)
+	}
 
 	return c.JSON(fiber.Map{
 		"data": fiber.Map{
-			"rating":            stats.AvgRating,
-			"total_reviews":     stats.TotalReviews,
-			"positive_feedback": int(stats.PositiveFeedback),
+			"rating":            avgRating,
+			"total_reviews":     tradeStats.TotalReviews,
+			"positive_feedback": positiveFeedback,
 		},
 	})
 }

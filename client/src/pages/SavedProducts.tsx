@@ -11,16 +11,14 @@ import {
   Heading,
   HStack,
   Icon,
-  IconButton,
   Image,
   Skeleton,
   Text,
-  Tooltip,
   useToast,
   VStack,
 } from '@chakra-ui/react'
 import { FiEye, FiHeart, FiMapPin, FiRefreshCw, FiTrash2, FiUser } from 'react-icons/fi'
-import { FaExchangeAlt, FaMoneyBillWave } from 'react-icons/fa'
+import { FaExchangeAlt } from 'react-icons/fa'
 import { useAuth } from '../contexts/AuthContext'
 import { Product } from '../types'
 import { api } from '../services/api'
@@ -56,6 +54,19 @@ const SavedProducts: React.FC = () => {
   const [error, setError] = useState('')
   const [removing, setRemoving] = useState<number | null>(null)
   const [tradeTargetProductId, setTradeTargetProductId] = useState<number | null>(null)
+
+  const isTradeUnavailable = (product: Product) => (
+    ['sold', 'traded', 'locked', 'suspended', 'deleted'].includes(String(product.status || '').toLowerCase())
+  )
+
+  const getStatusLabel = (status: Product['status']) => (
+    String(status || 'available').replace(/_/g, ' ')
+  )
+
+  const openTradeModal = (product: Product) => {
+    if (isTradeUnavailable(product)) return
+    setTradeTargetProductId(product.id)
+  }
 
   useEffect(() => {
     if (!user) navigate('/login', { state: { from: '/saved-products' } })
@@ -228,15 +239,27 @@ const SavedProducts: React.FC = () => {
                       <Button size="sm" leftIcon={<FiUser />} variant="outline" onClick={() => navigate(`/users/${group.sellerId}`)} flex={{ base: 1, sm: 'initial' }}>
                         Trader
                       </Button>
-                      <Button size="sm" leftIcon={<FaExchangeAlt />} colorScheme="brand" onClick={() => setTradeTargetProductId(group.products[0]?.id || null)} flex={{ base: 1, sm: 'initial' }}>
-                        Trade Selected
-                      </Button>
                     </HStack>
                   </Flex>
 
                   <VStack spacing={0} align="stretch" divider={<Box borderBottom="1px" borderColor="gray.100" />}>
-                    {group.products.map((product) => (
-                      <Flex key={product.id} p={{ base: 3, md: 4 }} gap={3} align="center" cursor="pointer" _hover={{ bg: 'gray.50' }} onClick={() => runViewTransition(() => navigate(getProductUrl(product)))}>
+                    {group.products.map((product) => {
+                      const tradeUnavailable = isTradeUnavailable(product)
+                      const isTraded = String(product.status || '').toLowerCase() === 'traded'
+
+                      return (
+                      <Flex
+                        key={product.id}
+                        p={{ base: 3, md: 4 }}
+                        gap={3}
+                        align={{ base: 'stretch', md: 'center' }}
+                        direction={{ base: 'column', sm: 'row' }}
+                        bg={tradeUnavailable ? 'gray.50' : 'white'}
+                        cursor="pointer"
+                        _hover={{ bg: tradeUnavailable ? 'gray.50' : 'gray.50' }}
+                        onClick={() => runViewTransition(() => navigate(getProductUrl(product)))}
+                      >
+                        <Flex gap={3} align="center" flex={1} minW={0}>
                         <Box boxSize={{ base: '70px', md: '84px' }} borderRadius="lg" overflow="hidden" flexShrink={0} bg="gray.100">
                           <Image src={getFirstImage(product.image_urls)} alt={product.title} w="100%" h="100%" objectFit="cover" fallbackSrc="/no-image.svg" style={{ viewTransitionName: productImageTransitionName(product.id) }} />
                         </Box>
@@ -255,24 +278,59 @@ const SavedProducts: React.FC = () => {
                             ) : (
                               <Badge colorScheme="green" variant="subtle">Barter</Badge>
                             )}
-                            <Badge colorScheme={product.status === 'available' ? 'green' : product.status === 'locked' ? 'orange' : 'red'} variant="subtle">
-                              {product.status}
+                            <Badge colorScheme={product.status === 'available' ? 'green' : product.status === 'locked' ? 'orange' : tradeUnavailable ? 'gray' : 'red'} variant="subtle" textTransform="capitalize">
+                              {getStatusLabel(product.status)}
                             </Badge>
                           </HStack>
+                          {isTraded && (
+                            <Text fontSize="xs" color="gray.600" fontWeight="600">
+                              This item has already been traded.
+                            </Text>
+                          )}
                         </VStack>
-                        <VStack spacing={2} align="end" onClick={(event) => event.stopPropagation()}>
-                          <Tooltip label="Propose trade">
-                            <IconButton aria-label="Propose trade" icon={<FaExchangeAlt />} size="sm" colorScheme="brand" variant="ghost" onClick={() => setTradeTargetProductId(product.id)} isDisabled={product.status === 'sold'} />
-                          </Tooltip>
-                          <Tooltip label="Buyout details">
-                            <IconButton aria-label="Buyout details" icon={<FaMoneyBillWave />} size="sm" colorScheme="orange" variant="ghost" onClick={() => navigate(getProductUrl(product))} isDisabled={product.status === 'sold'} />
-                          </Tooltip>
-                          <Tooltip label="Remove from saved">
-                            <IconButton aria-label="Remove from saved" icon={<FiTrash2 />} size="sm" colorScheme="red" variant="ghost" isLoading={removing === product.id} onClick={() => handleRemoveFromSaved(product.id)} />
-                          </Tooltip>
-                        </VStack>
+                        </Flex>
+                        <Flex
+                          gap={2}
+                          align={{ base: 'stretch', sm: 'center' }}
+                          justify={{ base: 'stretch', sm: 'flex-end' }}
+                          direction={{ base: 'column', md: 'row' }}
+                          onClick={(event) => event.stopPropagation()}
+                        >
+                          <Button
+                            size="sm"
+                            leftIcon={<FiEye />}
+                            variant="outline"
+                            onClick={() => navigate(getProductUrl(product))}
+                            flex={{ base: 1, md: 'initial' }}
+                          >
+                            View
+                          </Button>
+                          <Button
+                            size="sm"
+                            leftIcon={<FaExchangeAlt />}
+                            colorScheme="brand"
+                            onClick={() => openTradeModal(product)}
+                            isDisabled={tradeUnavailable}
+                            title={isTraded ? 'This item has already been traded.' : undefined}
+                            flex={{ base: 1, md: 'initial' }}
+                          >
+                            Trade
+                          </Button>
+                          <Button
+                            size="sm"
+                            leftIcon={<FiTrash2 />}
+                            variant="ghost"
+                            colorScheme="red"
+                            isLoading={removing === product.id}
+                            onClick={() => handleRemoveFromSaved(product.id)}
+                            flex={{ base: 1, md: 'initial' }}
+                          >
+                            Remove
+                          </Button>
+                        </Flex>
                       </Flex>
-                    ))}
+                      )
+                    })}
                   </VStack>
                 </Box>
               ))}

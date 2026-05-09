@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useCallback, useState, useEffect, useRef } from 'react'
 import {
   Box, Flex, VStack, HStack, Text, Heading, Button, IconButton,
   Table, Thead, Tbody, Tr, Th, Td, Tag, Switch, Modal, ModalOverlay,
@@ -36,7 +36,7 @@ const AdvertisementCMS = () => {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const toast = useToast()
 
-  const fetchAds = async () => {
+  const fetchAds = useCallback(async () => {
     setLoading(true)
     try {
       const response = await api.get('/api/admin/advertisements')
@@ -48,11 +48,11 @@ const AdvertisementCMS = () => {
     } finally {
       setLoading(false)
     }
-  }
+  }, [toast])
 
   useEffect(() => {
     fetchAds()
-  }, [])
+  }, [fetchAds])
 
   const handleToggleActive = async (ad: Advertisement) => {
     try {
@@ -61,7 +61,7 @@ const AdvertisementCMS = () => {
       formData.append('is_active', (!ad.is_active).toString())
       await api.put(`/api/admin/advertisements/${ad.id}`, formData)
       toast({ title: 'Status updated', status: 'success' })
-      fetchAds()
+      await fetchAds()
     } catch (err) {
       toast({ title: 'Failed to update status', status: 'error' })
     }
@@ -72,7 +72,7 @@ const AdvertisementCMS = () => {
     try {
       await api.delete(`/api/admin/advertisements/${id}`)
       toast({ title: 'Ad deleted', status: 'success' })
-      fetchAds()
+      await fetchAds()
     } catch (err) {
       toast({ title: 'Failed to delete ad', status: 'error' })
     }
@@ -110,7 +110,7 @@ const AdvertisementCMS = () => {
         await api.post('/api/admin/advertisements', formData)
         toast({ title: 'Ad created', status: 'success' })
       }
-      fetchAds()
+      await fetchAds()
       setMediaFile(null)
       onClose()
     } catch (err: any) {
@@ -131,17 +131,22 @@ const AdvertisementCMS = () => {
   }
 
   return (
-    <Box bg="white" p={5} rounded="xl" shadow="sm" border="1px solid" borderColor="gray.200" maxW="5xl" w="full">
-      <Flex justify="space-between" align="center" mb={4}>
-        <HStack>
-          <Icon as={FiMonitor} color="brand.500" boxSize={5} />
-          <Heading size="md" color="gray.800">Homepage Advertisements (Carousel)</Heading>
+    <Box bg="white" p={{ base: 4, md: 5 }} rounded="xl" shadow="sm" border="1px solid" borderColor="gray.200" w="full">
+      <Flex justify="space-between" align={{ base: 'stretch', md: 'center' }} gap={3} mb={4} direction={{ base: 'column', md: 'row' }}>
+        <HStack align="start">
+          <Box w={9} h={9} borderRadius="lg" bg="brand.50" display="flex" alignItems="center" justifyContent="center" flexShrink={0}>
+            <Icon as={FiMonitor} color="brand.500" boxSize={5} />
+          </Box>
+          <Box>
+            <Heading size="sm" color="gray.800">Homepage Advertisements</Heading>
+            <Text fontSize="xs" color="gray.500">Manage carousel media, priority, visibility, and campaign links.</Text>
+          </Box>
         </HStack>
-        <HStack>
-          <Button size="sm" colorScheme="brand" leftIcon={<FiPlus />} onClick={() => openModal()}>
+        <HStack justify={{ base: 'stretch', md: 'flex-end' }}>
+          <Button size="sm" colorScheme="brand" leftIcon={<FiPlus />} onClick={() => openModal()} flex={{ base: 1, md: 'initial' }}>
             New Ad
           </Button>
-          <Button size="sm" variant="outline" leftIcon={<FiRefreshCw />} onClick={fetchAds} isLoading={loading}>
+          <Button size="sm" variant="outline" leftIcon={<FiRefreshCw />} onClick={fetchAds} isLoading={loading} flex={{ base: 1, md: 'initial' }}>
             Refresh
           </Button>
         </HStack>
@@ -155,8 +160,8 @@ const AdvertisementCMS = () => {
           <Text color="gray.500">No advertisements found</Text>
         </Center>
       ) : (
-        <Box overflowX="auto">
-          <Table variant="simple" size="sm">
+        <Box overflowX="auto" borderWidth="1px" borderColor="gray.100" borderRadius="lg">
+          <Table variant="simple" size="sm" minW="720px">
             <Thead bg="gray.50">
               <Tr>
                 <Th>Media</Th>
@@ -186,13 +191,16 @@ const AdvertisementCMS = () => {
                   </Td>
                   <Td>
                     <VStack align="start" spacing={0}>
-                      <Badge colorScheme="blue" fontSize="2xs">Views: {ad.views}</Badge>
-                      <Badge colorScheme="green" fontSize="2xs">Clicks: {ad.clicks}</Badge>
+                      <Badge colorScheme="blue" fontSize="2xs" borderRadius="full">Views: {ad.views}</Badge>
+                      <Badge colorScheme="green" fontSize="2xs" borderRadius="full">Clicks: {ad.clicks}</Badge>
                     </VStack>
                   </Td>
                   <Td><Tag size="sm" colorScheme="purple">{ad.priority}</Tag></Td>
                   <Td>
-                    <Switch colorScheme="green" size="sm" isChecked={ad.is_active} onChange={() => handleToggleActive(ad)} />
+                    <HStack spacing={2}>
+                      <Switch colorScheme="green" size="sm" isChecked={ad.is_active} onChange={() => handleToggleActive(ad)} />
+                      <Badge colorScheme={ad.is_active ? 'green' : 'gray'} variant="subtle" textTransform="none">{ad.is_active ? 'Active' : 'Hidden'}</Badge>
+                    </HStack>
                   </Td>
                   <Td>
                     <HStack spacing={2}>
@@ -208,9 +216,9 @@ const AdvertisementCMS = () => {
       )}
 
       {/* Create/Edit Modal */}
-      <Modal isOpen={isOpen} onClose={onClose} size="lg">
+      <Modal isOpen={isOpen} onClose={onClose} size="lg" scrollBehavior="inside" closeOnOverlayClick={false}>
         <ModalOverlay />
-        <ModalContent>
+        <ModalContent borderRadius="xl">
           <form
             onSubmit={handleSubmit}
             onKeyDown={(e) => {
@@ -234,7 +242,7 @@ const AdvertisementCMS = () => {
                   <Textarea value={editingAd?.description || ''} onChange={(e) => setEditingAd({ ...editingAd, description: e.target.value })} placeholder="Get 50% off on premium items..." rows={2} />
                 </FormControl>
 
-                <HStack w="full" spacing={4}>
+                <Flex w="full" gap={4} direction={{ base: 'column', md: 'row' }}>
                   <FormControl>
                     <FormLabel>CTA Button Text</FormLabel>
                     <Input value={editingAd?.cta_text || ''} onChange={(e) => setEditingAd({ ...editingAd, cta_text: e.target.value })} placeholder="Shop Now" />
@@ -243,7 +251,7 @@ const AdvertisementCMS = () => {
                     <FormLabel>Target Link / Redirect URL</FormLabel>
                     <Input value={editingAd?.link_url || ''} onChange={(e) => setEditingAd({ ...editingAd, link_url: e.target.value })} placeholder="https://..." />
                   </FormControl>
-                </HStack>
+                </Flex>
 
                 <FormControl isRequired={!editingAd?.id}>
                   <FormLabel>Media (Image/Video)</FormLabel>
@@ -254,7 +262,7 @@ const AdvertisementCMS = () => {
                   <Text fontSize="xs" color="orange.500" mt={1}>For best results, use 16:9 aspect ratio media under 10MB.</Text>
                 </FormControl>
 
-                <HStack w="full" spacing={4}>
+                <Flex w="full" gap={4} direction={{ base: 'column', md: 'row' }}>
                   <FormControl>
                     <FormLabel>Priority (Higher = first)</FormLabel>
                     <Input type="number" value={editingAd?.priority || 0} onChange={(e) => setEditingAd({ ...editingAd, priority: parseInt(e.target.value) || 0 })} />
@@ -266,9 +274,9 @@ const AdvertisementCMS = () => {
                       <Text fontSize="sm">{editingAd?.is_active ? 'Active' : 'Hidden'}</Text>
                     </HStack>
                   </FormControl>
-                </HStack>
+                </Flex>
 
-                <HStack w="full" spacing={4}>
+                <Flex w="full" gap={4} direction={{ base: 'column', md: 'row' }}>
                   <FormControl>
                     <FormLabel>Start Date (Optional)</FormLabel>
                     <Input type="datetime-local" value={editingAd?.start_date?.slice(0, 16) || ''} onChange={(e) => setEditingAd({ ...editingAd, start_date: e.target.value })} />
@@ -277,7 +285,7 @@ const AdvertisementCMS = () => {
                     <FormLabel>End Date (Optional)</FormLabel>
                     <Input type="datetime-local" value={editingAd?.end_date?.slice(0, 16) || ''} onChange={(e) => setEditingAd({ ...editingAd, end_date: e.target.value })} />
                   </FormControl>
-                </HStack>
+                </Flex>
               </VStack>
             </ModalBody>
             <ModalFooter>

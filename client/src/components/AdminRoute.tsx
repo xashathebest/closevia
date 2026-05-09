@@ -12,10 +12,10 @@ const AdminRoute: React.FC<AdminRouteProps> = ({ children }) => {
 
   if (loading && !user) {
     return (
-      <Center minH="100vh">
-        <VStack spacing={4}>
-          <Spinner size="xl" color="blue.500" />
-          <Text>Loading...</Text>
+      <Center minH="100vh" bg="gray.50">
+        <VStack spacing={4} bg="white" borderWidth="1px" borderColor="gray.100" borderRadius="xl" px={8} py={7} boxShadow="sm">
+          <Spinner size="lg" color="brand.500" />
+          <Text color="gray.600" fontWeight="600">Checking admin access...</Text>
         </VStack>
       </Center>
     );
