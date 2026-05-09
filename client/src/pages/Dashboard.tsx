@@ -132,7 +132,7 @@ const Dashboard: React.FC = () => {
   const shouldLoadOffersTab = activeTab === 1
   const shouldLoadSentOffers = shouldLoadOffersTab
   const shouldLoadReceivedOffers = shouldLoadOffersTab
-  const shouldLoadOngoingTrades = true
+  const shouldLoadOngoingTrades = shouldLoadOffersTab
   const shouldLoadArchivedTrades = shouldLoadOffersTab
   const shouldLoadMultiWay = activeTab === 2 || activeTab === 3 || shouldLoadOngoingTrades
   const shouldLoadTradeHistory = activeTab === 4

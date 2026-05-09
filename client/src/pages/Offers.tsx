@@ -59,14 +59,13 @@ const Offers: React.FC = () => {
     try {
       if (!isBackground) setLoading(true)
       const [incRes, outRes] = await Promise.all([
-        api.get('/api/trades', { params: { direction: 'incoming' } }),
-        api.get('/api/trades', { params: { direction: 'outgoing' } }),
+        api.get('/api/trades', { params: { direction: 'incoming', include: 'products' } }),
+        api.get('/api/trades', { params: { direction: 'outgoing', include: 'products' } }),
       ])
       setIncoming(Array.isArray(incRes.data?.data) ? incRes.data.data : [])
       setOutgoing(Array.isArray(outRes.data?.data) ? outRes.data.data : [])
       
-      // Fetch product titles for all trades
-      await fetchProductTitles([...incRes.data?.data || [], ...outRes.data?.data || []])
+      hydrateProductTitles([...incRes.data?.data || [], ...outRes.data?.data || []])
     } catch (e: any) {
       toast({
         id: "offers-error", title: 'Error', description: e?.response?.data?.error || 'Failed to load offers', status: 'error' })
@@ -75,50 +74,30 @@ const Offers: React.FC = () => {
     }
   }
 
-  const fetchProductTitles = async (trades: Trade[]) => {
-    const productIds = new Set<number>()
-    
-    // Collect all unique product IDs from trades
-    trades.forEach(trade => {
-      if (trade.target_product_id) {
-        productIds.add(trade.target_product_id)
-      }
-      // Also collect from offered items
-      if (trade.items) {
-        trade.items.forEach((item: any) => {
-          const pid = item.product_id ?? item.productId
-          if (pid) {
-            productIds.add(Number(pid))
-          }
-        })
-      }
-    })
+  const hydrateProductTitles = (trades: Trade[]) => {
+    setProductTitles(prev => {
+      const newTitles = new Map(prev)
+      let changed = false
 
-    // Fetch titles for products we don't have yet
-    const titlesToFetch = Array.from(productIds).filter(id => !productTitles.has(id))
-    
-    if (titlesToFetch.length > 0) {
-      try {
-        const titlePromises = titlesToFetch.map(async (id) => {
-          try {
-            const response = await api.get(`/api/products/${id}`)
-            const title = response.data?.data?.title
-            return { id, title: title || 'Unnamed Item' }
-          } catch {
-            return { id, title: 'Unnamed Item' }
-          }
-        })
-        
-        const results = await Promise.all(titlePromises)
-        const newTitles = new Map(productTitles)
-        results.forEach(({ id, title }) => {
-          newTitles.set(id, title)
-        })
-        setProductTitles(newTitles)
-      } catch (error) {
-        console.error('Failed to fetch product titles:', error)
-      }
-    }
+      trades.forEach(trade => {
+        if (trade.target_product_id && trade.product_title && newTitles.get(Number(trade.target_product_id)) !== trade.product_title) {
+          newTitles.set(Number(trade.target_product_id), trade.product_title)
+          changed = true
+        }
+        if (trade.items) {
+          trade.items.forEach((item: any) => {
+            const pid = item.product_id ?? item.productId
+            const title = item.product_title ?? item.productTitle
+            if (pid && title && newTitles.get(Number(pid)) !== title) {
+              newTitles.set(Number(pid), title)
+              changed = true
+            }
+          })
+        }
+      })
+
+      return changed ? newTitles : prev
+    })
   }
 
   const getProductTitle = (productId: number, fallbackTitle?: string): string => {
@@ -149,10 +128,10 @@ const Offers: React.FC = () => {
       setCurrentUserId(parseInt(userId))
     }
 
-    // Set up real-time background polling every 5 seconds
+    // Background refresh keeps the page fresh without hammering the trade and product endpoints.
     const interval = setInterval(() => {
       fetchAll(true)
-    }, 5000)
+    }, 30000)
 
     return () => clearInterval(interval)
   }, [])

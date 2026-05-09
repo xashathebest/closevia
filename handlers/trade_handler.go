@@ -2164,19 +2164,23 @@ func (h *TradeHandler) GetTrades(c *fiber.Ctx) error {
 		// 1. Pending/Pending Multiway where user is the seller
 		// 2. Countered where user was NOT the one who countered
 		// 3. Ongoing trades where the user is the seller, so the UI can render them in the Ongoing tab
-		where = "WHERE (((t.status IN ('pending', 'pending_multiway') AND t.seller_id = ?) OR (t.status = 'accepted_by_one' AND ((t.seller_id = ? AND COALESCE(t.seller_accepted, FALSE) = FALSE) OR (t.buyer_id = ? AND COALESCE(t.buyer_accepted, FALSE) = FALSE)))) OR (t.status = 'countered' AND t.countered_by IS NOT NULL AND t.countered_by <> ? AND (t.buyer_id = ? OR t.seller_id = ?)) OR (t.status IN ('accepted', 'active', 'ongoing', 'awaiting_confirmation', 'multiway_active') AND t.seller_id = ?))"
-		args = []interface{}{userID, userID, userID, userID, userID, userID, userID}
+		// 4. Closed trades where the user was the seller, so History/Archive never silently lose them
+		where = "WHERE (((t.status IN ('pending', 'pending_multiway') AND t.seller_id = ?) OR (t.status = 'accepted_by_one' AND ((t.seller_id = ? AND COALESCE(t.seller_accepted, FALSE) = FALSE) OR (t.buyer_id = ? AND COALESCE(t.buyer_accepted, FALSE) = FALSE)))) OR (t.status = 'countered' AND t.countered_by IS NOT NULL AND t.countered_by <> ? AND (t.buyer_id = ? OR t.seller_id = ?)) OR (t.status IN ('accepted', 'active', 'ongoing', 'awaiting_confirmation', 'multiway_active') AND t.seller_id = ?) OR (t.status IN ('completed', 'auto_completed', 'cancelled', 'cancelled_due_to_conflict', 'declined', 'rejected', 'expired', 'broken', 'awaiting_other_party') AND t.seller_id = ?))"
+		args = []interface{}{userID, userID, userID, userID, userID, userID, userID, userID}
 	case "outgoing":
 		// User is waiting for others:
 		// 1. Pending/Pending Multiway where user is the buyer
 		// 2. Countered where user WAS the one who countered
 		// 3. Ongoing trades where the user is the buyer, so the UI can render them in the Ongoing tab
-		where = "WHERE (((t.status IN ('pending', 'pending_multiway') AND t.buyer_id = ?) OR (t.status = 'accepted_by_one' AND ((t.buyer_id = ? AND COALESCE(t.buyer_accepted, FALSE) = TRUE) OR (t.seller_id = ? AND COALESCE(t.seller_accepted, FALSE) = TRUE)))) OR (t.status = 'countered' AND t.countered_by IS NOT NULL AND t.countered_by = ?) OR (t.status IN ('accepted', 'active', 'ongoing', 'awaiting_confirmation', 'multiway_active') AND t.buyer_id = ?))"
-		args = []interface{}{userID, userID, userID, userID, userID}
+		// 4. Closed trades where the user was the buyer, so History/Archive never silently lose them
+		where = "WHERE (((t.status IN ('pending', 'pending_multiway') AND t.buyer_id = ?) OR (t.status = 'accepted_by_one' AND ((t.buyer_id = ? AND COALESCE(t.buyer_accepted, FALSE) = TRUE) OR (t.seller_id = ? AND COALESCE(t.seller_accepted, FALSE) = TRUE)))) OR (t.status = 'countered' AND t.countered_by IS NOT NULL AND t.countered_by = ?) OR (t.status IN ('accepted', 'active', 'ongoing', 'awaiting_confirmation', 'multiway_active') AND t.buyer_id = ?) OR (t.status IN ('completed', 'auto_completed', 'cancelled', 'cancelled_due_to_conflict', 'declined', 'rejected', 'expired', 'broken', 'awaiting_other_party') AND t.buyer_id = ?))"
+		args = []interface{}{userID, userID, userID, userID, userID, userID}
 	}
 	if status != "" {
 		if status == "pending" {
 			where += " AND (t.status = 'pending' OR t.status = 'pending_multiway' OR t.status = 'accepted_by_one')"
+		} else if status == "history" || status == "closed" {
+			where += " AND t.status IN ('completed', 'auto_completed', 'cancelled', 'cancelled_due_to_conflict', 'declined', 'rejected', 'expired', 'broken', 'awaiting_other_party')"
 		} else {
 			where += " AND t.status = ?"
 			args = append(args, status)

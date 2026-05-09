@@ -19,6 +19,19 @@ services:
         scope: build
       - key: PORT
         value: 4000
+      # CloviaPH wake/health schedules are based on Philippine time only.
+      - key: APP_TIMEZONE
+        value: Asia/Manila
+      - key: WAKE_TIMEZONE
+        value: Asia/Manila
+      # Active PH user window: 06:00-23:59 Asia/Manila.
+      # If an external scheduler needs UTC, this maps to 22:00-15:59 UTC.
+      - key: WAKE_ACTIVE_START_HOUR
+        value: 6
+      - key: WAKE_ACTIVE_END_HOUR
+        value: 24
+      - key: WAKE_PING_INTERVAL_MINUTES
+        value: 15
       - key: BREVO_API_KEY
         sync: false
       - key: BREVO_SENDER_EMAIL

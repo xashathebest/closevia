@@ -1,0 +1,39 @@
+name: Wake CloviaPH Backend
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Philippine active hours: 06:00-23:59 Asia/Manila.
+    # GitHub Actions cron is UTC only, so Asia/Manila (UTC+8) converts to:
+    # 06:00 PHT = 22:00 UTC previous day, and 23:59 PHT = 15:59 UTC.
+    - cron: "*/15 0-15,22-23 * * *"
+
+jobs:
+  ping-health:
+    runs-on: ubuntu-latest
+    env:
+      APP_TIMEZONE: Asia/Manila
+      WAKE_TIMEZONE: Asia/Manila
+      WAKE_ACTIVE_START_HOUR: "6"
+      WAKE_ACTIVE_END_HOUR: "24"
+      WAKE_PING_INTERVAL_MINUTES: "15"
+      DEFAULT_BACKEND_URL: https://clovia-backend.onrender.com
+    steps:
+      - name: Log Philippine wake schedule
+        shell: bash
+        run: |
+          echo "Current UTC time: $(date -u --iso-8601=seconds)"
+          echo "Current Asia/Manila time: $(TZ=Asia/Manila date --iso-8601=seconds)"
+          echo "Wake schedule active based on PH time: yes"
+          echo "Next ping time based on PH time: every ${WAKE_PING_INTERVAL_MINUTES} minutes during 06:00-23:59 Asia/Manila"
+
+      - name: Ping /health
+        shell: bash
+        env:
+          BACKEND_URL: ${{ secrets.CLOVIAPH_BACKEND_URL }}
+        run: |
+          set -euo pipefail
+          url="${BACKEND_URL:-$DEFAULT_BACKEND_URL}"
+          url="${url%/}/health"
+          echo "Pinging ${url}"
+          curl --fail --show-error --silent --max-time 30 --write-out '\n/health response time: %{time_total}s\n' "$url"

@@ -90,6 +90,7 @@ export interface ProductFormData {
     methods: Array<'pickup' | 'meetup'>
     pickup: {
       days: string[]
+      custom_dates?: string[]
       time_start: string
       time_end: string
       notes: string
@@ -98,6 +99,7 @@ export interface ProductFormData {
       locations: string[]
       location_points?: Array<{ name: string; address: string; lat: number; lng: number }>
       days: string[]
+      custom_dates?: string[]
       time_start: string
       time_end: string
       distance_km: string
@@ -156,6 +158,7 @@ const formatLocalDate = (date: Date): string => {
 const expandCollectionDayIndexes = (days: string[] = []): Set<number> => {
   const indexes = new Set<number>()
   days.forEach(day => {
+    if (day === 'today') return
     ;(WEEKDAY_INDEXES[day] || []).forEach(index => indexes.add(index))
   })
   return indexes
@@ -172,12 +175,35 @@ const buildAvailabilitySlotsFromCollectionSetup = (setup: ProductFormData['colle
     const end = config.time_end?.trim()
     if (!start || !end || start >= end) return
 
-    const allowedDays = expandCollectionDayIndexes(config.days)
-    if (allowedDays.size === 0) return
+    const selectedDays = config.days || []
+    const customDates = Array.from(new Set((config.custom_dates || []).filter(Boolean))).sort()
+    const allowedDays = expandCollectionDayIndexes(selectedDays)
+    if (allowedDays.size === 0 && !selectedDays.includes('today') && customDates.length === 0) return
+
+    customDates.forEach(date => {
+      const key = `${method}-${date}-${start}-${end}`
+      if (seen.has(key)) return
+      seen.add(key)
+      slots.push({
+        id: key,
+        date,
+        start_time: start,
+        end_time: end,
+        method,
+      })
+    })
 
     for (let offset = 0; offset < 28; offset += 1) {
       const date = new Date(today.getFullYear(), today.getMonth(), today.getDate() + offset)
-      if (!allowedDays.has(date.getDay())) continue
+      if (offset === 0 && selectedDays.includes('today')) {
+        // Today is valid as long as the end of the selected time window has not passed.
+        const [endHour, endMinute] = end.split(':').map(Number)
+        const endMinutes = (Number(endHour) || 0) * 60 + (Number(endMinute) || 0)
+        const nowMinutes = today.getHours() * 60 + today.getMinutes()
+        if (nowMinutes >= endMinutes) continue
+      } else if (!allowedDays.has(date.getDay())) {
+        continue
+      }
       const localDate = formatLocalDate(date)
       const key = `${method}-${localDate}-${start}-${end}`
       if (seen.has(key)) continue
@@ -203,7 +229,7 @@ const validateCollectionSetup = (setup: ProductFormData['collection_setup']): st
     if (method === 'meetup' && !(setup.meetup.location_points?.length || setup.meetup.locations?.filter(Boolean).length)) {
       return 'Add at least one map-based meetup location'
     }
-    if (!config.days?.length) return `Choose available days for ${method}`
+    if (!config.days?.length && !config.custom_dates?.length) return `Choose available days or custom dates for ${method}`
     if (!config.time_start || !config.time_end) return `Choose a time window for ${method}`
     if (config.time_start >= config.time_end) return `Set a valid start and end time for ${method}`
   }
@@ -407,8 +433,8 @@ const AddProduct: React.FC = () => {
     desired_product: '',
     collection_setup: {
       methods: ['pickup'],
-      pickup: { days: ['weekdays'], time_start: '09:00', time_end: '17:00', notes: '' },
-      meetup: { locations: [], location_points: [], days: [], time_start: '', time_end: '', distance_km: '', notes: '' },
+      pickup: { days: ['weekdays'], custom_dates: [], time_start: '09:00', time_end: '17:00', notes: '' },
+      meetup: { locations: [], location_points: [], days: [], custom_dates: [], time_start: '', time_end: '', distance_km: '', notes: '' },
     },
   })
   const [editingCollectionSection, setEditingCollectionSection] = useState<'pickup' | 'meetup' | null>('pickup')
@@ -417,8 +443,10 @@ const AddProduct: React.FC = () => {
   const [meetupSearchResults, setMeetupSearchResults] = useState<Array<{ name: string; address: string; lat: number; lng: number }>>([])
   const [isSearchingMeetupLocation, setIsSearchingMeetupLocation] = useState(false)
   const [showMeetupSearchDropdown, setShowMeetupSearchDropdown] = useState(false)
+  const [customDateInput, setCustomDateInput] = useState({ pickup: '', meetup: '' })
 
   const dayOptions = [
+    { value: 'today', label: 'Today' },
     { value: 'weekdays', label: 'Weekdays' },
     { value: 'weekends', label: 'Weekends' },
     { value: 'monday', label: 'Mon' },
@@ -467,7 +495,7 @@ const AddProduct: React.FC = () => {
   const collectionSummary = (section: 'pickup' | 'meetup') => {
     const config = formData.collection_setup[section]
     const days = config.days.length ? config.days.map(day => dayOptions.find(option => option.value === day)?.label || day).join(', ') : 'No days set'
-    return `${days} • ${collectionTimeLabel(config.time_start, config.time_end)}`
+    return `${days}${config.custom_dates?.length ? ` + ${config.custom_dates.length} custom` : ''} - ${collectionTimeLabel(config.time_start, config.time_end)}`
   }
 
   const updateCollectionSchedule = (section: 'pickup' | 'meetup', patch: Partial<ProductFormData['collection_setup']['pickup']>) => {
@@ -488,6 +516,22 @@ const AddProduct: React.FC = () => {
       nextSetup.meetup = { ...nextSetup.meetup, ...syncPatch }
     }
     handleField('collection_setup', nextSetup)
+  }
+
+  const addCustomCollectionDate = (section: 'pickup' | 'meetup') => {
+    const date = customDateInput[section]
+    if (!date) return
+    const current = formData.collection_setup[section].custom_dates || []
+    if (!current.includes(date)) {
+      updateCollectionSchedule(section, { custom_dates: [...current, date] })
+    }
+    setCustomDateInput(prev => ({ ...prev, [section]: '' }))
+  }
+
+  const removeCustomCollectionDate = (section: 'pickup' | 'meetup', date: string) => {
+    updateCollectionSchedule(section, {
+      custom_dates: (formData.collection_setup[section].custom_dates || []).filter(item => item !== date),
+    })
   }
 
   const [uploadedImages, setUploadedImages] = useState<File[]>([])
@@ -2571,11 +2615,34 @@ const AddProduct: React.FC = () => {
                         </WrapItem>
                       ))}
                     </Wrap>
-                    <HStack>
-                      <Input type="time" size="sm" bg="white" value={formData.collection_setup.pickup.time_start} onChange={(e) => updateCollectionSchedule('pickup', { time_start: e.target.value })} />
-                      <Text fontSize="10px" color="gray.500">to</Text>
-                      <Input type="time" size="sm" bg="white" value={formData.collection_setup.pickup.time_end} onChange={(e) => updateCollectionSchedule('pickup', { time_end: e.target.value })} />
+                    <HStack spacing={2} align="end">
+                      <FormControl>
+                        <FormLabel fontSize="10px" color="gray.600" mb={1}>Custom date</FormLabel>
+                        <Input type="date" size="sm" bg="white" min={formatLocalDate(new Date())} value={customDateInput.pickup} onChange={(e) => setCustomDateInput(prev => ({ ...prev, pickup: e.target.value }))} />
+                      </FormControl>
+                      <Button size="sm" colorScheme="orange" variant="outline" onClick={() => addCustomCollectionDate('pickup')}>Add</Button>
                     </HStack>
+                    {!!formData.collection_setup.pickup.custom_dates?.length && (
+                      <Wrap spacing={1}>
+                        {formData.collection_setup.pickup.custom_dates.map(date => (
+                          <WrapItem key={`pickup-custom-${date}`}>
+                            <Button size="xs" fontSize="9px" h="24px" variant="subtle" colorScheme="orange" rightIcon={<CloseIcon boxSize={2} />} onClick={() => removeCustomCollectionDate('pickup', date)}>
+                              {date}
+                            </Button>
+                          </WrapItem>
+                        ))}
+                      </Wrap>
+                    )}
+                    <SimpleGrid columns={{ base: 1, sm: 2 }} spacing={2}>
+                      <FormControl>
+                        <FormLabel fontSize="10px" color="gray.600" mb={1}>Start time</FormLabel>
+                        <Input type="time" size="sm" bg="white" value={formData.collection_setup.pickup.time_start} onChange={(e) => updateCollectionSchedule('pickup', { time_start: e.target.value })} />
+                      </FormControl>
+                      <FormControl>
+                        <FormLabel fontSize="10px" color="gray.600" mb={1}>End time</FormLabel>
+                        <Input type="time" size="sm" bg="white" value={formData.collection_setup.pickup.time_end} onChange={(e) => updateCollectionSchedule('pickup', { time_end: e.target.value })} />
+                      </FormControl>
+                    </SimpleGrid>
                     <Textarea size="sm" bg="white" fontSize="11px" placeholder="Pickup notes (optional)" value={formData.collection_setup.pickup.notes} onChange={(e) => handleField('collection_setup', { ...formData.collection_setup, pickup: { ...formData.collection_setup.pickup, notes: e.target.value } })} />
                   </VStack>
                 )}
@@ -2655,7 +2722,8 @@ const AddProduct: React.FC = () => {
                           </Box>
                         )}
                       </Box>
-                    )}                    <Wrap spacing={1}>
+                    )}
+                    <Wrap spacing={1}>
                       {dayOptions.map(day => (
                         <WrapItem key={`meetup-${day.value}`}>
                           <Button size="xs" fontSize="9px" h="24px" variant={formData.collection_setup.meetup.days.includes(day.value) ? 'solid' : 'outline'} colorScheme="teal" onClick={() => toggleCollectionDay('meetup', day.value)}>
@@ -2664,11 +2732,34 @@ const AddProduct: React.FC = () => {
                         </WrapItem>
                       ))}
                     </Wrap>
-                    <HStack>
-                      <Input type="time" size="sm" bg="white" value={formData.collection_setup.meetup.time_start} onChange={(e) => updateCollectionSchedule('meetup', { time_start: e.target.value })} />
-                      <Text fontSize="10px" color="gray.500">to</Text>
-                      <Input type="time" size="sm" bg="white" value={formData.collection_setup.meetup.time_end} onChange={(e) => updateCollectionSchedule('meetup', { time_end: e.target.value })} />
+                    <HStack spacing={2} align="end">
+                      <FormControl>
+                        <FormLabel fontSize="10px" color="gray.600" mb={1}>Custom date</FormLabel>
+                        <Input type="date" size="sm" bg="white" min={formatLocalDate(new Date())} value={customDateInput.meetup} onChange={(e) => setCustomDateInput(prev => ({ ...prev, meetup: e.target.value }))} />
+                      </FormControl>
+                      <Button size="sm" colorScheme="teal" variant="outline" onClick={() => addCustomCollectionDate('meetup')}>Add</Button>
                     </HStack>
+                    {!!formData.collection_setup.meetup.custom_dates?.length && (
+                      <Wrap spacing={1}>
+                        {formData.collection_setup.meetup.custom_dates.map(date => (
+                          <WrapItem key={`meetup-custom-${date}`}>
+                            <Button size="xs" fontSize="9px" h="24px" variant="subtle" colorScheme="teal" rightIcon={<CloseIcon boxSize={2} />} onClick={() => removeCustomCollectionDate('meetup', date)}>
+                              {date}
+                            </Button>
+                          </WrapItem>
+                        ))}
+                      </Wrap>
+                    )}
+                    <SimpleGrid columns={{ base: 1, sm: 2 }} spacing={2}>
+                      <FormControl>
+                        <FormLabel fontSize="10px" color="gray.600" mb={1}>Start time</FormLabel>
+                        <Input type="time" size="sm" bg="white" value={formData.collection_setup.meetup.time_start} onChange={(e) => updateCollectionSchedule('meetup', { time_start: e.target.value })} />
+                      </FormControl>
+                      <FormControl>
+                        <FormLabel fontSize="10px" color="gray.600" mb={1}>End time</FormLabel>
+                        <Input type="time" size="sm" bg="white" value={formData.collection_setup.meetup.time_end} onChange={(e) => updateCollectionSchedule('meetup', { time_end: e.target.value })} />
+                      </FormControl>
+                    </SimpleGrid>
                     <Input size="sm" bg="white" fontSize="11px" placeholder="Distance preference, e.g. within 2km (optional)" value={formData.collection_setup.meetup.distance_km} onChange={(e) => handleField('collection_setup', { ...formData.collection_setup, meetup: { ...formData.collection_setup.meetup, distance_km: e.target.value } })} />
                     <Textarea size="sm" bg="white" fontSize="11px" placeholder="Meetup notes (optional)" value={formData.collection_setup.meetup.notes} onChange={(e) => handleField('collection_setup', { ...formData.collection_setup, meetup: { ...formData.collection_setup.meetup, notes: e.target.value } })} />
                   </VStack>

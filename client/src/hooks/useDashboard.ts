@@ -293,7 +293,7 @@ export const useTradeHistory = (options: DashboardQueryOptions = {}) => {
     queryFn: async (): Promise<Trade[]> => {
       const [tradesRes, completedLoopsRes, cancelledLoopsRes] = await Promise.all([
         api.get('/api/trades', {
-          params: { status: 'completed', include: 'products', limit: 100 }
+          params: { status: 'history', include: 'products', limit: 100 }
         }),
         api.get('/api/trades/loops', { params: { status: 'completed' } }).catch(() => ({ data: { data: [] } })),
         api.get('/api/trades/loops', { params: { status: 'cancelled' } }).catch(() => ({ data: { data: [] } })),

@@ -29,7 +29,7 @@ import (
 	"github.com/xashathebest/clovia/services"
 )
 
-var startTime = time.Now()
+var startTime time.Time
 
 func debugEndpointsEnabled() bool {
 	v := strings.ToLower(strings.TrimSpace(os.Getenv("ENABLE_DEBUG_ENDPOINTS")))
@@ -116,6 +116,10 @@ func main() {
 	if !loadedAny {
 		log.Println("No .env files found, using system environment variables")
 	}
+	// CloviaPH is a Philippine app. Keep app/wake schedule calculations explicit
+	// and independent of the server, browser, or operator's local timezone.
+	appLocation := services.ConfigureAppTimezone()
+	startTime = time.Now().In(appLocation)
 	appLogger := services.InitLogger()
 	configValidation := services.ValidateStartupConfig()
 	if len(configValidation.Errors) > 0 {
@@ -299,37 +303,59 @@ func main() {
 
 	// Health check with database connectivity verification (for k6 load tests & monitoring)
 	app.Get("/api/health", func(c *fiber.Ctx) error {
+		healthStart := time.Now()
 		// Ping database with 3-second timeout
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 
 		dbErr := database.DB.PingContext(ctx)
 		uptime := time.Since(startTime)
+		wakeStatus := services.BuildWakeScheduleStatus(healthStart)
+		responseMS := time.Since(healthStart).Milliseconds()
 
 		if dbErr != nil {
 			// DB is down, return 503 Service Unavailable (k6 recognizes this as infrastructure failure)
 			log.Printf("Health check DB ping failed: %v", dbErr)
+			log.Printf("[HEALTH] Current UTC time: %s | Asia/Manila time: %s | Wake active PH: %t | Response: %dms",
+				wakeStatus.UTC, wakeStatus.PhilippineTime, wakeStatus.Active, responseMS)
 			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
-				"status":  "unhealthy",
-				"uptime":  uptime.String(),
-				"db":      "down",
-				"version": "xendit-sync-all-405-fix",
+				"status":      "unhealthy",
+				"uptime":      uptime.String(),
+				"db":          "down",
+				"version":     "xendit-sync-all-405-fix",
+				"timezone":    services.AppTimezoneName(),
+				"wake_status": wakeStatus,
+				"response_ms": responseMS,
 			})
 		}
 
 		// All systems healthy
+		responseMS = time.Since(healthStart).Milliseconds()
+		log.Printf("[HEALTH] Current UTC time: %s | Asia/Manila time: %s | Wake active PH: %t | Next ping PH: %s | Response: %dms",
+			wakeStatus.UTC, wakeStatus.PhilippineTime, wakeStatus.Active, wakeStatus.NextPingPH, responseMS)
 		return c.Status(fiber.StatusOK).JSON(fiber.Map{
-			"status":  "ok",
-			"uptime":  uptime.String(),
-			"db":      "connected",
-			"version": "xendit-sync-all-405-fix",
+			"status":      "ok",
+			"uptime":      uptime.String(),
+			"db":          "connected",
+			"version":     "xendit-sync-all-405-fix",
+			"timezone":    services.AppTimezoneName(),
+			"wake_status": wakeStatus,
+			"response_ms": responseMS,
 		})
 	})
 
 	// Simple health check endpoint (for basic liveness probes, no DB ping)
 	app.Get("/health", func(c *fiber.Ctx) error {
+		healthStart := time.Now()
+		wakeStatus := services.BuildWakeScheduleStatus(healthStart)
+		responseMS := time.Since(healthStart).Milliseconds()
+		log.Printf("[HEALTH] Current UTC time: %s | Asia/Manila time: %s | Wake active PH: %t | Next ping PH: %s | Response: %dms",
+			wakeStatus.UTC, wakeStatus.PhilippineTime, wakeStatus.Active, wakeStatus.NextPingPH, responseMS)
 		return c.JSON(fiber.Map{
-			"status": "ok",
+			"status":      "ok",
+			"timezone":    services.AppTimezoneName(),
+			"wake_status": wakeStatus,
+			"response_ms": responseMS,
 		})
 	})
 
