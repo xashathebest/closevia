@@ -38,6 +38,7 @@ import { useCustomLocations } from '../hooks/useCustomLocations'
 import { SavedLocationsUI } from '../components/SavedLocationsUI'
 import { PRODUCT_CATEGORIES, normalizeWantedCategories } from '../utils/categories'
 import { getBackupPriceEstimate } from '../utils/priceEstimator'
+import { validateTimeWindow, isSlotOpen } from '../utils/availabilityUtils'
 
 // Fix leaflet icon issues
 // @ts-ignore
@@ -120,14 +121,14 @@ const parseLocalAvailabilityDateTime = (date: string, time: string) => {
 const buildRecurringEditAvailabilitySlots = (days: string[], start: string, end: string): AvailabilitySlot[] => {
   const allowed = new Set(days.map(day => editDayIndexes[day]).filter(index => index !== undefined))
   const slots: AvailabilitySlot[] = []
+  const twv = validateTimeWindow(start, end)
+  if (!allowed.size || !start || !end || !twv.valid) return slots
   const now = new Date()
-  if (!allowed.size || !start || !end || end <= start) return slots
   for (let offset = 0; offset < 28; offset += 1) {
     const date = new Date(now.getFullYear(), now.getMonth(), now.getDate() + offset)
     if (!allowed.has(date.getDay())) continue
     const localDate = formatLocalDateInput(date)
-    const windowEnd = parseLocalAvailabilityDateTime(localDate, end)
-    if (!windowEnd || windowEnd <= now) continue
+    if (!isSlotOpen({ date: localDate, start_time: start, end_time: end })) continue
     slots.push({
       id: `recurring-${localDate}-${start}-${end}`,
       date: localDate,
@@ -830,13 +831,13 @@ const EditProduct: React.FC = () => {
                         icon={<AddIcon boxSize={2.5} />}
                         size="sm"
                         colorScheme="teal"
-                        isDisabled={(avMode === 'specific_date' && !avNewDate) || (avMode === 'recurring' && avRecurringDays.length === 0) || !avNewStart || !avNewEnd || avNewEnd <= avNewStart}
+                        isDisabled={(avMode === 'specific_date' && !avNewDate) || (avMode === 'recurring' && avRecurringDays.length === 0) || !avNewStart || !avNewEnd || !validateTimeWindow(avNewStart, avNewEnd).valid}
                         onClick={() => {
-                          if (!avNewStart || !avNewEnd || avNewEnd <= avNewStart) return
+                          const avTwv = validateTimeWindow(avNewStart ?? '', avNewEnd ?? '')
+                          if (!avNewStart || !avNewEnd || !avTwv.valid) return
                           if (avMode === 'specific_date') {
                             if (!avNewDate) return
-                            const windowEnd = parseLocalAvailabilityDateTime(avNewDate, avNewEnd)
-                            if (!windowEnd || windowEnd <= new Date()) return
+                            if (!isSlotOpen({ date: avNewDate, start_time: avNewStart, end_time: avNewEnd })) return
                             const newSlot: AvailabilitySlot = {
                               id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
                               date: avNewDate,
@@ -857,7 +858,7 @@ const EditProduct: React.FC = () => {
                         }}
                       />
                     </HStack>
-                    {avMode === 'specific_date' && avNewDate && parseLocalAvailabilityDateTime(avNewDate, avNewEnd || avNewStart || '00:00') && parseLocalAvailabilityDateTime(avNewDate, avNewEnd || avNewStart || '00:00')! <= new Date() && (
+                    {avMode === 'specific_date' && avNewDate && avNewEnd && !isSlotOpen({ date: avNewDate, start_time: avNewStart || '00:00', end_time: avNewEnd }) && (
                       <Text fontSize="9px" color="red.500">This date/time window has already ended.</Text>
                     )}
                     {avMode === 'specific_date' && !avNewDate && (
@@ -866,8 +867,10 @@ const EditProduct: React.FC = () => {
                     {avMode === 'recurring' && avRecurringDays.length === 0 && (
                       <Text fontSize="9px" color="red.500">Choose at least one recurring day.</Text>
                     )}
-                    {avNewEnd && avNewStart && avNewEnd <= avNewStart && (
-                      <Text fontSize="9px" color="red.500">End time must be after start time.</Text>
+                    {avNewEnd && avNewStart && !validateTimeWindow(avNewStart, avNewEnd).valid && (
+                      <Text fontSize="9px" color="red.500">
+                        {validateTimeWindow(avNewStart, avNewEnd).warning ?? 'Set a valid start and end time.'}
+                      </Text>
                     )}
                   </VStack>
                 </Box>

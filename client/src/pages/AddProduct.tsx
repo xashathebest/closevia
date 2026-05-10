@@ -124,6 +124,15 @@ import { checkMultipleImageQuality, type ImageQualityResult as ClientQualityResu
 import { getBackupPriceEstimate } from '../utils/priceEstimator'
 import { formatEstimatedValueRange } from '../utils/currency'
 import { motionDurations, motionEasings } from '../utils/motion'
+import {
+  validateTimeWindow,
+  isSlotOpen,
+  todayManilaStr,
+  addOneDay,
+  isOvernightSlot,
+  fmtManilaDate,
+  fmtManilaTime,
+} from '../utils/availabilityUtils'
 
 const MotionBox = motion(Box)
 
@@ -188,23 +197,18 @@ const buildAvailabilitySlotsFromCollectionSetup = (setup: ProductFormData['colle
     const config = setup[method]
     const start = config.time_start?.trim()
     const end = config.time_end?.trim()
-    if (!start || !end || start >= end) return
+    const twv = validateTimeWindow(start ?? '', end ?? '')
+    if (!twv.valid) return
     const mode = config.availability_mode === 'specific_date' ? 'specific_date' : 'recurring'
 
     if (mode === 'specific_date') {
       const date = config.specific_date?.trim()
       if (!date) return
-      const windowEnd = parseLocalDateTime(date, end)
-      if (!windowEnd || windowEnd <= today) return
+      // For overnight windows, the slot ends on the next calendar day.
+      const pseudoSlot = { date, start_time: start!, end_time: end! }
+      if (!isSlotOpen(pseudoSlot)) return
       const key = `${method}-${date}-${start}-${end}`
-      slots.push({
-        id: key,
-        date,
-        start_time: start,
-        end_time: end,
-        method,
-        mode,
-      })
+      slots.push({ id: key, date, start_time: start!, end_time: end!, method, mode })
       return
     }
 
@@ -215,16 +219,16 @@ const buildAvailabilitySlotsFromCollectionSetup = (setup: ProductFormData['colle
       const date = new Date(today.getFullYear(), today.getMonth(), today.getDate() + offset)
       if (!allowedDays.has(date.getDay())) continue
       const localDate = formatLocalDate(date)
-      const windowEnd = parseLocalDateTime(localDate, end)
-      if (!windowEnd || windowEnd <= today) continue
+      const pseudoSlot = { date: localDate, start_time: start!, end_time: end! }
+      if (!isSlotOpen(pseudoSlot)) continue
       const key = `${method}-${localDate}-${start}-${end}`
       if (seen.has(key)) continue
       seen.add(key)
       slots.push({
         id: key,
         date: localDate,
-        start_time: start,
-        end_time: end,
+        start_time: start!,
+        end_time: end!,
         method,
         mode,
         weekdays: recurringDays,
@@ -244,13 +248,14 @@ const validateCollectionSetup = (setup: ProductFormData['collection_setup']): st
       return 'Add at least one map-based meetup location'
     }
     if (!config.time_start || !config.time_end) return `Choose a time window for ${method}`
-    if (config.time_start >= config.time_end) return `Set a valid start and end time for ${method}`
+    const twv = validateTimeWindow(config.time_start, config.time_end)
+    if (!twv.valid) return twv.warning ?? `Set a valid start and end time for ${method}`
     if (config.availability_mode === 'specific_date') {
       if (!config.specific_date) return `Choose a specific date for ${method}`
-      const today = formatLocalDate(new Date())
+      const today = todayManilaStr()
       if (config.specific_date < today) return `Choose a future date for ${method}`
-      const windowEnd = parseLocalDateTime(config.specific_date, config.time_end)
-      if (!windowEnd || windowEnd <= new Date()) return `That ${method} availability window has already ended`
+      const pseudoSlot = { date: config.specific_date, start_time: config.time_start, end_time: config.time_end }
+      if (!isSlotOpen(pseudoSlot)) return `That ${method} availability window has already ended`
     } else if (!config.days?.filter(value => !['weekdays', 'weekends'].includes(value)).length) {
       return `Choose at least one recurring day for ${method}`
     }
@@ -568,10 +573,12 @@ const AddProduct: React.FC = () => {
     updateCollectionSchedule(section, { days: next })
   }
 
-  const applyCollectionDayShortcut = (section: 'pickup' | 'meetup', shortcut: 'weekends' | 'all') => {
+  const applyCollectionDayShortcut = (section: 'pickup' | 'meetup', shortcut: 'weekdays' | 'weekends' | 'all') => {
     const days = shortcut === 'weekends'
       ? ['saturday', 'sunday']
-      : ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+      : shortcut === 'weekdays'
+        ? ['monday', 'tuesday', 'wednesday', 'thursday', 'friday']
+        : ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
     updateCollectionSchedule(section, { days })
   }
 
@@ -983,17 +990,21 @@ const AddProduct: React.FC = () => {
   const renderScheduleInputs = (section: 'pickup' | 'meetup', label: string) => {
     const schedule = formData.collection_setup[section]
     const mode = schedule.availability_mode === 'specific_date' ? 'specific_date' : 'recurring'
-    const today = formatLocalDate(new Date())
-    const specificWindowEnd = schedule.specific_date ? parseLocalDateTime(schedule.specific_date, schedule.time_end) : null
+    const today = todayManilaStr()
+    const twv = validateTimeWindow(schedule.time_start, schedule.time_end)
+    const overnight = twv.overnight
+    const windowStillOpen = schedule.specific_date && schedule.time_start && schedule.time_end
+      ? isSlotOpen({ date: schedule.specific_date, start_time: schedule.time_start, end_time: schedule.time_end })
+      : true
     const specificDateError = mode === 'specific_date' && !schedule.specific_date
       ? 'Choose a date for this one-time availability.'
       : mode === 'specific_date' && schedule.specific_date && schedule.specific_date < today
         ? 'Choose today or a future date.'
-        : mode === 'specific_date' && specificWindowEnd && specificWindowEnd <= new Date()
-          ? 'This time window has already ended.'
+        : mode === 'specific_date' && schedule.specific_date && schedule.time_end && !windowStillOpen
+          ? `This${overnight ? ' overnight' : ''} availability window has already ended.`
           : ''
-    const timeError = schedule.time_start && schedule.time_end && schedule.time_end <= schedule.time_start
-      ? 'End time must be after start time.'
+    const timeError = schedule.time_start && schedule.time_end && !twv.valid
+      ? (twv.warning ?? 'Set a valid start and end time.')
       : ''
     return (
       <VStack align="stretch" spacing={1.5}>
@@ -1022,6 +1033,11 @@ const AddProduct: React.FC = () => {
             <WrapItem>
               <Button size="xs" h="22px" px={2} variant="outline" fontSize="10px" colorScheme="teal" bg="white" onClick={() => applyCollectionDayShortcut(section, 'weekends')}>
                 Weekends
+              </Button>
+            </WrapItem>
+            <WrapItem>
+              <Button size="xs" h="22px" px={2} variant="outline" fontSize="10px" colorScheme="teal" bg="white" onClick={() => applyCollectionDayShortcut(section, 'weekdays')}>
+                Weekdays
               </Button>
             </WrapItem>
             <WrapItem>
@@ -1064,7 +1080,7 @@ const AddProduct: React.FC = () => {
               </InputRightElement>
             </InputGroup>
             <FormHelperText fontSize="9px">
-              {schedule.specific_date ? `Selected: ${new Date(`${schedule.specific_date}T00:00:00`).toLocaleDateString('en-PH', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}` : 'Choose the calendar date buyers can use.'}
+              {schedule.specific_date ? `Selected: ${fmtManilaDate(schedule.specific_date, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}` : 'Choose the calendar date buyers can use.'}
             </FormHelperText>
             {specificDateError && <FormErrorMessage fontSize="9px">{specificDateError}</FormErrorMessage>}
           </FormControl>
@@ -1090,6 +1106,16 @@ const AddProduct: React.FC = () => {
           </FormControl>
         </SimpleGrid>
         {timeError && <Text fontSize="9px" color="red.500">{timeError}</Text>}
+        {!timeError && overnight && schedule.specific_date && (
+          <Text fontSize="9px" color="purple.600" fontWeight="semibold">
+            Overnight · {fmtManilaDate(schedule.specific_date)}, {fmtManilaTime(schedule.time_start)} → {fmtManilaDate(addOneDay(schedule.specific_date))}, {fmtManilaTime(schedule.time_end)}
+          </Text>
+        )}
+        {!timeError && overnight && !schedule.specific_date && (
+          <Text fontSize="9px" color="purple.600" fontWeight="semibold">
+            Overnight window · ends next day at {fmtManilaTime(schedule.time_end)}
+          </Text>
+        )}
       </VStack>
     )
   }

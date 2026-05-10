@@ -138,7 +138,11 @@ const SessionTimeoutManager: React.FC = () => {
   useEffect(() => {
     if (isAuthenticated) {
       handledExpiryRef.current = false
-      lastActivityRef.current = broadcastSessionActivity(getLastSessionActivity())
+      // Treat stale stored timestamps (older than the full idle timeout) as "now" so a
+      // fresh login after a long absence doesn't immediately trigger session expiry.
+      const stored = getLastSessionActivity()
+      const activity = Date.now() - stored >= IDLE_TIMEOUT_MS ? Date.now() : stored
+      lastActivityRef.current = broadcastSessionActivity(activity)
     }
   }, [isAuthenticated])
 
@@ -158,7 +162,9 @@ const SessionTimeoutManager: React.FC = () => {
       return
     }
 
-    lastActivityRef.current = broadcastSessionActivity(getLastSessionActivity())
+    const stored = getLastSessionActivity()
+    const activity = Date.now() - stored >= IDLE_TIMEOUT_MS ? Date.now() : stored
+    lastActivityRef.current = broadcastSessionActivity(activity)
     scheduleTimers()
     void touchSession(true)
 

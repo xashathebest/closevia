@@ -2997,6 +2997,103 @@ func (h *ProductHandler) GetUserProducts(c *fiber.Ctx) error {
 	})
 }
 
+// GetTradeableProducts returns a lightweight list of available products for a user,
+// intended for the Propose a Trade modal. No subqueries, fewer fields.
+func (h *ProductHandler) GetTradeableProducts(c *fiber.Ctx) error {
+	userID, err := strconv.Atoi(c.Params("id"))
+	if err != nil {
+		return c.Status(400).JSON(models.APIResponse{Success: false, Error: "Invalid user ID"})
+	}
+
+	rows, err := h.db.Query(`
+		SELECT p.id, p.title, p.image_urls, p.status, p.location, p.location_type,
+		       p.pickup_latitude, p.pickup_longitude, p.pickup_address,
+		       p.category, p.seller_id, p.price, p.estimated_value_min, p.estimated_value_max
+		FROM products p
+		WHERE p.seller_id = ? AND p.status = 'available'
+		ORDER BY p.created_at DESC
+		LIMIT 150
+	`, userID)
+	if err != nil {
+		return c.Status(500).JSON(models.APIResponse{Success: false, Error: "Failed to fetch products"})
+	}
+	defer rows.Close()
+
+	type TradeableProduct struct {
+		ID                int      `json:"id"`
+		Title             string   `json:"title"`
+		ImageURLs         []string `json:"image_urls"`
+		Status            string   `json:"status"`
+		Location          string   `json:"location,omitempty"`
+		LocationType      string   `json:"location_type,omitempty"`
+		PickupLatitude    *float64 `json:"pickup_latitude,omitempty"`
+		PickupLongitude   *float64 `json:"pickup_longitude,omitempty"`
+		PickupAddress     string   `json:"pickup_address,omitempty"`
+		Category          string   `json:"category,omitempty"`
+		SellerID          int      `json:"seller_id"`
+		Price             *float64 `json:"price,omitempty"`
+		EstimatedValueMin *float64 `json:"estimated_value_min,omitempty"`
+		EstimatedValueMax *float64 `json:"estimated_value_max,omitempty"`
+	}
+
+	var products []TradeableProduct
+	for rows.Next() {
+		var p TradeableProduct
+		var imageURLsJSON string
+		var locationNull, locationTypeNull, pickupAddressNull, categoryNull sql.NullString
+		var pickupLatNull, pickupLngNull sql.NullFloat64
+		var priceNull, evMinNull, evMaxNull sql.NullFloat64
+
+		if err := rows.Scan(&p.ID, &p.Title, &imageURLsJSON, &p.Status, &locationNull, &locationTypeNull,
+			&pickupLatNull, &pickupLngNull, &pickupAddressNull, &categoryNull, &p.SellerID,
+			&priceNull, &evMinNull, &evMaxNull); err != nil {
+			continue
+		}
+		if locationNull.Valid {
+			p.Location = locationNull.String
+		}
+		if locationTypeNull.Valid {
+			p.LocationType = locationTypeNull.String
+		}
+		if pickupAddressNull.Valid {
+			p.PickupAddress = pickupAddressNull.String
+		}
+		if categoryNull.Valid {
+			p.Category = categoryNull.String
+		}
+		if pickupLatNull.Valid {
+			p.PickupLatitude = &pickupLatNull.Float64
+		}
+		if pickupLngNull.Valid {
+			p.PickupLongitude = &pickupLngNull.Float64
+		}
+		if priceNull.Valid {
+			p.Price = &priceNull.Float64
+		}
+		if evMinNull.Valid {
+			p.EstimatedValueMin = &evMinNull.Float64
+		}
+		if evMaxNull.Valid {
+			p.EstimatedValueMax = &evMaxNull.Float64
+		}
+		if imageURLsJSON != "" {
+			var urls []string
+			if json.Unmarshal([]byte(imageURLsJSON), &urls) == nil {
+				p.ImageURLs = urls
+			}
+		}
+		products = append(products, p)
+	}
+
+	if products == nil {
+		products = []TradeableProduct{}
+	}
+	return c.JSON(models.APIResponse{
+		Success: true,
+		Data:    map[string]interface{}{"data": products, "total": len(products)},
+	})
+}
+
 const maxFeaturedListings = 3
 
 func (h *ProductHandler) compactFeaturedListings(userID int) {

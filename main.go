@@ -694,6 +694,7 @@ func main() {
 	products := api.Group("/products")
 	products.Get("/", middleware.OptionalAuthMiddleware(), productHandler.GetProducts) // Public route with optional viewer context
 	products.Get("", middleware.OptionalAuthMiddleware(), productHandler.GetProducts)  // Support no trailing slash
+	products.Get("/user/:id/tradeable", productHandler.GetTradeableProducts)            // Lightweight endpoint for trade modal
 	products.Get("/user/:id", productHandler.GetUserProducts)                          // Public route
 	products.Get("/user/:id/listings", productHandler.GetUserProducts)                 // alias for listings
 	products.Get("/search-suggestions", productHandler.SearchSuggestions)              // Smart search autocomplete
